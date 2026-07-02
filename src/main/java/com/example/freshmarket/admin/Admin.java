@@ -46,4 +46,8 @@ public class Admin {
         this.name = name;
         this.role = role;
     }
+
+    public void updateRole(AdminRole role) {
+        this.role = role;
+    }
 }

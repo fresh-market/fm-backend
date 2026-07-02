@@ -16,7 +16,13 @@ public enum ErrorCode {
 
 
     // ADMIN
-    ADMIN_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 관리자입니다.");
+    ADMIN_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 관리자입니다."),
+    NOT_SUPER_ADMIN(HttpStatus.BAD_REQUEST, "최고관리자가 아닙니다."),
+
+
+
+
+    ;
 
     private final HttpStatus httpStatus; // 400, 404, 500 등
     private final String message;
