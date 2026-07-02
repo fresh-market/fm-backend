@@ -43,6 +43,10 @@ public class AdminAdminServiceImpl implements AdminAdminService {
             throw new BusinessException(ErrorCode.NOT_SUPER_ADMIN);
         }
 
+        if (adminRepository.existsByLoginId(request.loginId())) {
+            throw new BusinessException(ErrorCode.DUPLICATE_LOGIN_ID);
+        }
+
         String encodedPassword = passwordEncoder.encode(request.password());
         Admin savedAdmin = adminRepository.save(request.toEntity(encodedPassword));
 

@@ -18,6 +18,7 @@ public enum ErrorCode {
     // ADMIN
     ADMIN_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 관리자입니다."),
     NOT_SUPER_ADMIN(HttpStatus.BAD_REQUEST, "최고관리자가 아닙니다."),
+    DUPLICATE_LOGIN_ID(HttpStatus.CONFLICT, "이미 존재하는 로그인 아이디입니다."),
 
 
 
