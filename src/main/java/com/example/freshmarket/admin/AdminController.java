@@ -1,6 +1,5 @@
 package com.example.freshmarket.admin;
 
-import com.example.freshmarket.auditlog.AuditLog;
 import com.example.freshmarket.common.response.SuccessResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
