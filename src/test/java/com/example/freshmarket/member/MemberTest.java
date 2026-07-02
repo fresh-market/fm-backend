@@ -165,4 +165,21 @@ class MemberTest {
         // when, then
         assertThat(member1).isNotEqualTo(member2);
     }
+
+    @Test
+    void 영속화_전에는_email이_같아도_같은_회원으로_취급하지_않는다() {
+        // given
+        Member member1 = Member.register(
+                "kim@example.com", "encodedPassword", "김철수", "chulsoo",
+                "010-1234-5678", 1L, true
+        );
+        Member member2 = Member.register(
+                "kim@example.com", "encodedPassword", "김철수", "chulsoo2",
+                "010-9999-0000", 1L, true
+        );
+
+        // when, then
+        // id가 아직 없는(영속화 전) 두 인스턴스는 같은 값을 가져도 동일성을 판단할 수 없다.
+        assertThat(member1).isNotEqualTo(member2);
+    }
 }

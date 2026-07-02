@@ -178,16 +178,16 @@ public class Member {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true; // 성능을 위해 같은 인스턴스면 비교할 것도 없이 true
-        if (!(o instanceof Member member)) return false;
-        // id가 없는(영속화 전) 엔티티는 서로 다른 인스턴스로 취급한다.
-        // 그렇지 않으면 신규 Member 두 개가 둘 다 id=null이라 서로 같다고 판정되어 버린다.
-        if (id == null || member.id == null) return false;
-        return id.equals(member.id);
+        if (this == o) return true; // 같은 인스턴스면 비교할 것도 없이 true
+        if (!(o instanceof Member)) return false;
+        Member member = (Member) o;
+        // id가 없는(영속화 전) 엔티티는 동일성을 판단할 기준이 없으므로 항상 다른 것으로 취급한다.
+        return id != null && id.equals(member.id);
     }
 
-    // id는 영속화되며 값이 바뀌므로(null -> 생성된 PK), hashCode를 id 기반으로 두면
-    // Set/Map에 넣은 뒤 저장되는 순간 버킷을 잃어버린다. 클래스 기준 고정값을 쓴다.
+    // id는 영속화 시점에 null -> 생성된 PK로 바뀐다. hashCode를 id 기반으로 두면
+    // 저장 전 Set/Map에 넣은 엔티티가 저장 후 해시가 바뀌어 버킷을 잃어버린다.
+    // 그래서 절대 바뀌지 않는 클래스 기준 고정값을 쓴다(분산이 나빠지는 대신 버킷 유실을 막는다).
     @Override
     public int hashCode() {
         return getClass().hashCode();
