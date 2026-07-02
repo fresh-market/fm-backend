@@ -15,11 +15,11 @@ import java.util.Objects;
 
 @Entity
 @Table(
-        name = "member",
-        uniqueConstraints = {
-                @UniqueConstraint(name = "uk_member_email", columnNames = "email"),
-                @UniqueConstraint(name = "uk_member_nickname", columnNames = "nickname")
-        }
+    name = "member",
+    uniqueConstraints = {
+        @UniqueConstraint(name = "uk_member_email", columnNames = "email"),
+        @UniqueConstraint(name = "uk_member_nickname", columnNames = "nickname")
+    }
 )
 public class Member {
 
@@ -66,12 +66,12 @@ public class Member {
 
     private Member(String email, String passwordHash, String name, String nickname,
                    String phone, Long gradeId, boolean marketingAgreed) {
-        this.email = email;
-        this.passwordHash = passwordHash;
-        this.name = name;
-        this.nickname = nickname;
-        this.phone = phone;
-        this.gradeId = gradeId;
+        this.email = requireNonBlank(email, "email");
+        this.passwordHash = requireNonBlank(passwordHash, "passwordHash");
+        this.name = requireNonBlank(name, "name");
+        this.nickname = requireNonBlank(nickname, "nickname");
+        this.phone = requireNonBlank(phone, "phone");
+        this.gradeId = Objects.requireNonNull(gradeId, "gradeId는 null일 수 없습니다.");
         this.marketingAgreed = marketingAgreed;
         this.status = MemberStatus.ACTIVE;
         this.createdAt = LocalDateTime.now();
@@ -90,23 +90,42 @@ public class Member {
     }
 
     public void block() {
+        ensureNotWithdrawn();
         this.status = MemberStatus.BLOCKED;
     }
 
     public void reactivate() {
+        ensureNotWithdrawn();
         this.status = MemberStatus.ACTIVE;
     }
 
     public void changeNickname(String nickname) {
-        this.nickname = nickname;
+        ensureNotWithdrawn();
+        this.nickname = requireNonBlank(nickname, "nickname");
     }
 
     public void changePhone(String phone) {
-        this.phone = phone;
+        ensureNotWithdrawn();
+        this.phone = requireNonBlank(phone, "phone");
     }
 
     public void changeGrade(Long gradeId) {
-        this.gradeId = gradeId;
+        ensureNotWithdrawn();
+        this.gradeId = Objects.requireNonNull(gradeId, "gradeId는 null일 수 없습니다.");
+    }
+
+    // 탈퇴(소프트딜리트)는 종단 상태이므로, 탈퇴 후에는 다른 상태 전이를 막는다 (F3)
+    private void ensureNotWithdrawn() {
+        if (this.status == MemberStatus.WITHDRAWN) {
+            throw new IllegalStateException("탈퇴한 회원의 상태는 변경할 수 없습니다.");
+        }
+    }
+
+    private static String requireNonBlank(String value, String fieldName) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(fieldName + "는 비어 있을 수 없습니다.");
+        }
+        return value;
     }
 
     public boolean isWithdrawn() {
@@ -159,14 +178,19 @@ public class Member {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof Member member)) return false;
-        return Objects.equals(id, member.id);
+        if (this == o) return true; // 같은 인스턴스면 비교할 것도 없이 true
+        if (!(o instanceof Member)) return false;
+        Member member = (Member) o;
+        // id가 없는(영속화 전) 엔티티는 동일성을 판단할 기준이 없으므로 항상 다른 것으로 취급한다.
+        return id != null && id.equals(member.id);
     }
 
+    // id는 영속화 시점에 null -> 생성된 PK로 바뀐다. hashCode를 id 기반으로 두면
+    // 저장 전 Set/Map에 넣은 엔티티가 저장 후 해시가 바뀌어 버킷을 잃어버린다.
+    // 그래서 절대 바뀌지 않는 클래스 기준 고정값을 쓴다(분산이 나빠지는 대신 버킷 유실을 막는다).
     @Override
     public int hashCode() {
-        return Objects.hash(id);
+        return getClass().hashCode();
     }
 
     @Override
