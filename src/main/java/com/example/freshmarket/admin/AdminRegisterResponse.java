@@ -7,7 +7,6 @@ import java.time.LocalDateTime;
 @Builder
 public record AdminRegisterResponse(Long id,
                                     String loginId,
-                                    String password,
                                     String name,
                                     AdminRole role,
                                     LocalDateTime createdAt) {
