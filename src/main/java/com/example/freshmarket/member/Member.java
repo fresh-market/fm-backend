@@ -15,11 +15,11 @@ import java.util.Objects;
 
 @Entity
 @Table(
-        name = "member",
-        uniqueConstraints = {
-                @UniqueConstraint(name = "uk_member_email", columnNames = "email"),
-                @UniqueConstraint(name = "uk_member_nickname", columnNames = "nickname")
-        }
+    name = "member",
+    uniqueConstraints = {
+        @UniqueConstraint(name = "uk_member_email", columnNames = "email"),
+        @UniqueConstraint(name = "uk_member_nickname", columnNames = "nickname")
+    }
 )
 public class Member {
 
@@ -159,11 +159,14 @@ public class Member {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
+        if (this == o) return true; // 성능을 위해 같은 인스턴스면 비교할 것도 없이 true
         if (!(o instanceof Member member)) return false;
         return Objects.equals(id, member.id);
     }
 
+    // hashCode로 칸을 찾고, 그 칸 안에서 equals로 비교
+    // 1. hashCode(): 버킷 10 안에는 회원 A(id=1)와 회원 B(id=2)가 들어 있음
+    // 2. equals(): 찾으려는 값은 회원 B(id=2)이어서 칸 10의 회원 B(id=2)와 일치
     @Override
     public int hashCode() {
         return Objects.hash(id);
