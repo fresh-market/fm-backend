@@ -66,12 +66,12 @@ public class Member {
 
     private Member(String email, String passwordHash, String name, String nickname,
                    String phone, Long gradeId, boolean marketingAgreed) {
-        this.email = email;
-        this.passwordHash = passwordHash;
-        this.name = name;
-        this.nickname = nickname;
-        this.phone = phone;
-        this.gradeId = gradeId;
+        this.email = requireNonBlank(email, "email");
+        this.passwordHash = requireNonBlank(passwordHash, "passwordHash");
+        this.name = requireNonBlank(name, "name");
+        this.nickname = requireNonBlank(nickname, "nickname");
+        this.phone = requireNonBlank(phone, "phone");
+        this.gradeId = Objects.requireNonNull(gradeId, "gradeId는 null일 수 없습니다.");
         this.marketingAgreed = marketingAgreed;
         this.status = MemberStatus.ACTIVE;
         this.createdAt = LocalDateTime.now();
@@ -90,23 +90,42 @@ public class Member {
     }
 
     public void block() {
+        ensureNotWithdrawn();
         this.status = MemberStatus.BLOCKED;
     }
 
     public void reactivate() {
+        ensureNotWithdrawn();
         this.status = MemberStatus.ACTIVE;
     }
 
     public void changeNickname(String nickname) {
-        this.nickname = nickname;
+        ensureNotWithdrawn();
+        this.nickname = requireNonBlank(nickname, "nickname");
     }
 
     public void changePhone(String phone) {
-        this.phone = phone;
+        ensureNotWithdrawn();
+        this.phone = requireNonBlank(phone, "phone");
     }
 
     public void changeGrade(Long gradeId) {
-        this.gradeId = gradeId;
+        ensureNotWithdrawn();
+        this.gradeId = Objects.requireNonNull(gradeId, "gradeId는 null일 수 없습니다.");
+    }
+
+    // 탈퇴(소프트딜리트)는 종단 상태이므로, 탈퇴 후에는 다른 상태 전이를 막는다 (F3)
+    private void ensureNotWithdrawn() {
+        if (this.status == MemberStatus.WITHDRAWN) {
+            throw new IllegalStateException("탈퇴한 회원의 상태는 변경할 수 없습니다.");
+        }
+    }
+
+    private static String requireNonBlank(String value, String fieldName) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(fieldName + "는 비어 있을 수 없습니다.");
+        }
+        return value;
     }
 
     public boolean isWithdrawn() {
@@ -161,15 +180,17 @@ public class Member {
     public boolean equals(Object o) {
         if (this == o) return true; // 성능을 위해 같은 인스턴스면 비교할 것도 없이 true
         if (!(o instanceof Member member)) return false;
-        return Objects.equals(id, member.id);
+        // id가 없는(영속화 전) 엔티티는 서로 다른 인스턴스로 취급한다.
+        // 그렇지 않으면 신규 Member 두 개가 둘 다 id=null이라 서로 같다고 판정되어 버린다.
+        if (id == null || member.id == null) return false;
+        return id.equals(member.id);
     }
 
-    // hashCode로 칸을 찾고, 그 칸 안에서 equals로 비교
-    // 1. hashCode(): 버킷 10 안에는 회원 A(id=1)와 회원 B(id=2)가 들어 있음
-    // 2. equals(): 찾으려는 값은 회원 B(id=2)이어서 칸 10의 회원 B(id=2)와 일치
+    // id는 영속화되며 값이 바뀌므로(null -> 생성된 PK), hashCode를 id 기반으로 두면
+    // Set/Map에 넣은 뒤 저장되는 순간 버킷을 잃어버린다. 클래스 기준 고정값을 쓴다.
     @Override
     public int hashCode() {
-        return Objects.hash(id);
+        return getClass().hashCode();
     }
 
     @Override
