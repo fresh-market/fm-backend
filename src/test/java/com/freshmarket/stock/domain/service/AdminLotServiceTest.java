@@ -7,6 +7,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.freshmarket.product.OptionAvailabilityChangedEvent;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -38,6 +40,9 @@ class AdminLotServiceTest {
 
     @Mock
     private ProductApi productApi;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private AdminLotService adminLotService;
@@ -62,6 +67,7 @@ class AdminLotServiceTest {
         assertThat(result.availableQty()).isEqualTo(200);
         assertThat(result.status()).isEqualTo("AVAILABLE");
         verify(stockMovementRepository).save(any());
+        verify(eventPublisher).publishEvent(new OptionAvailabilityChangedEvent(31L, false));
     }
 
     @Test
