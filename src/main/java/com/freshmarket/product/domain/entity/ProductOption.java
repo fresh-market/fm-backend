@@ -36,6 +36,10 @@ public class ProductOption extends BaseMutableTimeEntity {
     @Column(name = "sale_status", nullable = false, length = 30)
     private SaleStatus saleStatus;
 
+    // 재고 기반 품절 여부. sale_status와는 별개다
+    @Column(name = "sold_out", nullable = false)
+    private boolean soldOut;
+
     private ProductOption(Long productId, String name, int price) {
         validateProductId(productId);
         validateName(name);
@@ -44,6 +48,7 @@ public class ProductOption extends BaseMutableTimeEntity {
         this.name = name;
         this.price = price;
         this.saleStatus = SaleStatus.ON_SALE;
+        this.soldOut = true;
     }
 
     // 상품에 새 옵션을 추가한다
@@ -71,5 +76,10 @@ public class ProductOption extends BaseMutableTimeEntity {
         if (price < 0) {
             throw new IllegalArgumentException("price 는 0 이상이어야 한다: " + price);
         }
+    }
+
+    // 재고 기반 품절 여부를 갱신한다. stock 도메인의 이벤트에 반응해서만 호출된다
+    public void updateSoldOut(boolean soldOut) {
+        this.soldOut = soldOut;
     }
 }
