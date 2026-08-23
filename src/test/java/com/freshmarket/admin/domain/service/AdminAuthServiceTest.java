@@ -2,7 +2,7 @@ package com.freshmarket.admin.domain.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -17,14 +17,11 @@ import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
 import com.freshmarket.admin.domain.repository.AdminRepository;
-import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
-import com.freshmarket.common.auth.jwt.JwtTokenProvider;
+import com.freshmarket.common.auth.jwt.*;
 
 import java.time.*;
 import java.util.Optional;
 
-import com.freshmarket.common.auth.jwt.RefreshTokenRepository;
-import com.freshmarket.common.auth.jwt.TokenType;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -202,6 +199,131 @@ class AdminAuthServiceTest {
                 .isInstanceOf(AdminException.class)
                 .extracting(e -> ((AdminException) e).getErrorCode())
                 .isEqualTo(AdminErrorCode.LOGIN_FAILED);
+    }
+
+    @Test
+    void 관리자_토큰_재발급에_성공하면_Access와_Refresh를_함께_회전한다() {
+        Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
+        ReflectionTestUtils.setField(admin, "id", 1L);
+        admin.issueRefreshToken("a".repeat(64), LocalDateTime.now(clock).plusDays(1));
+
+        when(refreshTokenRepository.compareAndRotate(eq("old-rt"), anyString(), any()))
+                .thenReturn(RefreshTokenRepository.RotateOutcome.success(
+                        new RefreshTokenRepository.RefreshTokenData(1L, "ROLE_ADMIN", TokenType.ADMIN, false)));
+        when(adminRepository.findById(1L)).thenReturn(Optional.of(admin));
+
+        AdminAuthService.ReissueResult result = adminAuthService.reissue("old-rt");
+
+        assertThat(jwtTokenProvider.validateToken(result.accessToken())).isTrue();
+        assertThat(jwtTokenProvider.getId(result.accessToken())).isEqualTo(1L);
+        assertThat(jwtTokenProvider.getRole(result.accessToken())).isEqualTo("ROLE_ADMIN");
+        assertThat(result.expiresInSeconds()).isEqualTo(1800L);
+        assertThat(result.refreshToken()).isNotBlank().isNotEqualTo("old-rt");
+        assertThat(result.refreshTokenValiditySeconds()).isEqualTo(86400L);
+        assertThat(admin.getRefreshTokenHash()).isEqualTo(TokenHasher.sha256(result.refreshToken()));
+        assertThat(admin.getRefreshTokenExpiresAt()).isEqualTo(LocalDateTime.now(clock).plusDays(1));
+        verify(adminAuditLogRepository).save(any(AdminAuditLog.class));
+    }
+
+    @Test
+    void 전혀_모르는_관리자_리프레시_토큰이면_재발급을_거부한다() {
+        when(refreshTokenRepository.compareAndRotate(eq("unknown-rt"), anyString(), any()))
+                .thenReturn(RefreshTokenRepository.RotateOutcome.notFound());
+
+        assertThatThrownBy(() -> adminAuthService.reissue("unknown-rt"))
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.REFRESH_TOKEN_INVALID);
+    }
+
+    @Test
+    void 회원_리프레시_토큰은_관리자_재발급에_사용할_수_없다() {
+        when(refreshTokenRepository.compareAndRotate(eq("member-rt"), anyString(), any()))
+                .thenReturn(RefreshTokenRepository.RotateOutcome.success(
+                        new RefreshTokenRepository.RefreshTokenData(7L, "ROLE_USER", TokenType.MEMBER, false)));
+
+        assertThatThrownBy(() -> adminAuthService.reissue("member-rt"))
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.REFRESH_TOKEN_INVALID);
+    }
+
+    @Test
+    void 이미_회전된_관리자_토큰이_재사용되면_현재_세션을_강제종료하고_거부한다() {
+        Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
+        ReflectionTestUtils.setField(admin, "id", 1L);
+        admin.issueRefreshToken("c".repeat(64), LocalDateTime.now(clock).plusDays(1));
+
+        when(refreshTokenRepository.compareAndRotate(eq("reused-rt"), anyString(), any()))
+                .thenReturn(RefreshTokenRepository.RotateOutcome.reuseDetected(
+                        new RefreshTokenRepository.RefreshTokenData(1L, "ROLE_ADMIN", TokenType.ADMIN, false)));
+        when(adminRepository.findById(1L)).thenReturn(Optional.of(admin));
+        when(refreshTokenRepository.findActiveHash("ROLE_ADMIN", 1L))
+                .thenReturn(Optional.of("c".repeat(64)));
+
+        assertThatThrownBy(() -> adminAuthService.reissue("reused-rt"))
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.REFRESH_TOKEN_INVALID);
+
+        assertThat(admin.getRefreshTokenHash()).isNull();
+        verify(refreshTokenRepository).deleteByHash("c".repeat(64));
+        verify(accessTokenValidAfterRepository).invalidateBefore(
+                eq("ROLE_ADMIN"), eq(1L), any(), any());
+    }
+
+    @Test
+    void Redis_회전이_실패하면_DB_백업으로_재발급한다() {
+        when(refreshTokenRepository.compareAndRotate(eq("old-rt"), anyString(), any()))
+                .thenThrow(new DataAccessResourceFailureException("redis down"));
+
+        Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
+        ReflectionTestUtils.setField(admin, "id", 1L);
+        admin.issueRefreshToken(TokenHasher.sha256("old-rt"), LocalDateTime.now(clock).plusDays(1));
+        when(adminRepository.findByRefreshTokenHash(TokenHasher.sha256("old-rt")))
+                .thenReturn(Optional.of(admin));
+        when(adminRepository.compareAndSetRefreshToken(eq(1L), eq(TokenHasher.sha256("old-rt")), anyString(), any()))
+                .thenReturn(1);
+
+        AdminAuthService.ReissueResult result = adminAuthService.reissue("old-rt");
+
+        assertThat(jwtTokenProvider.validateToken(result.accessToken())).isTrue();
+        assertThat(jwtTokenProvider.getId(result.accessToken())).isEqualTo(1L);
+        assertThat(result.refreshToken()).isNotBlank().isNotEqualTo("old-rt");
+        verify(refreshTokenRepository).save(
+                eq(result.refreshToken()),
+                eq(1L),
+                eq("ROLE_ADMIN"),
+                eq(TokenType.ADMIN),
+                eq(false),
+                eq(Duration.ofMillis(ADMIN_REFRESH_TOKEN_VALIDITY_MS)));
+        verify(adminAuditLogRepository).save(any(AdminAuditLog.class));
+    }
+
+    @Test
+    void Redis_장애시_DB에도_리프레시_토큰이_없으면_재발급을_거부한다() {
+        when(refreshTokenRepository.compareAndRotate(eq("old-rt"), anyString(), any()))
+                .thenThrow(new DataAccessResourceFailureException("redis down"));
+        when(adminRepository.findByRefreshTokenHash(TokenHasher.sha256("old-rt")))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> adminAuthService.reissue("old-rt"))
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.REFRESH_TOKEN_INVALID);
+    }
+
+    @Test
+    void Redis_회전_성공후_관리자_계정이_없으면_재발급을_거부한다() {
+        when(refreshTokenRepository.compareAndRotate(eq("old-rt"), anyString(), any()))
+                .thenReturn(RefreshTokenRepository.RotateOutcome.success(
+                        new RefreshTokenRepository.RefreshTokenData(999L, "ROLE_ADMIN", TokenType.ADMIN, false)));
+        when(adminRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> adminAuthService.reissue("old-rt"))
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.REFRESH_TOKEN_INVALID);
     }
 
     @Test

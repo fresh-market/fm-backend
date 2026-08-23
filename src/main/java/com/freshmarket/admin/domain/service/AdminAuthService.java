@@ -136,6 +136,113 @@ public class AdminAuthService {
         return new AdminLoginResult(response, accessToken, rawRefreshToken, refreshTokenValidityMs / 1000);
     }
 
+    public record ReissueResult(
+            String accessToken,
+            long expiresInSeconds,
+            String refreshToken,
+            long refreshTokenValiditySeconds) {
+    }
+
+    /**
+     * 관리자 Refresh Token 재발급. 회원과 동일하게 opaque 토큰을 Redis에서 원자적으로 Rotation하고,
+     * 새 Access Token과 Refresh Token을 함께 발급한다. Redis 장애 시에는 DB 백업 해시와 CAS로 폴백한다.
+     */
+    @Transactional(timeout = 5, noRollbackFor = AdminException.class)
+    public ReissueResult reissue(String oldRefreshToken) {
+        Objects.requireNonNull(oldRefreshToken, "oldRefreshToken");
+
+        String newRefreshToken = OpaqueTokenGenerator.generate();
+        Duration refreshTtl = Duration.ofMillis(refreshTokenValidityMs);
+        LocalDateTime expiresAt = LocalDateTime.now(clock).plus(refreshTtl);
+
+        RefreshTokenRepository.RotateOutcome outcome;
+        try {
+            outcome = refreshTokenRepository.compareAndRotate(oldRefreshToken, newRefreshToken, refreshTtl);
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_REDIS_CAS_FAILED — DB 백업으로 재발급 폴백 시도", e);
+            return reissueViaDbFallback(oldRefreshToken, newRefreshToken, refreshTtl, expiresAt);
+        }
+
+        if (outcome.isReuseDetected()) {
+            RefreshTokenRepository.RefreshTokenData reused = outcome.data();
+            if (reused.type() == TokenType.ADMIN) {
+                log.warn("event=ADMIN_REFRESH_TOKEN_REUSE_SUSPECTED adminId={} role={} — 세션을 강제 종료한다",
+                        reused.memberId(), reused.role());
+                logout(reused.memberId(), reused.role());
+            }
+            throw new AdminException(AdminErrorCode.REFRESH_TOKEN_INVALID);
+        }
+
+        if (!outcome.isSuccess() || outcome.data().type() != TokenType.ADMIN) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_INVALID tokenHash={}", TokenHasher.sha256(oldRefreshToken));
+            throw new AdminException(AdminErrorCode.REFRESH_TOKEN_INVALID);
+        }
+
+        RefreshTokenRepository.RefreshTokenData rotated = outcome.data();
+        Admin admin = adminRepository.findById(rotated.memberId())
+                .orElseThrow(() -> new AdminException(AdminErrorCode.REFRESH_TOKEN_INVALID));
+
+        if (!admin.isActive() || !admin.getRole().toAuthority().equals(rotated.role())) {
+            logout(admin.getId(), admin.getRole().toAuthority());
+            throw new AdminException(AdminErrorCode.REFRESH_TOKEN_INVALID);
+        }
+
+        String role = admin.getRole().toAuthority();
+        String newAccessToken = jwtTokenProvider.createAccessToken(admin.getId(), TokenType.ADMIN, role);
+        admin.issueRefreshToken(TokenHasher.sha256(newRefreshToken), expiresAt);
+
+        adminAuditLogRepository.save(
+                AdminAuditLog.of(admin.getId(), "ADMIN_TOKEN_REFRESH", String.valueOf(admin.getId()), null));
+        log.info("event=ADMIN_TOKEN_REFRESH success=true adminId={}", admin.getId());
+
+        return new ReissueResult(
+                newAccessToken,
+                jwtTokenProvider.getAccessTokenValidityMs() / 1000,
+                newRefreshToken,
+                refreshTokenValidityMs / 1000);
+    }
+
+    private ReissueResult reissueViaDbFallback(
+            String oldRefreshToken,
+            String newRefreshToken,
+            Duration refreshTtl,
+            LocalDateTime expiresAt) {
+        String oldHash = TokenHasher.sha256(oldRefreshToken);
+        Admin admin = adminRepository.findByRefreshTokenHash(oldHash)
+                .orElseThrow(() -> new AdminException(AdminErrorCode.REFRESH_TOKEN_INVALID));
+
+        if (!admin.isActive()
+                || admin.getRefreshTokenExpiresAt() == null
+                || !admin.getRefreshTokenExpiresAt().isAfter(LocalDateTime.now(clock))) {
+            throw new AdminException(AdminErrorCode.REFRESH_TOKEN_INVALID);
+        }
+
+        String newHash = TokenHasher.sha256(newRefreshToken);
+        int updated = adminRepository.compareAndSetRefreshToken(admin.getId(), oldHash, newHash, expiresAt);
+        if (updated == 0) {
+            log.warn("event=ADMIN_DB_FALLBACK_CAS_LOST adminId={}", admin.getId());
+            throw new AdminException(AdminErrorCode.REFRESH_TOKEN_INVALID);
+        }
+
+        String role = admin.getRole().toAuthority();
+        try {
+            refreshTokenRepository.save(newRefreshToken, admin.getId(), role, TokenType.ADMIN, false, refreshTtl);
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_REDIS_SAVE_FAILED_DURING_DB_FALLBACK adminId={} — DB만 반영됨", admin.getId(), e);
+        }
+
+        String newAccessToken = jwtTokenProvider.createAccessToken(admin.getId(), TokenType.ADMIN, role);
+        adminAuditLogRepository.save(
+                AdminAuditLog.of(admin.getId(), "ADMIN_TOKEN_REFRESH", String.valueOf(admin.getId()), "DB_FALLBACK"));
+        log.info("event=ADMIN_TOKEN_REFRESH success=true adminId={} fallback=db", admin.getId());
+
+        return new ReissueResult(
+                newAccessToken,
+                jwtTokenProvider.getAccessTokenValidityMs() / 1000,
+                newRefreshToken,
+                refreshTokenValidityMs / 1000);
+    }
+
     /*
      * 관리자 로그아웃. Refresh Token은 Redis와 DB 백업에서 폐기하고, Access Token은
      * 계정 단위 valid-after 커트라인을 기록해 이미 발급된 토큰까지 즉시 무효화한다.

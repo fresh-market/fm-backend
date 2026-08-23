@@ -48,9 +48,10 @@ class AdminSecurityConfig {
                         .ignoringRequestMatchers(
                                 PathPatternRequestMatcher.withDefaults().matcher(POST, "/v1/admin/auth/tokens")))
                 .authorizeHttpRequests(auth -> auth
-                        // 로그인(POST)은 인증 그 자체라 공개해야 한다
-                        .requestMatchers(POST, "/v1/admin/auth/tokens").permitAll()
-                        // 재발급/로그아웃 등 로그인 외 관리자 인증 API는 TYPE_ADMIN 권한을 요구한다
+                        // 로그인과 재발급은 유효한 Access Token이 없어도 진입해야 한다.
+                        // 재발급은 Refresh Token 쿠키 자체를 서비스에서 검증하며 CSRF 검사는 그대로 적용한다.
+                        .requestMatchers(POST, "/v1/admin/auth/tokens", "/v1/admin/auth/tokens:refresh").permitAll()
+                        // 로그아웃 등 그 외 관리자 인증 API는 TYPE_ADMIN 권한을 요구한다.
                         .anyRequest().hasAuthority(ADMIN))
                 .build();
     }

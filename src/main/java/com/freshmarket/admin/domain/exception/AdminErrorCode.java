@@ -16,7 +16,10 @@ public enum AdminErrorCode implements ErrorCode {
     LOGIN_FAILED(HttpStatus.UNAUTHORIZED, "ADMIN-001", "아이디 또는 비밀번호가 올바르지 않습니다."),
 
     // 관리자 삭제(비활성화) 처리된 계정. 잠금(5회 실패)은 이번 범위에서 제외했다
-    ACCOUNT_INACTIVE(HttpStatus.FORBIDDEN, "ADMIN-002", "비활성화된 계정입니다.");
+    ACCOUNT_INACTIVE(HttpStatus.FORBIDDEN, "ADMIN-002", "비활성화된 계정입니다."),
+
+    // auth.md에서 관리자 재발급은 회원과 같은 정책을 따르므로 만료·재사용 Refresh Token 오류는 AUTH-004를 사용한다.
+    REFRESH_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "AUTH-004", "만료되었거나 이미 사용된 토큰입니다.");
 
     private final HttpStatus httpStatus;
     private final String code;
