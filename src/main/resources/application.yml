@@ -2,13 +2,35 @@ spring:
   application:
     name: freshmarket
 
+  profiles:
+    # 아무도 프로필을 지정하지 않으면 local 로 본다. 배포와 테스트는 프로필을 직접 주므로 이 값이 덮인다
+    default: local
+
   # 아래 셋은 환경마다 갈린다. 값을 주지 않으면 compose.yaml 의 기본 구성에 맞는다.
+  # 운영은 application-prod.yml 이 기본값 없이 다시 선언하므로 이 기본값이 살아나지 않는다.
   # bootRun 은 spring-boot-docker-compose 가 띄운 컨테이너에서 읽어낸 값이 이 셋을 덮는다
   datasource:
     url: "${DB_URL:jdbc:mysql://localhost:3306/freshmarket?serverTimezone=UTC&characterEncoding=UTF-8}"
     username: "${DB_USERNAME:freshmarket}"
     password: "${DB_PASSWORD:freshmarket}"
     driver-class-name: com.mysql.cj.jdbc.Driver
+
+    # 값의 근거는 infra 의 앱과DB 장애대응구조 4.4~4.6절에 있다.
+    # 안쪽이 더 짧아야 톰캣 스레드가 DB 를 기다리다 고갈되지 않는다
+    hikari:
+      # 풀이 마르면 요청은 여기서 3초 만에 실패한다. 스레드를 붙잡고 있지 않는다
+      connection-timeout: 3000
+      validation-timeout: 1000
+      keepalive-time: 120000
+      # MySQL wait_timeout 보다 짧아야 죽은 커넥션을 잡는다
+      max-lifetime: 1500000
+      # 풀 크기를 고정한다. 커넥션 예산이 max_connections 약 60 에 묶여 있다
+      maximum-pool-size: 10
+      minimum-idle: 10
+      # URL 에 붙이지 않고 여기서 준다. 어떤 URL 이 와도 값이 유지된다
+      data-source-properties:
+        connectTimeout: 3000
+        socketTimeout: 10000
 
   jpa:
     # 스키마는 Flyway 가 소유한다. Hibernate 는 어긋나면 기동을 막는 역할만 한다
@@ -23,6 +45,109 @@ spring:
     enabled: true
     baseline-on-migrate: true
 
+  # 로그인 state/nonce, access token valid-after 커트라인, refresh token 회전이 이 캐시를 쓴다.
+  # 엔진은 Valkey 이고 프로토콜이 같아 spring.data.redis 설정을 그대로 쓴다 (compose.yaml 참고).
+  # 변수명을 compose 와 맞춘다. 한쪽만 바꾸면 컨테이너와 앱이 서로 다른 포트를 본다
+  data:
+    redis:
+      host: "${VALKEY_HOST:localhost}"
+      port: "${VALKEY_PORT:6379}"
+      # 인증 경로가 요청마다 이 캐시를 찌른다.
+      # 값을 주지 않으면 Lettuce 기본이 커맨드 60초, 연결 10초라
+      # 캐시가 죽는 게 아니라 느려지기만 해도 톰캣 스레드가 그만큼 묶인다.
+      # DB 쪽은 socketTimeout 10초로 이미 막아 두었는데 여기만 비어 있었다.
+      #
+      # 단일 GET/SET/INCR 이고 같은 VPC 안이라 정상 지연은 1밀리초 아래다.
+      # 1초는 그 1000배라 정상 요청을 자를 여지가 없으면서 스레드 점유를 끊는다.
+      timeout: 1s
+      connect-timeout: 1s
+
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            client-id: "${KAKAO_CLIENT_ID}"
+            client-secret: "${KAKAO_CLIENT_SECRET}"
+            authorization-grant-type: authorization_code
+            redirect-uri: "${KAKAO_REDIRECT_URI:http://localhost:5173/oauth/callback}"
+            scope: openid
+        provider:
+          kakao:
+            issuer-uri: https://kauth.kakao.com
+            user-info-uri: https://kapi.kakao.com/v1/oidc/userinfo
+            user-name-attribute: sub
+
+  lifecycle:
+    # 종료 타임아웃 계층의 안쪽에서 셋째다. compose 45초, systemd 60초가 바깥이다
+    timeout-per-shutdown-phase: 30s
+
+server:
+  port: 8080
+  # 처리 중인 요청을 마치고 내려간다. 대상 그룹 해제 지연 30초와 짝을 이룬다
+  shutdown: graceful
+  tomcat:
+    threads:
+      max: 200
+
+# 액추에이터를 8081 로 분리한다.
+# 8080 에 /actuator 경로가 존재하지 않게 되어 밖에서 막을 규칙이 필요 없다.
+# 근거는 infra 의 기술스택 확정문서 4.2절에 있다.
+management:
+  server:
+    port: 8081
+
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+
+  endpoint:
+    health:
+      # liveness 와 readiness 를 나눈다. 기동 중인 앱은 살아 있지만 준비되지 않았다
+      probes:
+        enabled: true
+      # 밖에서 볼 수 있으므로 상세를 숨긴다
+      show-details: never
+      group:
+        # 공유 의존성을 넣지 않는다 (INF-16).
+        # DB 가 흔들리면 전 인스턴스가 동시에 대상 그룹에서 빠져 서비스가 통째로 끊긴다
+        readiness:
+          include: diskSpace
+
+  metrics:
+    tags:
+      application: "${APP_NAME:freshmarket}"
+      instance: "${APP_INSTANCE_ID:local}"
+
+  tracing:
+    sampling:
+      # 장애 주입 실험 직전에 100% 로 올릴 수 있어야 한다
+      probability: "${TRACE_SAMPLE_RATE:0.1}"
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
+
+app:
+  cors:
+    allowed-origins: "${CORS_ALLOWED_ORIGINS:http://localhost:5173}"
+
+# 이미지 URL 앞에 붙는 주소다. 운영은 CloudFront 도메인이 CDN_BASE_URL 로 들어온다
+# (infra 의 terraform/templates/compose.yaml.tftpl).
+#
+# 기본값을 비워 둔다. 로컬에는 오브젝트 스토리지가 없어 어차피 이미지가 열리지 않는데,
+# 여기에 localhost 를 적어 두면 운영에서 값이 빠졌을 때 그 주소가 응답에 실려 나간다.
+cdn:
+  base-url: "${CDN_BASE_URL:}"
+
+jwt:
+  secret: "${JWT_SECRET}"
+  access-token-validity-ms: "${JWT_ACCESS_VALIDITY_MS:1800000}"
+  refresh-token-validity-ms: "${JWT_REFRESH_VALIDITY_MS:1209600000}"
+  cookie:
+    secure: "${JWT_COOKIE_SECURE:false}"
+
+kakao:
+  app-id: "${KAKAO_APP_ID}"
+  admin-key: "${KAKAO_ADMIN_KEY}"

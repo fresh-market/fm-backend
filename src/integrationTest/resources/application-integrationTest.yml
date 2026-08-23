@@ -1,0 +1,23 @@
+# 통합 테스트 전용 설정이다.
+# application.yml 이 먼저 읽히고 이 파일이 그 위에 덮으므로, 기본값이 있는 키는 여기 적지 않는다.
+# 여기 적는 것은 application.yml 이 기본값 없이 "${VAR}" 로 둔 키뿐이다.
+# 그 키들은 값이 없으면 컨텍스트가 아예 뜨지 않아 통합 테스트가 전부 깨진다.
+# 운영에서 기본값을 주지 않는 이유는 전부 비밀값이라서다. 그래서 기본값을 넣는 대신 여기서만 가짜 값을 준다.
+# application.yml 에 기본값 없는 키를 새로 추가하면 여기에도 같이 추가한다.
+
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            client-id: integration-test-client-id
+            client-secret: integration-test-client-secret
+
+jwt:
+  # HS256 서명 키라 32바이트 이상이어야 한다.
+  secret: integration-test-jwt-secret-integration-test-jwt-secret
+
+kakao:
+  app-id: "0"
+  admin-key: integration-test-admin-key

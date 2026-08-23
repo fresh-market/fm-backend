@@ -21,3 +21,22 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  # 회원 로그인 state/nonce, access token valid-after 커트라인,
+  # refresh token 회전(Lua 스크립트)이 이 캐시를 쓴다.
+  # 운영이 ElastiCache Valkey 9.0 이라 로컬도 9.0-alpine 으로 고정한다.
+  # 마이너 번호까지 적는다. 9-alpine 으로 적으면 그 안의 최신 마이너가 뜬다
+  valkey:
+    image: valkey/valkey:9.0-alpine
+    container_name: ${VALKEY_CONTAINER_NAME:-freshmarket-valkey}
+    ports:
+      - "${VALKEY_PORT:-6379}:6379"
+    labels:
+      # Spring 이 이미지 이름으로 서비스를 알아보는데 valkey 는 목록에 없다.
+      # 이 레이블이 있어야 캐시 클라이언트를 넣었을 때 접속 정보가 자동으로 주입된다
+      org.springframework.boot.service-connection: redis
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20

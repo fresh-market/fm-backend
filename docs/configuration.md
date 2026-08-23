@@ -1,16 +1,42 @@
 # 설정 파일
 
-로컬 DB 접속에 관여하는 파일은 넷이다. **평소에는 아무것도 안 고쳐도 된다.**
+로컬 DB 접속에 관여하는 파일은 다섯이다. **평소에는 아무것도 안 고쳐도 된다.**
 포트가 겹칠 때만 `.env` 한 줄을 적는다.
 
 | 파일 | 누가 읽나 | 역할 | 추적 |
 |---|---|---|---|
 | `compose.yaml` | Docker Compose | MySQL 컨테이너를 **만든다** | O |
-| `application.yml` | Spring Boot | 그 DB 를 **어떻게 쓸지** 정한다 | O |
+| `application.yml` | Spring Boot | 환경과 무관한 공통 설정 | O |
+| `../src/main/resources/application-local.yml` | Spring Boot | 앱이 쓸 로컬 값. 비밀값이 여기 있다 | **X** |
+| `application-local.yml.example` | 사람 | 거기 무엇을 적는지 보여준다 | O |
 | `.env` | Docker Compose | `compose.yaml` 의 값을 **덮는다** | **X** |
 | `.env.example` | 사람 | `.env` 에 무엇을 적을 수 있는지 보여준다 | O |
 
 `.env` 만 추적하지 않는다. **그래서 각자 다른 포트를 써도 남의 설정을 건드리지 않는다.**
+
+## 프로필
+
+환경마다 갈리는 값은 `application.yml` 이 아니라 프로필 파일에 둔다.
+`application.yml` 은 언제나 먼저 읽히고 프로필 파일이 그 위에 덮는다.
+
+| 파일 | 언제 읽히나 | 추적 |
+|---|---|---|
+| `application.yml` | 항상 | O |
+| `../src/main/resources/application-local.yml` | 로컬. 기본값이라 따로 켤 것이 없다 | **X** |
+| `application-prod.yml` | `SPRING_PROFILES_ACTIVE=prod` | O |
+| `src/integrationTest/resources/application-integrationTest.yml` | `./gradlew integrationTest` | O |
+
+프로필을 아무도 지정하지 않으면 `local` 로 본다. `application.yml` 이 그렇게 잡는다.
+
+```yaml
+spring:
+  profiles:
+    default: local
+```
+
+```
+No active profile set, falling back to 1 default profile: "local"
+```
 
 ## 동작 플로우
 
@@ -40,7 +66,7 @@
 |---|---|
 | `./gradlew bootRun` | compose 가 띄운 컨테이너 |
 | 통합 테스트 | Testcontainers 가 따로 띄운 컨테이너 |
-| `java -jar` | `application.yml` 또는 환경변수 |
+| `java -jar` | 켠 프로필의 파일 또는 환경변수 |
 
 ## 값을 덮는 순서
 
@@ -51,7 +77,7 @@
 `application.yml` 은 클래스패스에 있어 가장 약하다. 그래서 파일을 고치지 않고도 덮을 수 있다.
 
 ```bash
-DB_URL=jdbc:mysql://localhost:13306/freshmarket ./gradlew bootRun
+DB_URL=jdbc:mysql://localhost:3307/freshmarket ./gradlew bootRun
 ```
 
 ## 문법이 서로 다르다
@@ -81,11 +107,11 @@ Spring 에서 `:-` 를 쓰면 기본값이 `-3306` 이 된다.
 
 ## 언제 무엇을 고치나
 
-| 상황 | 할 일 |
-|---|---|
-| 아무 문제 없음 | 아무것도 안 한다 |
-| 3306 이 이미 쓰인다 | `.env` 에 `MYSQL_PORT=13306` |
-| 컨테이너 이름이 겹친다 | `.env` 에 `MYSQL_CONTAINER_NAME=...` |
+| 상황 | 할 일                                       |
+|---|-------------------------------------------|
+| 아무 문제 없음 | 아무것도 안 한다                                 |
+| 3306 이 이미 쓰인다 | `.env` 에 `MYSQL_PORT=3307`                |
+| 컨테이너 이름이 겹친다 | `.env` 에 `MYSQL_CONTAINER_NAME=...`       |
 | compose 없이 다른 DB 에 붙는다 | 셸에 `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` |
 
 ```bash
@@ -146,14 +172,44 @@ docker compose down -v
 Flyway 자동설정은 `spring-boot-flyway` 의존성이 있어야 붙는다.
 Boot 4 는 자동설정을 기술별 모듈로 쪼갰고, **`flyway-core` 만 있으면 마이그레이션이 조용히 건너뛰어진다.**
 
+## 앱이 쓰는 비밀값
+
+위 표는 전부 DB 접속에 관한 것이다. 카카오 키나 JWT 서명 키처럼 **앱이 직접 쓰는 값은 경로가 다르다.**
+
+`application.yml` 은 그런 키를 기본값 없이 `"${VAR}"` 로 둔다. 전부 비밀값이라 기본값을 주면
+값을 빼먹은 채로 뜨는 것을 못 막기 때문이다. **그래서 값을 주지 않으면 앱이 아예 뜨지 않는다.**
+
+| 환경 | 어디서 주나 |
+|---|---|
+| 로컬 | `src/main/resources/application-local.yml` |
+| 운영 | 환경변수. 값은 SSM Parameter Store 에 두고 배포 스크립트가 읽어 넣는다 |
+
+**운영 값이 든 파일은 저장소에 두지 않는다.** `application-prod.yml` 에는 이름만 적혀 있다.
+
+로컬은 같은 폴더의 템플릿을 복사해서 채운다.
+
+```bash
+cp src/main/resources/application-local.yml.example src/main/resources/application-local.yml
+```
+
+**따로 켤 것은 없다.** `application.yml` 이 기본 프로필을 `local` 로 둔다.
+파일이 없으면 조용히 넘어가고, 그 값을 쓰는 빈이 만들어질 때 기동이 막힌다.
+
+`.env` 와 헷갈리지 않는다. `.env` 는 Compose 만 읽고 컨테이너를 어떻게 띄울지에만 관여한다.
+카카오 키를 `.env` 에 적어도 앱에는 전달되지 않는다.
+
+**`src/main/resources` 는 jar 에 담기는 자리다.** `../src/main/resources/application-local.yml` 은 저장소에는 안 올라가지만,
+로컬에서 `bootJar` 를 만들면 그 값이 jar 안에 들어간다. 그렇게 만든 jar 는 남에게 주지 않는다.
+
 ## 올리면 안 되는 것
 
 `.gitignore` 가 아래를 막는다.
 
 ```
-.env  .env.*        (단 .env.example 은 통과)
-application-local.*
+.env  .env.*                                              (단 .env.example 은 통과)
+application-local.yml  .yaml  .properties                 (단 .example 은 통과)
 *.pem  *.key  *.p12  *.jks  *.keystore
 ```
 
-**실제 값이 든 파일은 올리지 않고, 무엇을 적을 수 있는지 보여주는 `.env.example` 만 올린다.**
+**실제 값이 든 파일은 올리지 않고, 무엇을 적을 수 있는지 보여주는 `.example` 만 올린다.**
+`.env.example` 과 `application-local.yml.example` 둘이다.

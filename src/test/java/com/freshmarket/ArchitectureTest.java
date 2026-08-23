@@ -1,10 +1,18 @@
 package com.freshmarket;
 
+import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
+import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
+import com.tngtech.archunit.lang.ConditionEvents;
+import com.tngtech.archunit.lang.SimpleConditionEvent;
 import jakarta.persistence.Entity;
+import java.util.Arrays;
+import org.springframework.context.annotation.Profile;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.annotation.Transactional;
 
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
@@ -187,5 +195,40 @@ class ArchitectureTest {
             .that().resideInAnyPackage(BASE + ".common..", BASE + ".config..")
             .should().dependOnClassesThat()
             .resideInAPackage(BASE + ".*.domain..")
+            .allowEmptyShould(true);
+
+    private static final DescribedPredicate<JavaClass> 스케줄_메서드를_가진다 =
+            new DescribedPredicate<>("@Scheduled 메서드를 가진다") {
+                @Override
+                public boolean test(JavaClass c) {
+                    return c.getMethods().stream().anyMatch(m -> m.isAnnotatedWith(Scheduled.class));
+                }
+            };
+
+    private static final ArchCondition<JavaClass> batch_프로필로_묶인다 =
+            new ArchCondition<>("@Profile(\"batch\") 로 묶인다") {
+                @Override
+                public void check(JavaClass c, ConditionEvents events) {
+                    boolean 묶였다 = c.isAnnotatedWith(Profile.class)
+                            && Arrays.asList(c.getAnnotationOfType(Profile.class).value()).contains("batch");
+                    if (!묶였다) {
+                        events.add(SimpleConditionEvent.violated(c,
+                                c.getName() + " 에 @Profile(\"batch\") 가 없다"));
+                    }
+                }
+            };
+
+    /*
+     * 스케줄러는 batch 프로필에서만 뜬다 (INF-1-10).
+     *
+     * 앱 ASG 는 최대 2대까지 뜨고 배치 전용 인스턴스만 prod,batch 로 뜬다.
+     * 분산 락이 없어 프로필이 유일한 방어선이고, 이것이 빠지면 같은 행을 여러 대가 동시에 집는다.
+     * SchedulingConfig 가 앱 프로필에서 @EnableScheduling 을 꺼 두는 것에 기대지 않는다.
+     * 그 설정이 나중에 바뀌면 @Profile 을 안 단 스케줄러가 한꺼번에 깨어나기 때문이다.
+     */
+    @ArchTest
+    static final ArchRule 스케줄러는_batch_프로필에만_있다 = classes()
+            .that(스케줄_메서드를_가진다)
+            .should(batch_프로필로_묶인다)
             .allowEmptyShould(true);
 }

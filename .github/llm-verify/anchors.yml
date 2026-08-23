@@ -56,7 +56,6 @@ rules:
       levels: [코드, 설계]
       # 이미지 URL 을 응답에 넣는 곳이 컨트롤러와 DTO 다
       chapters: { INF: [11] }
-    needs_baseline_values: false
 
   - id: service
     status: unverified
@@ -77,8 +76,6 @@ rules:
         # 소유권 검증과 주입, 민감 정보 노출, 남용 방지는 서비스 로직이 판정 대상이다.
         # 3장(입력 검증)은 controller 가, 5장(감사 이력)은 entity 와 migration 이 맡는다.
         SEC: [1, 2, 4, 6]
-    # 트랜잭션 타임아웃과 잠금 대기 상한을 확정값과 대조한다
-    needs_baseline_values: true
 
   - id: entity
     status: unverified
@@ -93,7 +90,6 @@ rules:
       prefixes: [BE, EC, JPA, DI, CMP, IDS, INF, DPB, EJ]
       levels: [코드, 설계]
       chapters: { INF: [8] }              # 누적 값 이력 테이블
-    needs_baseline_values: false
 
   - id: repository
     status: unverified
@@ -110,7 +106,6 @@ rules:
         # 쿼리 조립과 소유자 조건은 여기가 판정 대상이다.
         # @Query 문자열 연결과 Pageable 정렬 컬럼이 주입 경로가 된다.
         SEC: [1, 2]
-    needs_baseline_values: false
 
   - id: external-client
     status: unverified
@@ -124,7 +119,6 @@ rules:
       levels: [코드, 설계, 인프라]
     # 타임아웃 계층과 서킷 설정을 확정값과 대조한다
       chapters: { INF: [3] }              # 외부 호출 타임아웃
-    needs_baseline_values: true
 
   - id: api-contract
     status: unverified
@@ -138,7 +132,6 @@ rules:
       prefixes: [DPB, CMP, API, IDS, INF, EJ]
       levels: [코드, 설계]
       chapters: { INF: [6] }              # 혼재 구간의 응답 필드 규칙
-    needs_baseline_values: false
 
   - id: migration
     status: unverified
@@ -153,7 +146,6 @@ rules:
       # backend 항목은 층위 태깅 전이라 전부 코드다. 코드를 빼면 BE 와 IDS 가 전부 걸러진다
       levels: [코드, 설계, 인프라]
       chapters: { INF: [6] }              # 확장 후 축소
-    needs_baseline_values: true
 
   - id: app-config
     status: unverified
@@ -172,7 +164,6 @@ rules:
       levels: [코드, 인프라, 설계]
     # 커넥션풀, 타임아웃, graceful shutdown 값을 확정값과 대조한다
       chapters: { INF: [3, 4, 5, 7, 9] }  # 타임아웃, 헬스체크, 컨테이너, SSM, 관측
-    needs_baseline_values: true
 
   - id: test
     status: unverified
@@ -189,7 +180,6 @@ rules:
       # 테스트에 걸면 목 주입, 픽스처 빌더, 긴 메서드명이 전부 지적으로 나온다
       prefixes: [UT, MNT]
       levels: [코드]
-    needs_baseline_values: false
 
   - id: archunit
     status: unverified
@@ -200,7 +190,6 @@ rules:
       # 테스트 파일이지만 판정 대상이 경계 규칙 자체라 DPB 를 켠다. EJ 는 뺀다
       prefixes: [DPB]
       levels: [코드, 설계]
-    needs_baseline_values: false
 
   - id: build
     status: unverified
@@ -212,7 +201,6 @@ rules:
       # BLD: JaCoCo 커버리지와 SonarQube 게이트 설정. 판정 대상이 build.gradle 이라 이 저장소가 소유한다
       prefixes: [BLD, MNT, PERF]
       levels: [코드, 인프라, 프로세스]
-    needs_baseline_values: false
 
 # EJ 와 DPB 는 프로덕션 자바를 트리거로 하는 모든 규칙에 들어간다
 #   CODEREVIEW.md 가 이 둘을 "변경 위치와 무관하게 모든 프로덕션 자바 PR 에 항상 적용" 으로 규정한다.
