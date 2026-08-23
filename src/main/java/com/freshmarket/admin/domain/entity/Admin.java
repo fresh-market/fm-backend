@@ -127,6 +127,15 @@ public class Admin extends BaseMutableTimeEntity {
     }
 
     /*
+     * 로그아웃용 리프레시 토큰 폐기. 계정 상태와 deletedAt은 건드리지 않는다.
+     * 이미 비어 있는 상태에서 다시 호출해도 결과가 같으므로 멱등적이다.
+     */
+    public void revokeRefreshToken() {
+        this.refreshTokenHash = null;
+        this.refreshTokenExpiresAt = null;
+    }
+
+    /*
      * 비활성화한다. 본인 계정 비활성화 금지, 마지막 최고관리자 비활성화 금지 같은 정책은
      * "관리자 삭제(비활성화)" 기능의 서비스가 검사한다. 이 메서드는 그 기능이 아직 없는 지금도
      * 테스트 픽스처가 비활성 계정을 만들 수 있도록 최소 형태로 둔다.

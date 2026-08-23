@@ -64,6 +64,20 @@ class AdminTest {
     }
 
     @Test
+    void 로그아웃용_토큰_폐기는_계정_상태를_바꾸지_않고_멱등적이다() {
+        Admin admin = AdminFixture.active("admin.kim", "hash", AdminRole.ADMIN);
+        admin.issueRefreshToken("a".repeat(64), LocalDateTime.now().plusDays(1));
+
+        admin.revokeRefreshToken();
+        admin.revokeRefreshToken();
+
+        assertThat(admin.isActive()).isTrue();
+        assertThat(admin.getDeletedAt()).isNull();
+        assertThat(admin.getRefreshTokenHash()).isNull();
+        assertThat(admin.getRefreshTokenExpiresAt()).isNull();
+    }
+
+    @Test
     void 비활성화_시각이_없으면_예외가_발생한다() {
         Admin admin = AdminFixture.active("admin.kim", "hash", AdminRole.ADMIN);
 

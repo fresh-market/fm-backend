@@ -4,35 +4,35 @@ import com.freshmarket.admin.domain.dto.AdminLoginRequest;
 import com.freshmarket.admin.domain.dto.AdminLoginResponse;
 import com.freshmarket.admin.domain.dto.AdminLoginResult;
 import com.freshmarket.admin.domain.entity.Admin;
+import com.freshmarket.admin.domain.entity.AdminAuditLog;
 import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
+import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
 import com.freshmarket.admin.domain.repository.AdminRepository;
-import com.freshmarket.common.auth.jwt.JwtTokenProvider;
-import com.freshmarket.common.auth.jwt.OpaqueTokenGenerator;
-import com.freshmarket.common.auth.jwt.RefreshTokenRepository;
-import com.freshmarket.common.auth.jwt.TokenType;
+import com.freshmarket.common.auth.jwt.*;
+
+import java.time.Clock;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.Optional;
 
 import com.freshmarket.common.logging.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /*
- * 관리자 로그인만 다룬다. 로그아웃, 토큰 재발급, 비밀번호 변경은 별도 PR 이다 (auth.md 참고).
+ * 관리자 인증은 로그인, 로그아웃, 토큰 재발급을 다룬다. 비밀번호 변경은 이번 프로젝트의 구현 범위에 포함하지 않는다.
  *
- * 5회 실패 시 30분 잠금은 이번 범위에서 뺐다 (admin 테이블에 fail_count, locked_until 컬럼이 없다.
- * auth.md "정하지 못한 것" 절에도 같은 이유로 보류돼 있다).
+ * 5회 실패 시 30분 잠금은 이번 범위에서 뺐다.
+ * (admin 테이블에 fail_count, locked_until 컬럼이 없다. auth.md "정하지 못한 것" 절에도 같은 이유로 보류돼 있다.)
  *
- * (merge: feat/member-auth와 합치며 추가) JWT 서명·액세스 토큰 발급은 member/admin이 공유하는
- * common.auth.jwt.JwtTokenProvider를 그대로 쓴다 — admin이 따로 두던 common.security.JwtTokenProvider와
- * 거의 동일한 구현을 독립적으로 만들었던 것이라, 중복을 없애고 이쪽으로 통합했다.
- * 액세스 토큰 유효기간도 이제 JwtTokenProvider가 갖고 있어(jwt.access-token-validity-ms) 별도 파라미터가 필요 없다.
- * 리프레시 토큰은 member와 같은 공통 RefreshTokenRepository(Redis)에 저장한다.
- * 로그인은 최초 발급만 담당하고, Rotation은 별도 재발급 API에서 compareAndRotate()로 처리한다.
+ * JWT 서명·Access Token 발급은 member/admin이 공유하는common.auth.jwt.JwtTokenProvider를 사용한다.
+ * Refresh Token도 member와 같은 공통 RefreshTokenRepository(Redis)에 저장하며, 재발급 시 Rotation은 compareAndRotate()로 처리한다.
  */
 @Slf4j
 @Service
@@ -45,6 +45,9 @@ public class AdminAuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final AccessTokenValidAfterRepository accessTokenValidAfterRepository;
+    private final AdminAuditLogRepository adminAuditLogRepository;
+    private final Clock clock;
     private final long refreshTokenValidityMs;
     private final String dummyPasswordHash;
 
@@ -53,16 +56,23 @@ public class AdminAuthService {
             PasswordEncoder passwordEncoder,
             JwtTokenProvider jwtTokenProvider,
             RefreshTokenRepository refreshTokenRepository,
+            AccessTokenValidAfterRepository accessTokenValidAfterRepository,
+            AdminAuditLogRepository adminAuditLogRepository,
+            Clock clock,
             @Value("${jwt.refresh-token-validity.admin}") long refreshTokenValidityMs) {
         this.adminRepository = adminRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.accessTokenValidAfterRepository = accessTokenValidAfterRepository;
+        this.adminAuditLogRepository = adminAuditLogRepository;
+        this.clock = clock;
         this.refreshTokenValidityMs = refreshTokenValidityMs;
         // 같은 인코더로 미리 만들어 둬야 진짜 비밀번호 검증과 연산 비용(코스트 팩터)이 완전히 같다
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_SOURCE);
     }
 
+    @Transactional(timeout = 5)
     public AdminLoginResult login(AdminLoginRequest request) {
         Objects.requireNonNull(request, "request");
 
@@ -98,13 +108,21 @@ public class AdminAuthService {
                 admin.getId(), TokenType.ADMIN, admin.getRole().toAuthority());
 
         String rawRefreshToken = OpaqueTokenGenerator.generate();
+        Duration refreshTtl = Duration.ofMillis(refreshTokenValidityMs);
         refreshTokenRepository.save(
                 rawRefreshToken,
                 admin.getId(),
                 admin.getRole().toAuthority(),
                 TokenType.ADMIN,
                 false,
-                Duration.ofMillis(refreshTokenValidityMs));
+                refreshTtl);
+
+        /* Redis의 active key가 유실돼도 로그아웃 시 실제 Refresh Token 레코드를 찾을 수 있도록 DB에도 해시와 만료시각을 백업한다.
+         * 평문 토큰은 DB에 저장하지 않는다.
+         */
+        admin.issueRefreshToken(
+                TokenHasher.sha256(rawRefreshToken),
+                LocalDateTime.now(clock).plus(refreshTtl));
 
         AdminLoginResponse response = new AdminLoginResponse(
                 jwtTokenProvider.getAccessTokenValidityMs() / 1000,
@@ -116,6 +134,64 @@ public class AdminAuthService {
 
         // 두 토큰 원문은 응답 본문이 아니라 컨트롤러가 만드는 HttpOnly 쿠키로만 나간다
         return new AdminLoginResult(response, accessToken, rawRefreshToken, refreshTokenValidityMs / 1000);
+    }
+
+    /*
+     * 관리자 로그아웃. Refresh Token은 Redis와 DB 백업에서 폐기하고, Access Token은
+     * 계정 단위 valid-after 커트라인을 기록해 이미 발급된 토큰까지 즉시 무효화한다.
+     */
+    @Transactional(timeout = 5)
+    public void logout(Long adminId, String role) {
+        Objects.requireNonNull(adminId, "adminId");
+        Objects.requireNonNull(role, "role");
+
+        Admin admin = adminRepository.findById(adminId)
+                .orElseThrow(() -> new AdminException(AdminErrorCode.LOGIN_FAILED));
+
+        Optional<String> tokenHash;
+        try {
+            tokenHash = refreshTokenRepository.findActiveHash(role, adminId);
+            if (tokenHash.isEmpty()) {
+                tokenHash = Optional.ofNullable(admin.getRefreshTokenHash());
+                if (tokenHash.isPresent()) {
+                    log.warn("event=ADMIN_ACTIVE_KEY_MISSING_DB_FALLBACK_USED role={} adminId={}", role, adminId);
+                }
+            }
+        } catch (DataAccessException e) {
+            log.warn(
+                    "event=ADMIN_REDIS_LOOKUP_FAILED role={} adminId={}",
+                    role,
+                    adminId,
+                    e);
+
+            tokenHash = Optional.empty();
+        }
+
+        // DB 백업은 Redis 삭제 성공 여부와 무관하게 먼저 폐기한다.
+        admin.revokeRefreshToken();
+
+        try {
+            tokenHash.ifPresent(refreshTokenRepository::deleteByHash);
+            refreshTokenRepository.deleteActiveKey(role, adminId);
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_REDIS_DELETE_FAILED role={} adminId={} — DB 백업 삭제만 반영", role, adminId, e);
+        }
+
+        try {
+            accessTokenValidAfterRepository.invalidateBefore(
+                    role,
+                    adminId,
+                    LocalDateTime.now(clock),
+                    Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs()));
+        } catch (DataAccessException e) {
+            // 공용 JwtAuthenticationFilter도 Redis 장애 시 fail-open 정책을 사용한다.
+            // 커트라인 저장 실패 하나 때문에 로그아웃 전체를 500으로 만들지 않고 같은 정책을 따른다.
+            log.warn("event=ADMIN_INVALIDATE_BEFORE_FAILED role={} adminId={}", role, adminId, e);
+        }
+
+        adminAuditLogRepository.save(
+                AdminAuditLog.of(adminId, "ADMIN_LOGOUT", String.valueOf(adminId), null));
+        log.info("event=ADMIN_LOGOUT success=true adminId={}", adminId);
     }
 
     private String maskLoginId(String loginId) {

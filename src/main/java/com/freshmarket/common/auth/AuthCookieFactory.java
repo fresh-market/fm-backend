@@ -91,4 +91,14 @@ public class AuthCookieFactory {
                 .sameSite("Strict")
                 .build();
     }
+
+    public ResponseCookie expiredAdminRefreshTokenCookie() {
+        return ResponseCookie.from("refreshToken", "")
+                .httpOnly(true)
+                .secure(secure)
+                .path(ADMIN_REFRESH_TOKEN_COOKIE_PATH)
+                .maxAge(Duration.ZERO)
+                .sameSite("Strict")
+                .build();
+    }
 }

@@ -2,6 +2,7 @@ package com.freshmarket.admin.domain.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -9,24 +10,30 @@ import static org.mockito.Mockito.when;
 import com.freshmarket.admin.domain.dto.AdminLoginRequest;
 import com.freshmarket.admin.domain.dto.AdminLoginResult;
 import com.freshmarket.admin.domain.entity.Admin;
+import com.freshmarket.admin.domain.entity.AdminAuditLog;
 import com.freshmarket.admin.domain.entity.AdminFixture;
 import com.freshmarket.admin.domain.entity.AdminRole;
 import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
+import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
 import com.freshmarket.admin.domain.repository.AdminRepository;
+import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
 import com.freshmarket.common.auth.jwt.JwtTokenProvider;
-import java.time.Duration;
+
+import java.time.*;
 import java.util.Optional;
 
 import com.freshmarket.common.auth.jwt.RefreshTokenRepository;
 import com.freshmarket.common.auth.jwt.TokenType;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /*
- * AdminRepository 만 mock 이다 (들어오는 데이터를 제공하는 의존성, UT-4-01).
- * PasswordEncoder 와 JwtTokenProvider 는 순수 로직이라 실제 구현을 그대로 쓴다.
+ * DB/Redis 저장소처럼 외부 상태에 접근하는 Repository는 mock으로 격리한다.
+ * PasswordEncoder와 JwtTokenProvider는 핵심 인증 로직을 실제로 검증하기 위해 실제 구현을 사용한다.
  * mock 으로 대체하면 "비밀번호가 실제로 검증되는가", "토큰이 실제로 만들어지는가" 를
  * 이 테스트가 더 이상 보장하지 못한다 (UT-1-01 회귀 방어).
  */
@@ -44,12 +51,19 @@ class AdminAuthServiceTest {
     private final JwtTokenProvider jwtTokenProvider = new JwtTokenProvider(
             TEST_JWT_SECRET, ACCESS_TOKEN_VALIDITY_MS, MEMBER_REFRESH_TOKEN_VALIDITY_MS);
     private final RefreshTokenRepository refreshTokenRepository = mock(RefreshTokenRepository.class);
+    private final AccessTokenValidAfterRepository accessTokenValidAfterRepository =
+            mock(AccessTokenValidAfterRepository.class);
+    private final AdminAuditLogRepository adminAuditLogRepository = mock(AdminAuditLogRepository.class);
+    private final Clock clock = Clock.fixed(Instant.parse("2026-08-23T06:00:00Z"), ZoneId.of("Asia/Seoul"));
 
     private final AdminAuthService adminAuthService = new AdminAuthService(
             adminRepository,
             passwordEncoder,
             jwtTokenProvider,
             refreshTokenRepository,
+            accessTokenValidAfterRepository,
+            adminAuditLogRepository,
+            clock,
             ADMIN_REFRESH_TOKEN_VALIDITY_MS
     );
 
@@ -95,6 +109,11 @@ class AdminAuthServiceTest {
                 TokenType.ADMIN,
                 false,
                 Duration.ofMillis(ADMIN_REFRESH_TOKEN_VALIDITY_MS));
+
+        // Redis active key 유실 시 로그아웃이 사용할 DB 백업도 함께 남긴다.
+        assertThat(admin.getRefreshTokenHash()).isNotBlank();
+        assertThat(admin.getRefreshTokenExpiresAt())
+                .isEqualTo(LocalDateTime.now(clock).plusDays(1));
     }
 
     @Test
@@ -183,6 +202,80 @@ class AdminAuthServiceTest {
                 .isInstanceOf(AdminException.class)
                 .extracting(e -> ((AdminException) e).getErrorCode())
                 .isEqualTo(AdminErrorCode.LOGIN_FAILED);
+    }
+
+    @Test
+    void 로그아웃하면_리프레시토큰과_액세스토큰을_함께_무효화한다() {
+        Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
+        ReflectionTestUtils.setField(admin, "id", 1L);
+        admin.issueRefreshToken("a".repeat(64), LocalDateTime.now(clock).plusDays(1));
+
+        when(adminRepository.findById(1L)).thenReturn(Optional.of(admin));
+        when(refreshTokenRepository.findActiveHash("ROLE_ADMIN", 1L))
+                .thenReturn(Optional.of("a".repeat(64)));
+
+        adminAuthService.logout(1L, "ROLE_ADMIN");
+
+        assertThat(admin.getRefreshTokenHash()).isNull();
+        assertThat(admin.getRefreshTokenExpiresAt()).isNull();
+        assertThat(admin.isActive()).isTrue();
+        verify(refreshTokenRepository).deleteByHash("a".repeat(64));
+        verify(refreshTokenRepository).deleteActiveKey("ROLE_ADMIN", 1L);
+        verify(accessTokenValidAfterRepository).invalidateBefore(
+                "ROLE_ADMIN",
+                1L,
+                LocalDateTime.now(clock),
+                Duration.ofMillis(ACCESS_TOKEN_VALIDITY_MS));
+        verify(adminAuditLogRepository).save(any(AdminAuditLog.class));
+    }
+
+    @Test
+    void 로그아웃시_Redis_보조인덱스가_없으면_DB_해시로_폴백한다() {
+        Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
+        ReflectionTestUtils.setField(admin, "id", 1L);
+        admin.issueRefreshToken("b".repeat(64), LocalDateTime.now(clock).plusDays(1));
+
+        when(adminRepository.findById(1L)).thenReturn(Optional.of(admin));
+        when(refreshTokenRepository.findActiveHash("ROLE_ADMIN", 1L)).thenReturn(Optional.empty());
+
+        adminAuthService.logout(1L, "ROLE_ADMIN");
+
+        verify(refreshTokenRepository).deleteByHash("b".repeat(64));
+        assertThat(admin.getRefreshTokenHash()).isNull();
+    }
+
+    @Test
+    void 로그아웃시_Redis_조회에_실패해도_DB_리프레시토큰은_폐기한다() {
+        Admin admin = AdminFixture.active(
+                "admin.kim",
+                passwordEncoder.encode(RAW_PASSWORD),
+                AdminRole.ADMIN);
+
+        ReflectionTestUtils.setField(admin, "id", 1L);
+        admin.issueRefreshToken(
+                "a".repeat(64),
+                LocalDateTime.now(clock).plusDays(1));
+
+        when(adminRepository.findById(1L))
+                .thenReturn(Optional.of(admin));
+
+        when(refreshTokenRepository.findActiveHash("ROLE_ADMIN", 1L))
+                .thenThrow(new DataAccessResourceFailureException("redis down"));
+
+        adminAuthService.logout(1L, "ROLE_ADMIN");
+
+        assertThat(admin.getRefreshTokenHash()).isNull();
+        assertThat(admin.getRefreshTokenExpiresAt()).isNull();
+        assertThat(admin.isActive()).isTrue();
+
+        verify(accessTokenValidAfterRepository).invalidateBefore(
+                "ROLE_ADMIN",
+                1L,
+                LocalDateTime.now(clock),
+                Duration.ofMillis(ACCESS_TOKEN_VALIDITY_MS));
+
+        verify(adminAuditLogRepository)
+                .save(any(AdminAuditLog.class));
     }
 
     @Test

@@ -1,8 +1,7 @@
 package com.freshmarket.admin.domain.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 import com.freshmarket.admin.domain.dto.AdminLoginRequest;
 import com.freshmarket.admin.domain.dto.AdminLoginResponse;
@@ -10,14 +9,18 @@ import com.freshmarket.admin.domain.dto.AdminLoginResult;
 import com.freshmarket.admin.domain.entity.AdminRole;
 import com.freshmarket.admin.domain.service.AdminAuthService;
 import com.freshmarket.common.auth.AuthCookieFactory;
+import com.freshmarket.common.auth.CustomUserDetails;
 import com.freshmarket.common.auth.jwt.JwtTokenProvider;
+import com.freshmarket.common.auth.jwt.TokenType;
 import com.freshmarket.common.response.ResponseEnvelope;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.Collection;
 import java.util.List;
 
 class AdminAuthControllerTest {
@@ -92,5 +95,31 @@ class AdminAuthControllerTest {
         assertThat(response.getBody().data().toString())
                 .doesNotContain(ACCESS_TOKEN)
                 .doesNotContain(REFRESH_TOKEN);
+    }
+
+    @Test
+    void 로그아웃하면_인증_쿠키를_둘_다_만료시킨다() {
+        JwtTokenProvider jwtTokenProvider = mock(JwtTokenProvider.class);
+        AuthCookieFactory authCookieFactory = new AuthCookieFactory(jwtTokenProvider);
+        ReflectionTestUtils.setField(authCookieFactory, "secure", true);
+        AdminAuthController controller = new AdminAuthController(adminAuthService, authCookieFactory);
+        CustomUserDetails userDetails = new CustomUserDetails(1L, TokenType.ADMIN, "ROLE_ADMIN");
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+
+        ResponseEntity<Void> response = controller.logout(userDetails, servletResponse);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        verify(adminAuthService).logout(1L, "ROLE_ADMIN");
+
+        Collection<String> setCookies = servletResponse.getHeaders(HttpHeaders.SET_COOKIE);
+        assertThat(setCookies).hasSize(2);
+        assertThat(setCookies).anySatisfy(cookie -> assertThat(cookie)
+                .contains("refreshToken=")
+                .contains("Path=/v1/admin/auth/")
+                .contains("Max-Age=0"));
+        assertThat(setCookies).anySatisfy(cookie -> assertThat(cookie)
+                .contains("accessToken=")
+                .contains("Path=/")
+                .contains("Max-Age=0"));
     }
 }
