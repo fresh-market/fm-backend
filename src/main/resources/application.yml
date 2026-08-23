@@ -52,6 +52,15 @@ spring:
     redis:
       host: "${VALKEY_HOST:localhost}"
       port: "${VALKEY_PORT:6379}"
+      # 인증 경로가 요청마다 이 캐시를 찌른다.
+      # 값을 주지 않으면 Lettuce 기본이 커맨드 60초, 연결 10초라
+      # 캐시가 죽는 게 아니라 느려지기만 해도 톰캣 스레드가 그만큼 묶인다.
+      # DB 쪽은 socketTimeout 10초로 이미 막아 두었는데 여기만 비어 있었다.
+      #
+      # 단일 GET/SET/INCR 이고 같은 VPC 안이라 정상 지연은 1밀리초 아래다.
+      # 1초는 그 1000배라 정상 요청을 자를 여지가 없으면서 스레드 점유를 끊는다.
+      timeout: 1s
+      connect-timeout: 1s
 
   security:
     oauth2:

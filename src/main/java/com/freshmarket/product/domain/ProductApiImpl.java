@@ -1,7 +1,18 @@
 package com.freshmarket.product.domain;
 
+import static com.freshmarket.common.query.CollationExpressions.equalsAsCs;
+import static com.freshmarket.product.domain.entity.QProduct.product;
+import static com.freshmarket.product.domain.entity.QProductOption.productOption;
+
 import com.freshmarket.product.ProductApi;
+import com.freshmarket.product.ProductOptionInfo;
+import com.freshmarket.product.domain.dto.ProductOptionProjection;
+import com.freshmarket.product.domain.dto.QProductOptionProjection;
+import com.freshmarket.product.domain.entity.SaleStatus;
 import com.freshmarket.product.domain.repository.ProductOptionRepository;
+import com.querydsl.jpa.impl.JPAQueryFactory;
+import java.util.List;
+import java.util.Optional;
 import org.springframework.stereotype.Component;
 
 // ProductApi 구현체. package-private로 감춰 다른 도메인이 이 클래스를 직접 참조하지 못하게 한다
@@ -9,14 +20,50 @@ import org.springframework.stereotype.Component;
 class ProductApiImpl implements ProductApi {
 
     private final ProductOptionRepository productOptionRepository;
+    private final JPAQueryFactory queryFactory;
 
-    ProductApiImpl(ProductOptionRepository productOptionRepository) {
+    ProductApiImpl(ProductOptionRepository productOptionRepository, JPAQueryFactory queryFactory) {
         this.productOptionRepository = productOptionRepository;
+        this.queryFactory = queryFactory;
     }
 
-    // optionId가 존재하기만 하는지가 아니라 productId 소속인지까지 리포지토리 파생 쿼리로 한 번에 확인한다
     @Override
     public boolean existsOption(Long productId, Long optionId) {
         return productOptionRepository.existsByIdAndProductId(optionId, productId);
+    }
+
+    @Override
+    public Optional<ProductOptionInfo> findOptionInfo(Long productOptionId) {
+        return findOptionInfos(List.of(productOptionId)).stream().findFirst();
+    }
+
+    /*
+     * product + product_option 을 join 해 여러 옵션을 한 번에 가져온다.
+     * sale_status 컬럼이 COLLATE utf8mb4_0900_as_cs 라 .eq() 를 그냥 쓰면 콜레이션
+     * 충돌이 난다. CollationExpressions.equalsAsCs() 로 우회한다.
+     */
+    @Override
+    public List<ProductOptionInfo> findOptionInfos(List<Long> productOptionIds) {
+        if (productOptionIds == null || productOptionIds.isEmpty()) {
+            return List.of();
+        }
+        List<ProductOptionProjection> rows = queryFactory
+                .select(new QProductOptionProjection(
+                        productOption.id,
+                        product.name,
+                        productOption.name,
+                        productOption.price,
+                        product.deletedAt.isNull()
+                                .and(equalsAsCs(productOption.saleStatus, SaleStatus.ON_SALE))))
+                .from(productOption)
+                .join(product).on(product.id.eq(productOption.productId))
+                .where(productOption.id.in(productOptionIds))
+                .fetch();
+
+        return rows.stream()
+                .map(row -> new ProductOptionInfo(
+                        row.productOptionId(), row.productName(), row.optionName(),
+                        row.price(), row.purchasable()))
+                .toList();
     }
 }
