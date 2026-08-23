@@ -154,6 +154,19 @@ public class Order extends BaseMutableTimeEntity {
                 .build();
     }
 
+    /*
+     * orderNo는 NOT NULL+UNIQUE(uk_order_no)라 insert 시점에 값이 있어야 하는데, order_id(PK)는
+     * IDENTITY라 insert 이후에만 안다. OrderCreateService가 OrderNoGenerator로 만든 임시
+     * 고유값으로 먼저 저장해 PK를 받은 뒤, 이 메서드로 "orderNo = orderId" 정책값을 되돌려
+     * 채운다(주문번호 체계를 아직 정하지 않은 지금 단계에서 팀이 정한 임시 정책).
+     */
+    public void assignOrderNo(String orderNo) {
+        if (orderNo == null || orderNo.isBlank() || orderNo.length() > 30) {
+            throw new IllegalArgumentException("orderNo는 필수이며 최대 길이를 넘을 수 없습니다.");
+        }
+        this.orderNo = orderNo;
+    }
+
     public void markPaid() {
         if (status == OrderStatus.PAID) {
             return;
