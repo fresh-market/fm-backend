@@ -25,9 +25,13 @@ public enum StockErrorCode implements ErrorCode {
     REQUEST_ID_ALREADY_USED(HttpStatus.CONFLICT, "STOCK-007", "이미 다른 옵션에 사용된 요청 식별자입니다."),
     // FEFO로 가용 로트를 모두 훑어도 요청 수량을 채우지 못한 경우
     INSUFFICIENT_STOCK(HttpStatus.UNPROCESSABLE_CONTENT, "STOCK-008", "재고가 부족합니다."),
-    // 같은 주문상품을 동시에 예약하는 요청끼리 uk_alloc_orderitem_lot에서 경합한 경우. 호출부가 재시도하면
-    // 먼저 커밋된 쪽의 할당을 findByOrderItemId로 찾아내 멱등하게 스킵한다
-    RESERVATION_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-009", "동일한 예약 요청이 아직 처리 중입니다. 잠시 후 다시 시도해주세요.");
+    /*
+     * 같은 로트를 동시에 건드리는 reserve/confirm/release끼리 경합한 경우 — 같은 주문상품을 동시에
+     * 예약하는 요청끼리 uk_alloc_orderitem_lot에서 부딪히거나(호출부가 재시도하면 먼저 커밋된 쪽의
+     * 할당을 findByOrderItemId로 찾아내 멱등하게 스킵한다), findByIdForUpdate가 락 대기 타임아웃이나
+     * 교착으로 실패한 경우 모두 여기로 묶는다.
+     */
+    RESERVATION_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-009", "동일한 재고 요청이 아직 처리 중입니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus httpStatus;
     private final String code;

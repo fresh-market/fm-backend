@@ -18,6 +18,7 @@ import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.util.List;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Component;
 
 // StockApi 구현체. package-private로 감춰 다른 도메인이 이 클래스를 직접 참조하지 못하게 한다.
@@ -46,12 +47,18 @@ class StockApiImpl implements StockApi {
      */
     @Override
     public void reserve(StockReservationRequest request) {
+        if (request.items() == null) {
+            return;
+        }
         for (StockReservationItemRequest item : request.items()) {
             reserveItem(request.orderId(), item);
         }
     }
 
     private void reserveItem(Long orderId, StockReservationItemRequest item) {
+        if (item.qty() < 1) {
+            throw new IllegalArgumentException("qty 는 1 이상이어야 한다: " + item.qty());
+        }
         if (!stockAllocationRepository.findByOrderItemId(item.orderItemId()).isEmpty()) {
             return;
         }
@@ -70,7 +77,7 @@ class StockApiImpl implements StockApi {
                 continue;
             }
             // 조건부 UPDATE(stock.md). 영향받은 행이 0이면 그 사이 경합이 있었다는 뜻이라 재고 부족으로 처리한다
-            if (stockLotRepository.decreaseAvailableQty(lot.getId(), attempt) == 0) {
+            if (decreaseAvailableQty(lot.getId(), attempt) == 0) {
                 throw new StockException(StockErrorCode.INSUFFICIENT_STOCK);
             }
             saveAllocation(item.orderItemId(), lot.getId(), attempt);
@@ -80,6 +87,15 @@ class StockApiImpl implements StockApi {
 
         if (remaining > 0) {
             throw new StockException(StockErrorCode.INSUFFICIENT_STOCK);
+        }
+    }
+
+    // 락 대기 타임아웃/교착은 도메인 밖으로 raw 타입을 새어나가게 두지 않고 재시도 가능한 오류로 감싼다
+    private int decreaseAvailableQty(Long stockLotId, int qty) {
+        try {
+            return stockLotRepository.decreaseAvailableQty(stockLotId, qty);
+        } catch (PessimisticLockingFailureException e) {
+            throw new StockException(StockErrorCode.RESERVATION_IN_PROGRESS, e);
         }
     }
 
@@ -102,13 +118,16 @@ class StockApiImpl implements StockApi {
      */
     @Override
     public void confirm(StockOrderItemsRequest request) {
+        if (request.orderItemIds() == null || request.orderItemIds().isEmpty()) {
+            return;
+        }
         List<StockAllocation> allocations = stockAllocationRepository.findByOrderItemIdInAndStatus(
                 request.orderItemIds(), AllocationStatus.RESERVED);
         for (StockAllocation allocation : allocations) {
             allocation.confirm();
-            int currentQty = getAvailableQty(allocation.getStockLotId());
+            StockLot lot = lockLot(allocation.getStockLotId());
             stockMovementRepository.save(
-                    StockMovement.confirm(allocation.getStockLotId(), allocation.getQty(), currentQty,
+                    StockMovement.confirm(lot.getId(), allocation.getQty(), lot.getAvailableQty(),
                             request.orderId()));
         }
     }
@@ -119,20 +138,31 @@ class StockApiImpl implements StockApi {
      */
     @Override
     public void release(StockOrderItemsRequest request) {
+        if (request.orderItemIds() == null || request.orderItemIds().isEmpty()) {
+            return;
+        }
         List<StockAllocation> allocations = stockAllocationRepository.findByOrderItemIdInAndStatus(
                 request.orderItemIds(), AllocationStatus.RESERVED);
         for (StockAllocation allocation : allocations) {
             allocation.release();
-            int beforeQty = getAvailableQty(allocation.getStockLotId());
-            stockLotRepository.increaseAvailableQty(allocation.getStockLotId(), allocation.getQty());
+            StockLot lot = lockLot(allocation.getStockLotId());
+            int beforeQty = lot.getAvailableQty();
+            lot.restore(allocation.getQty());
             stockMovementRepository.save(
-                    StockMovement.release(allocation.getStockLotId(), allocation.getQty(), beforeQty,
-                            request.orderId()));
+                    StockMovement.release(lot.getId(), allocation.getQty(), beforeQty, request.orderId()));
         }
     }
 
-    // 할당이 가리키는 로트는 fk_alloc_lot이 보장하므로 항상 존재한다
-    private int getAvailableQty(Long stockLotId) {
-        return stockLotRepository.findById(stockLotId).orElseThrow().getAvailableQty();
+    /*
+     * 할당이 가리키는 로트는 fk_alloc_lot이 보장하므로 항상 존재한다. 쓰기 락을 걸어 읽은 값이 그대로
+     * 유지된 채로 원장에 기록되게 한다 — 락 없이 읽고 별도로 UPDATE하면 그 사이 경합으로 원장의
+     * qtyBefore/qtyAfter가 실제 이력과 어긋날 수 있다.
+     */
+    private StockLot lockLot(Long stockLotId) {
+        try {
+            return stockLotRepository.findByIdForUpdate(stockLotId).orElseThrow();
+        } catch (PessimisticLockingFailureException e) {
+            throw new StockException(StockErrorCode.RESERVATION_IN_PROGRESS, e);
+        }
     }
 }

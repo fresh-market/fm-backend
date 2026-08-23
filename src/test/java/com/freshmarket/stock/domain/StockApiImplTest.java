@@ -3,7 +3,6 @@ package com.freshmarket.stock.domain;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -30,10 +29,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 
-// StockApiImpl의 reserve/confirm/release 성공·실패·멱등 케이스를 검증한다
+// StockApiImpl의 reserve/confirm/release 성공·실패·멱등·입력검증 케이스를 검증한다
 @ExtendWith(MockitoExtension.class)
 class StockApiImplTest {
 
@@ -143,6 +143,24 @@ class StockApiImplTest {
     }
 
     @Test
+    void 조건부_UPDATE가_교착으로_실패하면_처리중_오류로_감싼다() {
+        // given — 이 로트가 다른 트랜잭션과 락을 주고받다 교착으로 실패한 상황
+        StockLot lot = lotWithAvailableQty(77L, 31L, 20);
+        when(stockAllocationRepository.findByOrderItemId(501L)).thenReturn(List.of());
+        when(stockLotRepository.findByProductOptionIdAndStatusOrderByExpiryDateAsc(31L, LotStatus.AVAILABLE))
+                .thenReturn(List.of(lot));
+        when(stockLotRepository.decreaseAvailableQty(77L, 20))
+                .thenThrow(new CannotAcquireLockException("Deadlock found"));
+        StockReservationRequest request = new StockReservationRequest(9001L,
+                List.of(new StockReservationItemRequest(501L, 31L, 20)));
+
+        // when, then
+        assertThatThrownBy(() -> stockApiImpl.reserve(request))
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.RESERVATION_IN_PROGRESS);
+    }
+
+    @Test
     void 동시_예약이_먼저_커밋되면_처리중_오류를_던진다() {
         // given — 조건부 UPDATE는 성공했지만, 할당 저장 시점에 uk_alloc_orderitem_lot이 걸리는 경합
         StockLot lot = lotWithAvailableQty(77L, 31L, 20);
@@ -180,12 +198,31 @@ class StockApiImplTest {
     }
 
     @Test
+    void 수량이_0_이하면_예약_요청_자체가_잘못됐다고_본다() {
+        // when, then
+        assertThatThrownBy(() -> stockApiImpl.reserve(new StockReservationRequest(9001L,
+                List.of(new StockReservationItemRequest(501L, 31L, 0)))))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(stockAllocationRepository, never()).findByOrderItemId(any());
+    }
+
+    @Test
+    void 예약_항목이_없으면_아무것도_하지_않는다() {
+        // when
+        stockApiImpl.reserve(new StockReservationRequest(9001L, null));
+        stockApiImpl.reserve(new StockReservationRequest(9001L, List.of()));
+
+        // then
+        verify(stockAllocationRepository, never()).findByOrderItemId(any());
+    }
+
+    @Test
     void RESERVED_할당을_확정하고_이력을_남긴다() {
         // given
         StockAllocation allocation = reservedAllocation(1L, 501L, 77L, 20);
         when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L), AllocationStatus.RESERVED))
                 .thenReturn(List.of(allocation));
-        when(stockLotRepository.findById(77L)).thenReturn(Optional.of(lotWithAvailableQty(77L, 31L, 80)));
+        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lotWithAvailableQty(77L, 31L, 80)));
         StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L));
 
         // when
@@ -194,7 +231,6 @@ class StockApiImplTest {
         // then
         assertThat(allocation.getStatus()).isEqualTo(AllocationStatus.CONFIRMED);
         verify(stockMovementRepository).save(any());
-        verify(stockLotRepository, never()).increaseAvailableQty(any(), anyInt());
     }
 
     @Test
@@ -212,12 +248,23 @@ class StockApiImplTest {
     }
 
     @Test
+    void 확정_대상_id_목록이_비어있으면_조회조차_하지_않는다() {
+        // when
+        stockApiImpl.confirm(new StockOrderItemsRequest(9001L, null));
+        stockApiImpl.confirm(new StockOrderItemsRequest(9001L, List.of()));
+
+        // then
+        verify(stockAllocationRepository, never()).findByOrderItemIdInAndStatus(any(), any());
+    }
+
+    @Test
     void RESERVED_할당을_해제하고_가용_수량을_복원한다() {
         // given
         StockAllocation allocation = reservedAllocation(1L, 501L, 77L, 20);
+        StockLot lot = lotWithAvailableQty(77L, 31L, 80);
         when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L), AllocationStatus.RESERVED))
                 .thenReturn(List.of(allocation));
-        when(stockLotRepository.findById(77L)).thenReturn(Optional.of(lotWithAvailableQty(77L, 31L, 80)));
+        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
         StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L));
 
         // when
@@ -225,7 +272,7 @@ class StockApiImplTest {
 
         // then
         assertThat(allocation.getStatus()).isEqualTo(AllocationStatus.RELEASED);
-        verify(stockLotRepository).increaseAvailableQty(77L, 20);
+        assertThat(lot.getAvailableQty()).isEqualTo(100);
         verify(stockMovementRepository).save(any());
     }
 
@@ -240,8 +287,23 @@ class StockApiImplTest {
         stockApiImpl.release(request);
 
         // then
-        verify(stockLotRepository, never()).increaseAvailableQty(any(), anyInt());
+        verify(stockLotRepository, never()).findByIdForUpdate(any());
         verify(stockMovementRepository, never()).save(any());
+    }
+
+    @Test
+    void 해제_중_락_경합이_나면_처리중_오류로_감싼다() {
+        // given — findByIdForUpdate가 락 대기 타임아웃/교착으로 실패한 상황
+        StockAllocation allocation = reservedAllocation(1L, 501L, 77L, 20);
+        when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L), AllocationStatus.RESERVED))
+                .thenReturn(List.of(allocation));
+        when(stockLotRepository.findByIdForUpdate(77L)).thenThrow(new CannotAcquireLockException("Lock wait timeout"));
+        StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L));
+
+        // when, then
+        assertThatThrownBy(() -> stockApiImpl.release(request))
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.RESERVATION_IN_PROGRESS);
     }
 
     private StockLot lotWithAvailableQty(Long id, Long productOptionId, int availableQty) {
