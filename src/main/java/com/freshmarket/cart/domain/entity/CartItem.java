@@ -21,6 +21,10 @@ import org.hibernate.annotations.Check;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class CartItem extends BaseMutableTimeEntity {
 
+    // DTO의 @Max와 같은 값이다. @Valid는 단건 요청값만 본다 — increaseQty처럼 기존 값에 더한
+    // "결과"가 상한을 넘는 경우까지는 못 막으므로 여기서 한 번 더 막는다(두 번째 방어선).
+    private static final int MAX_QTY = 999;
+
     @Column(name = "cart_id", nullable = false)
     private Long cartId;
 
@@ -45,7 +49,13 @@ public class CartItem extends BaseMutableTimeEntity {
 
     public void increaseQty(int qty) {
         validateQty(qty);
-        this.qty = Math.addExact(this.qty, qty);
+        // 두 값 다 validateQty를 거쳐 MAX_QTY 이하이므로 Math.addExact 자체가 오버플로할 일은
+        // 없다 — 그래도 합계가 상한을 넘는지는 별도로 막는다(예: 900 + 900).
+        int newQty = Math.addExact(this.qty, qty);
+        if (newQty > MAX_QTY) {
+            throw new IllegalArgumentException("qty 합계는 " + MAX_QTY + " 이하이어야 한다: " + newQty);
+        }
+        this.qty = newQty;
     }
 
     public void changeQty(int qty) {
@@ -66,8 +76,8 @@ public class CartItem extends BaseMutableTimeEntity {
     }
 
     private static void validateQty(int qty) {
-        if (qty <= 0) {
-            throw new IllegalArgumentException("qty 는 1 이상이어야 한다: " + qty);
+        if (qty <= 0 || qty > MAX_QTY) {
+            throw new IllegalArgumentException("qty 는 1 이상 " + MAX_QTY + " 이하이어야 한다: " + qty);
         }
     }
 }
