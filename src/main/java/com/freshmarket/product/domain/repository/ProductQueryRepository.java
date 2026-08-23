@@ -4,10 +4,12 @@ import static com.freshmarket.product.domain.entity.QCategory.category;
 import static com.freshmarket.product.domain.entity.QProduct.product;
 import static com.freshmarket.product.domain.entity.QProductOption.productOption;
 
+import com.freshmarket.product.domain.dto.AdminProductSearchCondition;
 import com.freshmarket.product.domain.dto.ProductSearchCondition;
 import com.freshmarket.product.domain.dto.ProductSortType;
 import com.freshmarket.product.domain.dto.ProductWithMinPrice;
 import com.freshmarket.product.domain.dto.QProductWithMinPrice;
+import com.freshmarket.product.domain.entity.Product;
 import com.freshmarket.product.domain.entity.SaleStatus;
 import com.querydsl.core.types.OrderSpecifier;
 import com.querydsl.core.types.dsl.BooleanExpression;
@@ -16,6 +18,9 @@ import com.querydsl.jpa.impl.JPAQueryFactory;
 import java.time.LocalDateTime;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
 /*
@@ -68,6 +73,47 @@ public class ProductQueryRepository {
                 .orderBy(orderOf(condition))
                 .limit(condition.pageSize() + 1L)
                 .fetch();
+    }
+
+    /*
+     * 관리자 상품 목록. 회원용과 달리 옵션과 조인하지 않는다(최저가 집계가 필요 없다) —
+     * 판매안함/품절/삭제까지 전부 보여주고, 재고 합계는 이 이슈 범위 밖이라 넣지 않는다.
+     * 카테고리 이름은 여기서 조인하지 않고, 호출부가 categoryId를 모아 한 번에 배치 조회한다.
+     */
+    public Page<Product> searchForAdmin(AdminProductSearchCondition condition, Pageable pageable) {
+        List<Product> content = queryFactory
+                .selectFrom(product)
+                .where(
+                        deletedFilter(condition.includeDeleted()),
+                        categoryIdEq(condition.categoryId()),
+                        saleStatusEq(condition.saleStatus()),
+                        nameContains(condition.query()))
+                .orderBy(product.createdAt.desc(), product.id.desc())
+                .offset(pageable.getOffset())
+                .limit(pageable.getPageSize())
+                .fetch();
+
+        long total = queryFactory
+                .select(product.id.count())
+                .from(product)
+                .where(
+                        deletedFilter(condition.includeDeleted()),
+                        categoryIdEq(condition.categoryId()),
+                        saleStatusEq(condition.saleStatus()),
+                        nameContains(condition.query()))
+                .fetchOne();
+
+        return new PageImpl<>(content, pageable, total);
+    }
+
+    // includeDeleted가 아니면 삭제되지 않은 상품만 본다. true면 조건을 아예 안 걸어 전부 본다
+    private BooleanExpression deletedFilter(boolean includeDeleted) {
+        return includeDeleted ? null : product.deletedAt.isNull();
+    }
+
+    // 판매 상태 필터. null 이면 전체 상태를 본다
+    private BooleanExpression saleStatusEq(SaleStatus saleStatus) {
+        return saleStatus != null ? product.saleStatus.eq(saleStatus) : null;
     }
 
     // 카테고리 조건. null 이면 where 절에서 빠져 전체 카테고리를 본다
