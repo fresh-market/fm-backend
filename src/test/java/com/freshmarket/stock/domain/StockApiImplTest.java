@@ -1,0 +1,259 @@
+package com.freshmarket.stock.domain;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.freshmarket.stock.StockOrderItemsRequest;
+import com.freshmarket.stock.StockReservationItemRequest;
+import com.freshmarket.stock.StockReservationRequest;
+import com.freshmarket.stock.domain.entity.AllocationStatus;
+import com.freshmarket.stock.domain.entity.LotStatus;
+import com.freshmarket.stock.domain.entity.StockAllocation;
+import com.freshmarket.stock.domain.entity.StockLot;
+import com.freshmarket.stock.domain.exception.StockErrorCode;
+import com.freshmarket.stock.domain.exception.StockException;
+import com.freshmarket.stock.domain.repository.StockAllocationRepository;
+import com.freshmarket.stock.domain.repository.StockLotRepository;
+import com.freshmarket.stock.domain.repository.StockMovementRepository;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.util.ReflectionTestUtils;
+
+// StockApiImpl의 reserve/confirm/release 성공·실패·멱등 케이스를 검증한다
+@ExtendWith(MockitoExtension.class)
+class StockApiImplTest {
+
+    @Mock
+    private StockLotRepository stockLotRepository;
+
+    @Mock
+    private StockAllocationRepository stockAllocationRepository;
+
+    @Mock
+    private StockMovementRepository stockMovementRepository;
+
+    @InjectMocks
+    private StockApiImpl stockApiImpl;
+
+    @Test
+    void 재고가_충분하면_한_로트에서_예약한다() {
+        // given
+        StockLot lot = lotWithAvailableQty(77L, 31L, 100);
+        when(stockAllocationRepository.findByOrderItemId(501L)).thenReturn(List.of());
+        when(stockLotRepository.findByProductOptionIdAndStatusOrderByExpiryDateAsc(31L, LotStatus.AVAILABLE))
+                .thenReturn(List.of(lot));
+        when(stockLotRepository.decreaseAvailableQty(77L, 20)).thenReturn(1);
+        StockReservationRequest request = new StockReservationRequest(9001L,
+                List.of(new StockReservationItemRequest(501L, 31L, 20)));
+
+        // when
+        stockApiImpl.reserve(request);
+
+        // then
+        verify(stockLotRepository).decreaseAvailableQty(77L, 20);
+        verify(stockAllocationRepository).save(any());
+        verify(stockMovementRepository).save(any());
+    }
+
+    @Test
+    void 한_로트가_부족하면_다음_로트로_이어서_예약한다() {
+        // given — FEFO 순서(만료일 오름차순)로 넘어온 두 로트: 첫 로트가 모자라 둘째 로트에서 나머지를 채운다
+        StockLot lot1 = lotWithAvailableQty(77L, 31L, 10);
+        StockLot lot2 = lotWithAvailableQty(78L, 31L, 50);
+        when(stockAllocationRepository.findByOrderItemId(501L)).thenReturn(List.of());
+        when(stockLotRepository.findByProductOptionIdAndStatusOrderByExpiryDateAsc(31L, LotStatus.AVAILABLE))
+                .thenReturn(List.of(lot1, lot2));
+        when(stockLotRepository.decreaseAvailableQty(77L, 10)).thenReturn(1);
+        when(stockLotRepository.decreaseAvailableQty(78L, 10)).thenReturn(1);
+        StockReservationRequest request = new StockReservationRequest(9001L,
+                List.of(new StockReservationItemRequest(501L, 31L, 20)));
+
+        // when
+        stockApiImpl.reserve(request);
+
+        // then
+        verify(stockLotRepository).decreaseAvailableQty(77L, 10);
+        verify(stockLotRepository).decreaseAvailableQty(78L, 10);
+        verify(stockAllocationRepository, times(2)).save(any());
+        verify(stockMovementRepository, times(2)).save(any());
+    }
+
+    @Test
+    void 이미_예약된_주문상품이면_재시도로_보고_건너뛴다() {
+        // given — 같은 orderItemId로 이미 만들어진 할당이 있는 상황(재시도)
+        when(stockAllocationRepository.findByOrderItemId(501L)).thenReturn(List.of(mock(StockAllocation.class)));
+        StockReservationRequest request = new StockReservationRequest(9001L,
+                List.of(new StockReservationItemRequest(501L, 31L, 20)));
+
+        // when
+        stockApiImpl.reserve(request);
+
+        // then
+        verify(stockLotRepository, never()).findByProductOptionIdAndStatusOrderByExpiryDateAsc(any(), any());
+        verify(stockAllocationRepository, never()).save(any());
+    }
+
+    @Test
+    void 가용_로트를_다_써도_부족하면_재고부족_오류를_던진다() {
+        // given
+        StockLot lot = lotWithAvailableQty(77L, 31L, 5);
+        when(stockAllocationRepository.findByOrderItemId(501L)).thenReturn(List.of());
+        when(stockLotRepository.findByProductOptionIdAndStatusOrderByExpiryDateAsc(31L, LotStatus.AVAILABLE))
+                .thenReturn(List.of(lot));
+        when(stockLotRepository.decreaseAvailableQty(77L, 5)).thenReturn(1);
+        StockReservationRequest request = new StockReservationRequest(9001L,
+                List.of(new StockReservationItemRequest(501L, 31L, 20)));
+
+        // when, then
+        assertThatThrownBy(() -> stockApiImpl.reserve(request))
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.INSUFFICIENT_STOCK);
+    }
+
+    @Test
+    void 조건부_UPDATE가_경합으로_실패하면_재고부족으로_처리한다() {
+        // given — 읽을 땐 20개가 있었지만 UPDATE 시점엔 다른 요청이 먼저 가져가 영향받은 행이 0
+        StockLot lot = lotWithAvailableQty(77L, 31L, 20);
+        when(stockAllocationRepository.findByOrderItemId(501L)).thenReturn(List.of());
+        when(stockLotRepository.findByProductOptionIdAndStatusOrderByExpiryDateAsc(31L, LotStatus.AVAILABLE))
+                .thenReturn(List.of(lot));
+        when(stockLotRepository.decreaseAvailableQty(77L, 20)).thenReturn(0);
+        StockReservationRequest request = new StockReservationRequest(9001L,
+                List.of(new StockReservationItemRequest(501L, 31L, 20)));
+
+        // when, then
+        assertThatThrownBy(() -> stockApiImpl.reserve(request))
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.INSUFFICIENT_STOCK);
+        verify(stockAllocationRepository, never()).save(any());
+    }
+
+    @Test
+    void 동시_예약이_먼저_커밋되면_처리중_오류를_던진다() {
+        // given — 조건부 UPDATE는 성공했지만, 할당 저장 시점에 uk_alloc_orderitem_lot이 걸리는 경합
+        StockLot lot = lotWithAvailableQty(77L, 31L, 20);
+        when(stockAllocationRepository.findByOrderItemId(501L)).thenReturn(List.of());
+        when(stockLotRepository.findByProductOptionIdAndStatusOrderByExpiryDateAsc(31L, LotStatus.AVAILABLE))
+                .thenReturn(List.of(lot));
+        when(stockLotRepository.decreaseAvailableQty(77L, 20)).thenReturn(1);
+        when(stockAllocationRepository.save(any())).thenThrow(new DataIntegrityViolationException(
+                "Duplicate entry '501-77' for key 'stock_allocation.uk_alloc_orderitem_lot'"));
+        StockReservationRequest request = new StockReservationRequest(9001L,
+                List.of(new StockReservationItemRequest(501L, 31L, 20)));
+
+        // when, then
+        assertThatThrownBy(() -> stockApiImpl.reserve(request))
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.RESERVATION_IN_PROGRESS);
+    }
+
+    @Test
+    void 알_수_없는_제약_위반은_그대로_전파한다() {
+        // given — uk_alloc_orderitem_lot이 아닌 다른 위반은 감싸지 않고 그대로 던진다
+        StockLot lot = lotWithAvailableQty(77L, 31L, 20);
+        when(stockAllocationRepository.findByOrderItemId(501L)).thenReturn(List.of());
+        when(stockLotRepository.findByProductOptionIdAndStatusOrderByExpiryDateAsc(31L, LotStatus.AVAILABLE))
+                .thenReturn(List.of(lot));
+        when(stockLotRepository.decreaseAvailableQty(77L, 20)).thenReturn(1);
+        DataIntegrityViolationException unknownViolation = new DataIntegrityViolationException(
+                "Check constraint 'chk_alloc_qty' is violated");
+        when(stockAllocationRepository.save(any())).thenThrow(unknownViolation);
+        StockReservationRequest request = new StockReservationRequest(9001L,
+                List.of(new StockReservationItemRequest(501L, 31L, 20)));
+
+        // when, then
+        assertThatThrownBy(() -> stockApiImpl.reserve(request)).isSameAs(unknownViolation);
+    }
+
+    @Test
+    void RESERVED_할당을_확정하고_이력을_남긴다() {
+        // given
+        StockAllocation allocation = reservedAllocation(1L, 501L, 77L, 20);
+        when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L), AllocationStatus.RESERVED))
+                .thenReturn(List.of(allocation));
+        when(stockLotRepository.findById(77L)).thenReturn(Optional.of(lotWithAvailableQty(77L, 31L, 80)));
+        StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L));
+
+        // when
+        stockApiImpl.confirm(request);
+
+        // then
+        assertThat(allocation.getStatus()).isEqualTo(AllocationStatus.CONFIRMED);
+        verify(stockMovementRepository).save(any());
+        verify(stockLotRepository, never()).increaseAvailableQty(any(), anyInt());
+    }
+
+    @Test
+    void 확정_대상이_없으면_아무것도_하지_않는다() {
+        // given — 이미 CONFIRMED/RELEASED라 조회 대상에서 빠진 재시도 상황
+        when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L), AllocationStatus.RESERVED))
+                .thenReturn(List.of());
+        StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L));
+
+        // when
+        stockApiImpl.confirm(request);
+
+        // then
+        verify(stockMovementRepository, never()).save(any());
+    }
+
+    @Test
+    void RESERVED_할당을_해제하고_가용_수량을_복원한다() {
+        // given
+        StockAllocation allocation = reservedAllocation(1L, 501L, 77L, 20);
+        when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L), AllocationStatus.RESERVED))
+                .thenReturn(List.of(allocation));
+        when(stockLotRepository.findById(77L)).thenReturn(Optional.of(lotWithAvailableQty(77L, 31L, 80)));
+        StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L));
+
+        // when
+        stockApiImpl.release(request);
+
+        // then
+        assertThat(allocation.getStatus()).isEqualTo(AllocationStatus.RELEASED);
+        verify(stockLotRepository).increaseAvailableQty(77L, 20);
+        verify(stockMovementRepository).save(any());
+    }
+
+    @Test
+    void 해제_대상이_없으면_아무것도_하지_않는다() {
+        // given
+        when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L), AllocationStatus.RESERVED))
+                .thenReturn(List.of());
+        StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L));
+
+        // when
+        stockApiImpl.release(request);
+
+        // then
+        verify(stockLotRepository, never()).increaseAvailableQty(any(), anyInt());
+        verify(stockMovementRepository, never()).save(any());
+    }
+
+    private StockLot lotWithAvailableQty(Long id, Long productOptionId, int availableQty) {
+        StockLot lot = StockLot.register("req-x", productOptionId, LocalDate.of(2026, 8, 1),
+                LocalDate.of(2026, 8, 31), availableQty);
+        ReflectionTestUtils.setField(lot, "id", id);
+        return lot;
+    }
+
+    private StockAllocation reservedAllocation(Long id, Long orderItemId, Long stockLotId, int qty) {
+        StockAllocation allocation = StockAllocation.reserve(orderItemId, stockLotId, qty);
+        ReflectionTestUtils.setField(allocation, "id", id);
+        return allocation;
+    }
+}
