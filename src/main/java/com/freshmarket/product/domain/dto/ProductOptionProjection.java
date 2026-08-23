@@ -13,7 +13,8 @@ public record ProductOptionProjection(
         String productName,
         String optionName,
         int price,
-        boolean purchasable
+        boolean purchasable,
+        int saleAvailableDaysFromExpiry
 ) {
     @QueryProjection
     public ProductOptionProjection {

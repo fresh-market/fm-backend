@@ -25,7 +25,7 @@ class ExpiringSoonController {
             description = "로트의 소비기한 기준. 선착순 쿠폰 캠페인의 대상 선정과 같은 기준을 쓴다.")
     @GetMapping("/v1/products:expiringSoon")
     public ResponseEntity<ResponseEnvelope<List<ExpiringSoonResponse>>> getExpiringSoonProducts(
-            @RequestParam(required = false, defaultValue = "10") @Positive int withinDays,
+            @RequestParam(required = false, defaultValue = "3") @Positive int withinDays,
             @RequestParam(required = false) @Positive Long categoryId) {
         return ResponseEntity.ok(ResponseEnvelope.success(
                 expiringSoonService.getExpiringSoonProducts(withinDays, categoryId)));

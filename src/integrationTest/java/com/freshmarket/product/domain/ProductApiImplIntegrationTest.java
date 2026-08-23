@@ -77,6 +77,7 @@ class ProductApiImplIntegrationTest {
         assertThat(result.get().optionName()).isEqualTo("1kg");
         assertThat(result.get().price()).isEqualTo(12900);
         assertThat(result.get().purchasable()).isTrue();
+        assertThat(result.get().saleAvailableDaysFromExpiry()).isEqualTo(3);
     }
 
     @Test

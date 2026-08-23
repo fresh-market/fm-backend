@@ -56,7 +56,8 @@ class ProductApiImpl implements ProductApi {
                         productOption.name,
                         productOption.price,
                         product.deletedAt.isNull()
-                                .and(equalsAsCs(productOption.saleStatus, SaleStatus.ON_SALE))))
+                                .and(equalsAsCs(productOption.saleStatus, SaleStatus.ON_SALE)),
+                        product.saleAvailableDaysFromExpiry))
                 .from(productOption)
                 .join(product).on(product.id.eq(productOption.productId))
                 .where(productOption.id.in(productOptionIds))
@@ -65,7 +66,8 @@ class ProductApiImpl implements ProductApi {
         return rows.stream()
                 .map(row -> new ProductOptionInfo(
                         row.productId(), row.categoryId(), row.productOptionId(),
-                        row.productName(), row.optionName(), row.price(), row.purchasable()))
+                        row.productName(), row.optionName(), row.price(), row.purchasable(),
+                        row.saleAvailableDaysFromExpiry()))
                 .toList();
     }
 }

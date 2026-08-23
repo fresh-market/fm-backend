@@ -8,6 +8,7 @@ public record ProductOptionInfo(
         String productName,
         String optionName,
         int price,
-        boolean purchasable
+        boolean purchasable,
+        int saleAvailableDaysFromExpiry
 ) {
 }
