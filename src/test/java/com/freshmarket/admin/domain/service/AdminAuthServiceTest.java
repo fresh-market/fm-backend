@@ -205,6 +205,19 @@ class AdminAuthServiceTest {
     }
 
     @Test
+    void 존재하지_않는_관리자로_로그아웃하면_로그인_실패_예외가_발생한다() {
+        // given
+        when(adminRepository.findById(999L))
+                .thenReturn(Optional.empty());
+
+        // when, then
+        assertThatThrownBy(() -> adminAuthService.logout(999L, "ROLE_ADMIN"))
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.LOGIN_FAILED);
+    }
+
+    @Test
     void 로그아웃하면_리프레시토큰과_액세스토큰을_함께_무효화한다() {
         Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
         ReflectionTestUtils.setField(admin, "id", 1L);
