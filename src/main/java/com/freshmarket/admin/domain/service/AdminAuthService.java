@@ -9,7 +9,12 @@ import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
 import com.freshmarket.admin.domain.repository.AdminRepository;
-import com.freshmarket.common.auth.jwt.*;
+import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
+import com.freshmarket.common.auth.jwt.JwtTokenProvider;
+import com.freshmarket.common.auth.jwt.TokenType;
+import com.freshmarket.common.auth.opaque.OpaqueTokenGenerator;
+import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
+import com.freshmarket.common.auth.opaque.TokenHasher;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -31,7 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 5회 실패 시 30분 잠금은 이번 범위에서 뺐다.
  * (admin 테이블에 fail_count, locked_until 컬럼이 없다. auth.md "정하지 못한 것" 절에도 같은 이유로 보류돼 있다.)
  *
- * JWT 서명·Access Token 발급은 member/admin이 공유하는common.auth.jwt.JwtTokenProvider를 사용한다.
+ * JWT 서명·Access Token 발급은 member/admin이 공유하는 common.auth.jwt.JwtTokenProvider를 사용한다.
  * Refresh Token도 member와 같은 공통 RefreshTokenRepository(Redis)에 저장하며, 재발급 시 Rotation은 compareAndRotate()로 처리한다.
  */
 @Slf4j
@@ -45,10 +50,10 @@ public class AdminAuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final long refreshTokenValiditySeconds;
     private final AccessTokenValidAfterRepository accessTokenValidAfterRepository;
     private final AdminAuditLogRepository adminAuditLogRepository;
     private final Clock clock;
-    private final long refreshTokenValidityMs;
     private final String dummyPasswordHash;
 
     public AdminAuthService(
@@ -59,7 +64,7 @@ public class AdminAuthService {
             AccessTokenValidAfterRepository accessTokenValidAfterRepository,
             AdminAuditLogRepository adminAuditLogRepository,
             Clock clock,
-            @Value("${jwt.refresh-token-validity.admin}") long refreshTokenValidityMs) {
+            @Value("${admin.refresh-token-validity-seconds}") long refreshTokenValiditySeconds) {
         this.adminRepository = adminRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
@@ -67,7 +72,7 @@ public class AdminAuthService {
         this.accessTokenValidAfterRepository = accessTokenValidAfterRepository;
         this.adminAuditLogRepository = adminAuditLogRepository;
         this.clock = clock;
-        this.refreshTokenValidityMs = refreshTokenValidityMs;
+        this.refreshTokenValiditySeconds = refreshTokenValiditySeconds;
         // 같은 인코더로 미리 만들어 둬야 진짜 비밀번호 검증과 연산 비용(코스트 팩터)이 완전히 같다
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_SOURCE);
     }
@@ -108,7 +113,7 @@ public class AdminAuthService {
                 admin.getId(), TokenType.ADMIN, admin.getRole().toAuthority());
 
         String rawRefreshToken = OpaqueTokenGenerator.generate();
-        Duration refreshTtl = Duration.ofMillis(refreshTokenValidityMs);
+        Duration refreshTtl = Duration.ofSeconds(refreshTokenValiditySeconds);
         refreshTokenRepository.save(
                 rawRefreshToken,
                 admin.getId(),
@@ -133,7 +138,7 @@ public class AdminAuthService {
                 admin.getId(), maskLoginId(admin.getLoginId()));
 
         // 두 토큰 원문은 응답 본문이 아니라 컨트롤러가 만드는 HttpOnly 쿠키로만 나간다
-        return new AdminLoginResult(response, accessToken, rawRefreshToken, refreshTokenValidityMs / 1000);
+        return new AdminLoginResult(response, accessToken, rawRefreshToken, refreshTokenValiditySeconds);
     }
 
     public record ReissueResult(
@@ -152,7 +157,7 @@ public class AdminAuthService {
         Objects.requireNonNull(oldRefreshToken, "oldRefreshToken");
 
         String newRefreshToken = OpaqueTokenGenerator.generate();
-        Duration refreshTtl = Duration.ofMillis(refreshTokenValidityMs);
+        Duration refreshTtl = Duration.ofSeconds(refreshTokenValiditySeconds);
         LocalDateTime expiresAt = LocalDateTime.now(clock).plus(refreshTtl);
 
         RefreshTokenRepository.RotateOutcome outcome;
@@ -199,7 +204,7 @@ public class AdminAuthService {
                 newAccessToken,
                 jwtTokenProvider.getAccessTokenValidityMs() / 1000,
                 newRefreshToken,
-                refreshTokenValidityMs / 1000);
+                refreshTokenValiditySeconds);
     }
 
     private ReissueResult reissueViaDbFallback(
@@ -240,7 +245,7 @@ public class AdminAuthService {
                 newAccessToken,
                 jwtTokenProvider.getAccessTokenValidityMs() / 1000,
                 newRefreshToken,
-                refreshTokenValidityMs / 1000);
+                refreshTokenValiditySeconds);
     }
 
     /*

@@ -20,11 +20,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * 카카오 토큰 엔드포인트 호출로 이어진다 — 막아두지 않으면 한 클라이언트가 우리 스레드와 카카오
  * 앱 쿼터를 같이 태워서 전체 로그인이 막히는 서비스 장애로 번질 수 있다.
  *
- * (2026-08-22) 관리자 로그인 경로를 추가했다. 관리자는 회원과 달리 진짜 비밀번호(BCrypt)를 쓰므로
- * 브루트포스 대상이 그대로 된다 — 5회 실패 시 계정 잠금(SEC-6-01)은 admin 테이블에 컬럼이 없어
- * 범위 밖으로 남겨뒀지만(AdminAuthService 참고), IP 단위 시도 횟수 제한만큼은 이 필터로 바로 막을
- * 수 있어 같이 넣었다.
- *
  * 새 라이브러리(bucket4j 등) 없이 이미 있는 Redis로 IP당 고정 윈도우 카운터만 둔다. 숫자(분당
  * 10회)는 잠정값이라 팀 확인 필요.
  *
@@ -37,9 +32,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class AuthRateLimitFilter extends OncePerRequestFilter {
 
     private static final String KEY_PREFIX = "authRateLimit:";
-    private static final Set<String> LIMITED_PATHS = Set.of(
-            "/v1/auth/tokens", "/v1/auth/tokens:refresh",
-            "/v1/admin/auth/tokens", "/v1/admin/auth/tokens:refresh");
+    private static final Set<String> LIMITED_PATHS = Set.of("/v1/auth/tokens", "/v1/auth/tokens:refresh");
     private static final int LIMIT = 10;
     private static final Duration WINDOW = Duration.ofMinutes(1);
 

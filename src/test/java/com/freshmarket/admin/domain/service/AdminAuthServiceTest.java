@@ -17,11 +17,15 @@ import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
 import com.freshmarket.admin.domain.repository.AdminRepository;
-import com.freshmarket.common.auth.jwt.*;
 
 import java.time.*;
 import java.util.Optional;
 
+import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
+import com.freshmarket.common.auth.jwt.JwtTokenProvider;
+import com.freshmarket.common.auth.jwt.TokenType;
+import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
+import com.freshmarket.common.auth.opaque.TokenHasher;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -41,7 +45,7 @@ class AdminAuthServiceTest {
             "test-only-secret-key-must-be-at-least-32-bytes-long-for-hmac-sha256";
     private static final long ACCESS_TOKEN_VALIDITY_MS = 1_800_000L;
     private static final long MEMBER_REFRESH_TOKEN_VALIDITY_MS = 1_209_600_000L;
-    private static final long ADMIN_REFRESH_TOKEN_VALIDITY_MS = 86_400_000L;
+    private static final long ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS = 86_400L;
 
     private final AdminRepository adminRepository = mock(AdminRepository.class);
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -61,7 +65,7 @@ class AdminAuthServiceTest {
             accessTokenValidAfterRepository,
             adminAuditLogRepository,
             clock,
-            ADMIN_REFRESH_TOKEN_VALIDITY_MS
+            ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS
     );
 
     @Test
@@ -105,7 +109,7 @@ class AdminAuthServiceTest {
                 "ROLE_ADMIN",
                 TokenType.ADMIN,
                 false,
-                Duration.ofMillis(ADMIN_REFRESH_TOKEN_VALIDITY_MS));
+                Duration.ofSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
 
         // Redis active key 유실 시 로그아웃이 사용할 DB 백업도 함께 남긴다.
         assertThat(admin.getRefreshTokenHash()).isNotBlank();
@@ -296,7 +300,7 @@ class AdminAuthServiceTest {
                 eq("ROLE_ADMIN"),
                 eq(TokenType.ADMIN),
                 eq(false),
-                eq(Duration.ofMillis(ADMIN_REFRESH_TOKEN_VALIDITY_MS)));
+                eq(Duration.ofSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS)));
         verify(adminAuditLogRepository).save(any(AdminAuditLog.class));
     }
 
