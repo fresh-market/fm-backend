@@ -15,6 +15,8 @@ import com.freshmarket.cart.CartCheckoutItem;
 import com.freshmarket.common.auth.jwt.TokenHasher;
 import com.freshmarket.member.AddressInfo;
 import com.freshmarket.member.MemberApi;
+import com.freshmarket.order.domain.OrderNoGenerator;
+import com.freshmarket.order.domain.PendingOrderResult;
 import com.freshmarket.order.domain.dto.OrderCreateRequest;
 import com.freshmarket.order.domain.entity.Order;
 import com.freshmarket.order.domain.entity.OrderItem;

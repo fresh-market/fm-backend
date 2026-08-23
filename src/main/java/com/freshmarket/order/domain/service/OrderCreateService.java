@@ -2,6 +2,7 @@ package com.freshmarket.order.domain.service;
 
 import com.freshmarket.common.event.OrderPaymentApprovedEvent;
 import com.freshmarket.common.event.OrderPaymentRequestedEvent;
+import com.freshmarket.order.domain.PendingOrderResult;
 import com.freshmarket.order.domain.dto.OrderCreateRequest;
 import com.freshmarket.order.domain.dto.OrderCreateResponse;
 import com.freshmarket.order.domain.entity.Order;

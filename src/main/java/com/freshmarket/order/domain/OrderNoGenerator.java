@@ -1,4 +1,4 @@
-package com.freshmarket.order.domain.service;
+package com.freshmarket.order.domain;
 
 import java.util.UUID;
 import org.springframework.stereotype.Component;
