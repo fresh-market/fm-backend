@@ -23,7 +23,6 @@ import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -222,7 +221,8 @@ class StockApiImplTest {
         StockAllocation allocation = reservedAllocation(1L, 501L, 77L, 20);
         when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L), AllocationStatus.RESERVED))
                 .thenReturn(List.of(allocation));
-        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lotWithAvailableQty(77L, 31L, 80)));
+        when(stockLotRepository.findAllByIdForUpdate(List.of(77L)))
+                .thenReturn(List.of(lotWithAvailableQty(77L, 31L, 80)));
         StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L));
 
         // when
@@ -264,7 +264,7 @@ class StockApiImplTest {
         StockLot lot = lotWithAvailableQty(77L, 31L, 80);
         when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L), AllocationStatus.RESERVED))
                 .thenReturn(List.of(allocation));
-        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
+        when(stockLotRepository.findAllByIdForUpdate(List.of(77L))).thenReturn(List.of(lot));
         StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L));
 
         // when
@@ -287,23 +287,46 @@ class StockApiImplTest {
         stockApiImpl.release(request);
 
         // then
-        verify(stockLotRepository, never()).findByIdForUpdate(any());
+        verify(stockLotRepository, never()).findAllByIdForUpdate(any());
         verify(stockMovementRepository, never()).save(any());
     }
 
     @Test
     void 해제_중_락_경합이_나면_처리중_오류로_감싼다() {
-        // given — findByIdForUpdate가 락 대기 타임아웃/교착으로 실패한 상황
+        // given — findAllByIdForUpdate가 락 대기 타임아웃/교착으로 실패한 상황
         StockAllocation allocation = reservedAllocation(1L, 501L, 77L, 20);
         when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L), AllocationStatus.RESERVED))
                 .thenReturn(List.of(allocation));
-        when(stockLotRepository.findByIdForUpdate(77L)).thenThrow(new CannotAcquireLockException("Lock wait timeout"));
+        when(stockLotRepository.findAllByIdForUpdate(List.of(77L)))
+                .thenThrow(new CannotAcquireLockException("Lock wait timeout"));
         StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L));
 
         // when, then
         assertThatThrownBy(() -> stockApiImpl.release(request))
                 .isInstanceOf(StockException.class)
                 .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.RESERVATION_IN_PROGRESS);
+    }
+
+    @Test
+    void 여러_로트를_해제할_때_id_오름차순으로_한_번에_잠근다() {
+        // given — 할당이 가리키는 로트 id를 일부러 내림차순으로 준비해, 정렬해서 한 번에 잠그는지 확인한다.
+        // 순서를 안 맞추면 동시 호출끼리 서로 다른 순서로 로트를 잠가 교착이 날 수 있다
+        StockAllocation allocationA = reservedAllocation(1L, 501L, 90L, 5);
+        StockAllocation allocationB = reservedAllocation(2L, 502L, 30L, 5);
+        StockLot lot30 = lotWithAvailableQty(30L, 32L, 50);
+        StockLot lot90 = lotWithAvailableQty(90L, 31L, 50);
+        when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L, 502L), AllocationStatus.RESERVED))
+                .thenReturn(List.of(allocationA, allocationB));
+        when(stockLotRepository.findAllByIdForUpdate(List.of(30L, 90L))).thenReturn(List.of(lot30, lot90));
+        StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L, 502L));
+
+        // when
+        stockApiImpl.release(request);
+
+        // then — 한 번의 호출로, id 오름차순(30, 90)으로 조회했는지 확인
+        verify(stockLotRepository, times(1)).findAllByIdForUpdate(List.of(30L, 90L));
+        assertThat(allocationA.getStatus()).isEqualTo(AllocationStatus.RELEASED);
+        assertThat(allocationB.getStatus()).isEqualTo(AllocationStatus.RELEASED);
     }
 
     private StockLot lotWithAvailableQty(Long id, Long productOptionId, int availableQty) {

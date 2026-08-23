@@ -17,6 +17,9 @@ import com.freshmarket.stock.domain.repository.StockAllocationRepository;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Component;
@@ -123,9 +126,13 @@ class StockApiImpl implements StockApi {
         }
         List<StockAllocation> allocations = stockAllocationRepository.findByOrderItemIdInAndStatus(
                 request.orderItemIds(), AllocationStatus.RESERVED);
+        if (allocations.isEmpty()) {
+            return;
+        }
+        Map<Long, StockLot> lots = lockLots(allocations);
         for (StockAllocation allocation : allocations) {
             allocation.confirm();
-            StockLot lot = lockLot(allocation.getStockLotId());
+            StockLot lot = lots.get(allocation.getStockLotId());
             stockMovementRepository.save(
                     StockMovement.confirm(lot.getId(), allocation.getQty(), lot.getAvailableQty(),
                             request.orderId()));
@@ -143,9 +150,13 @@ class StockApiImpl implements StockApi {
         }
         List<StockAllocation> allocations = stockAllocationRepository.findByOrderItemIdInAndStatus(
                 request.orderItemIds(), AllocationStatus.RESERVED);
+        if (allocations.isEmpty()) {
+            return;
+        }
+        Map<Long, StockLot> lots = lockLots(allocations);
         for (StockAllocation allocation : allocations) {
             allocation.release();
-            StockLot lot = lockLot(allocation.getStockLotId());
+            StockLot lot = lots.get(allocation.getStockLotId());
             int beforeQty = lot.getAvailableQty();
             lot.restore(allocation.getQty());
             stockMovementRepository.save(
@@ -154,13 +165,20 @@ class StockApiImpl implements StockApi {
     }
 
     /*
-     * 할당이 가리키는 로트는 fk_alloc_lot이 보장하므로 항상 존재한다. 쓰기 락을 걸어 읽은 값이 그대로
-     * 유지된 채로 원장에 기록되게 한다 — 락 없이 읽고 별도로 UPDATE하면 그 사이 경합으로 원장의
-     * qtyBefore/qtyAfter가 실제 이력과 어긋날 수 있다.
+     * 대상 로트들에 한 번에 쓰기 락을 건다(id 오름차순, StockLotRepository.findAllByIdForUpdate 참고).
+     * 할당마다 따로 잠그면 호출 순서에 따라 로트를 잠그는 순서가 달라져 교착이 날 수 있고, 조회도
+     * N+1이 된다 — 한 번에 정렬해서 잠그면 두 문제가 함께 없어진다.
+     * 할당이 가리키는 로트는 fk_alloc_lot이 보장하므로 항상 존재한다.
      */
-    private StockLot lockLot(Long stockLotId) {
+    private Map<Long, StockLot> lockLots(List<StockAllocation> allocations) {
+        List<Long> stockLotIds = allocations.stream()
+                .map(StockAllocation::getStockLotId)
+                .distinct()
+                .sorted()
+                .toList();
         try {
-            return stockLotRepository.findByIdForUpdate(stockLotId).orElseThrow();
+            return stockLotRepository.findAllByIdForUpdate(stockLotIds).stream()
+                    .collect(Collectors.toMap(StockLot::getId, Function.identity()));
         } catch (PessimisticLockingFailureException e) {
             throw new StockException(StockErrorCode.RESERVATION_IN_PROGRESS, e);
         }
