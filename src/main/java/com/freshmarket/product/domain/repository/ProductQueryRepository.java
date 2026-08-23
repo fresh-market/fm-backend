@@ -11,6 +11,7 @@ import com.freshmarket.product.domain.dto.QProductWithMinPrice;
 import com.freshmarket.product.domain.entity.SaleStatus;
 import com.querydsl.core.types.OrderSpecifier;
 import com.querydsl.core.types.dsl.BooleanExpression;
+import com.querydsl.core.types.dsl.Expressions;
 import com.querydsl.core.types.dsl.NumberExpression;
 import com.querydsl.jpa.impl.JPAQueryFactory;
 import java.time.LocalDateTime;
@@ -33,6 +34,13 @@ public class ProductQueryRepository {
     // 품절 표시(soldOut)로 구분해야 하므로 여기서 걸러내지 않는다
     private static final NumberExpression<Integer> MIN_PRICE = productOption.price.min();
 
+    /*
+     * 상품 품절 여부. 조인된 옵션(OFF_SALE 제외) 중 sold_out=false(0)인 옵션이 하나라도 있으면
+     * MIN이 0이 되어 false다 — 구매 가능한 옵션이 남아있다는 뜻이다. 전부 품절(1)이어야 true.
+     */
+    private static final BooleanExpression ALL_OPTIONS_SOLD_OUT =
+            Expressions.numberTemplate(Integer.class, "min({0})", productOption.soldOut).eq(1);
+
     private final JPAQueryFactory queryFactory;
 
     /*
@@ -49,6 +57,7 @@ public class ProductQueryRepository {
                         category.name,
                         MIN_PRICE,
                         product.saleStatus,
+                        ALL_OPTIONS_SOLD_OUT,
                         product.createdAt))
                 .from(product)
                 .join(category).on(category.id.eq(product.categoryId))
