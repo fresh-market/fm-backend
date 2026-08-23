@@ -5,6 +5,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.freshmarket.product.domain.entity.ProductImage;
+import com.freshmarket.product.domain.entity.UploadStatus;
+import com.freshmarket.product.domain.repository.ProductImageRepository;
 import com.freshmarket.product.domain.dto.PageCursor;
 import com.freshmarket.product.domain.dto.PageTokens;
 import com.freshmarket.product.domain.entity.Product;
@@ -13,33 +16,26 @@ import com.freshmarket.product.domain.entity.StorageType;
 import com.freshmarket.product.domain.repository.CategoryRepository;
 import com.freshmarket.product.domain.repository.ProductOptionRepository;
 import com.freshmarket.product.domain.repository.ProductRepository;
+import com.freshmarket.product.domain.entity.SaleStatus;
+import org.springframework.test.util.ReflectionTestUtils;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import com.freshmarket.IntegrationTestSupport;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
-import org.testcontainers.containers.MySQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
 @Sql("/sql/product-test-supplier.sql")
-@Testcontainers
 // Gradle 로 돌릴 때는 integrationTest 태스크가 켜주고, IDE 에서 직접 실행할 때는 이 줄이 켠다.
-@ActiveProfiles("integrationTest")
-class ProductApiIntegrationTest {
+class ProductApiIntegrationTest extends IntegrationTestSupport {
 
-    @Container
-    @ServiceConnection
-    static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4");
 
     @Autowired
     private MockMvc mockMvc;
@@ -52,6 +48,9 @@ class ProductApiIntegrationTest {
 
     @Autowired
     private CategoryRepository categoryRepository;
+    
+    @Autowired
+    private ProductImageRepository productImageRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -106,7 +105,7 @@ class ProductApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].name").value("감귤"))
-                .andExpect(jsonPath("$.data.items[0].minPrice").value(12900));
+                .andExpect(jsonPath("$.data.items[0].minPriceKrw").value(12900));
     }
 
     @Test
@@ -132,12 +131,12 @@ class ProductApiIntegrationTest {
 
         mockMvc.perform(get("/v1/products")
                         .param("categoryId", String.valueOf(categoryId))
-                        .param("minPrice", "40000")
-                        .param("maxPrice", "60000"))
+                        .param("minPriceKrw", "40000")
+                        .param("maxPriceKrw", "60000"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].name").value("감귤"))
-                .andExpect(jsonPath("$.data.items[0].minPrice").value(48000));
+                .andExpect(jsonPath("$.data.items[0].minPriceKrw").value(48000));
     }
 
     @Test
@@ -147,8 +146,8 @@ class ProductApiIntegrationTest {
 
         mockMvc.perform(get("/v1/products")
                         .param("categoryId", String.valueOf(categoryId))
-                        .param("minPrice", "40000")
-                        .param("maxPrice", "60000"))
+                        .param("minPriceKrw", "40000")
+                        .param("maxPriceKrw", "60000"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(0)));
     }
@@ -248,8 +247,8 @@ class ProductApiIntegrationTest {
     @Test
     void 가격_범위가_뒤집히면_400을_응답한다() throws Exception {
         mockMvc.perform(get("/v1/products")
-                        .param("minPrice", "50000")
-                        .param("maxPrice", "10000"))
+                        .param("minPriceKrw", "50000")
+                        .param("maxPriceKrw", "10000"))
                 .andExpect(status().isBadRequest());
     }
 
@@ -262,5 +261,174 @@ class ProductApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return com.jayway.jsonpath.JsonPath.read(json, "$.data.nextPageToken");
+    }
+    
+    @Test
+    void 상품_상세를_조회한다() throws Exception {
+        // given
+        Long categoryId = fruitCategoryId();
+        Long productId = saveProductWithOptions(categoryId, "감귤", 12900, 32000);
+
+        // when, then
+        mockMvc.perform(get("/v1/products/" + productId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.productId").value(productId.intValue()))
+                .andExpect(jsonPath("$.data.name").value("감귤"))
+                .andExpect(jsonPath("$.data.category.name").value("과일"))
+                .andExpect(jsonPath("$.data.options", hasSize(2)))
+                .andExpect(jsonPath("$.data.review.count").value(0));
+    }
+
+    @Test
+    void 확정된_이미지만_상세_응답에_나온다() throws Exception {
+        // given
+        Long categoryId = fruitCategoryId();
+        Long productId = saveProductWithOptions(categoryId, "감귤", 12900);
+        ProductImage confirmed = ProductImage.register(productId, "products/ab/confirmed.jpg");
+        confirmed.confirm();
+        productImageRepository.save(confirmed);
+        productImageRepository.save(ProductImage.register(productId, "products/ab/pending.jpg"));
+
+        // when, then — PENDING 이미지는 안 나오고 CONFIRMED 하나만 나온다
+        mockMvc.perform(get("/v1/products/" + productId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.images", hasSize(1)));
+    }
+
+    @Test
+    void 존재하지_않는_상품을_조회하면_404를_응답한다() throws Exception {
+        mockMvc.perform(get("/v1/products/999999"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("PRODUCT-001"));
+    }
+
+    @Test
+    void 삭제된_상품을_조회하면_404를_응답한다() throws Exception {
+        // given
+        Long categoryId = fruitCategoryId();
+        Long productId = saveProductWithOptions(categoryId, "복숭아", 9900);
+        softDelete(productId);
+
+        // when, then
+        mockMvc.perform(get("/v1/products/" + productId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("PRODUCT-001"));
+    }
+
+    @Test
+    void 비로그인_상태에서도_상세_조회가_가능하다() throws Exception {
+        Long categoryId = fruitCategoryId();
+        Long productId = saveProductWithOptions(categoryId, "감귤", 12900);
+
+        mockMvc.perform(get("/v1/products/" + productId))
+                .andExpect(status().isOk());
+    }
+    
+    @Test
+    void 상품명_부분_일치로_검색한다() throws Exception {
+        // given
+        Long categoryId = fruitCategoryId();
+        saveProductWithOptions(categoryId, "제주 감귤", 12900);
+        saveProductWithOptions(categoryId, "복숭아", 9900);
+
+        // when, then — "감귤"로 검색하면 "제주 감귤"만 나온다
+        mockMvc.perform(get("/v1/products:search").param("query", "감귤"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(1)))
+                .andExpect(jsonPath("$.data.items[0].name").value("제주 감귤"));
+    }
+
+    @Test
+    void 검색은_목록과_같은_카테고리_필터를_받는다() throws Exception {
+        // given
+        Long fruitId = fruitCategoryId();
+        saveProductWithOptions(fruitId, "감귤", 12900);
+
+        // when, then
+        mockMvc.perform(get("/v1/products:search")
+                        .param("query", "감귤")
+                        .param("categoryId", String.valueOf(fruitId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(1)));
+    }
+
+    @Test
+    void 검색어_없이_요청하면_400을_응답한다() throws Exception {
+        mockMvc.perform(get("/v1/products:search"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void 검색어가_공백이면_400을_응답한다() throws Exception {
+        mockMvc.perform(get("/v1/products:search").param("query", "   "))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void 검색어가_100자를_넘으면_400을_응답한다() throws Exception {
+        String tooLong = "감".repeat(101);
+        mockMvc.perform(get("/v1/products:search").param("query", tooLong))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void 비로그인_상태에서도_검색이_가능하다() throws Exception {
+        mockMvc.perform(get("/v1/products:search").param("query", "감귤"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void 검색_결과가_없으면_빈_배열을_응답한다() throws Exception {
+        mockMvc.perform(get("/v1/products:search").param("query", "존재하지않는상품명"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(0)));
+    }
+    
+    @Test
+    void 검색어에_와일드카드_문자가_있어도_리터럴로_취급한다() throws Exception {
+        // given
+        Long categoryId = fruitCategoryId();
+        saveProductWithOptions(categoryId, "20% 할인 세트", 12900);
+        saveProductWithOptions(categoryId, "일반 상품", 9900);
+
+        // when, then — "%"가 LIKE 와일드카드로 해석되면 전체 상품이 다 걸린다.
+        // 이스케이프가 제대로 되면 "20% 할인 세트" 하나만 나와야 한다
+        mockMvc.perform(get("/v1/products:search")
+                        .param("categoryId", String.valueOf(categoryId))
+                        .param("query", "20%"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(1)))
+                .andExpect(jsonPath("$.data.items[0].name").value("20% 할인 세트"));
+    }
+    
+    @Test
+    void 검색_결과에서_커서로_다음_페이지를_넘겨도_검색어_조건이_유지된다() throws Exception {
+        // given
+        Long categoryId = fruitCategoryId();
+        saveProductWithOptions(categoryId, "감귤A", 1000);
+        saveProductWithOptions(categoryId, "감귤B", 2000);
+        saveProductWithOptions(categoryId, "복숭아", 3000);   // 검색어에 안 걸려야 한다
+
+        // when — 1페이지
+        String firstPageJson = mockMvc.perform(get("/v1/products:search")
+                        .param("query", "감귤")
+                        .param("categoryId", String.valueOf(categoryId))
+                        .param("pageSize", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(1)))
+                .andReturn().getResponse().getContentAsString();
+
+        String nextToken = com.jayway.jsonpath.JsonPath.read(firstPageJson, "$.data.nextPageToken");
+
+        // then — 2페이지도 query 를 다시 보내면, "복숭아"가 안 새어나오고 감귤만 남아야 한다
+        mockMvc.perform(get("/v1/products:search")
+                        .param("query", "감귤")
+                        .param("categoryId", String.valueOf(categoryId))
+                        .param("pageSize", "1")
+                        .param("pageToken", nextToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(1)))
+                .andExpect(jsonPath("$.data.items[0].name")
+                        .value(org.hamcrest.Matchers.containsString("감귤")));
     }
 }

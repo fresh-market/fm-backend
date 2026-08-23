@@ -16,7 +16,7 @@ GET /v1/products?categoryId={id}&sort=SALES_DESC&pageSize=20
 |---|---|---|
 | `categoryId` | 카테고리 | 전체 |
 | `sort` | `SALES_DESC`, `CREATED_DESC`, `PRICE_ASC`, `PRICE_DESC` | `SALES_DESC` |
-| `minPrice`, `maxPrice` | 정수 | 없음 |
+| `minPriceKrw`, `maxPriceKrw` | 정수(원) | 없음 |
 
 **삭제된 상품은 나오지 않는다.** 품절은 목록에서 빼지 않고 표시만 한다.
 
@@ -27,7 +27,7 @@ GET /v1/products?categoryId={id}&sort=SALES_DESC&pageSize=20
       "productId": 12,
       "name": "제주 감귤 1kg",
       "category": { "categoryId": 4, "name": "과일" },
-      "minPrice": 12900,
+      "minPriceKrw": 12900,
       "saleStatus": "ON_SALE",
       "soldOut": false,
       "mainImageUrl": "https://cdn.example.com/products/ab/3f9c.jpg"
@@ -80,7 +80,7 @@ GET /v1/products/{productId}
   "storageType": "COLD",
   "saleStatus": "ON_SALE",
   "options": [
-    { "productOptionId": 31, "name": "1kg", "price": 12900, "saleStatus": "ON_SALE", "soldOut": false }
+    { "productOptionId": 31, "name": "1kg", "priceKrw": 12900, "saleStatus": "ON_SALE", "soldOut": false }
   ],
   "images": [
     { "productImageId": 88, "url": "https://...", "isMain": true, "sortOrder": 0 }

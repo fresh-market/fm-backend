@@ -1,92 +1,56 @@
 package com.freshmarket.config;
 
-import com.freshmarket.common.auth.AuthRateLimitFilter;
-import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
-import com.freshmarket.common.auth.jwt.JwtAuthenticationFilter;
-import com.freshmarket.common.auth.jwt.JwtTokenProvider;
-import jakarta.servlet.DispatcherType;
+import com.freshmarket.common.auth.ApiSecurityDefaults;
 import java.util.List;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.security.autoconfigure.actuate.web.servlet.EndpointRequest;
 import org.springframework.context.annotation.Bean;
-import org.springframework.core.annotation.Order;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.HttpMethod;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-import org.springframework.web.servlet.HandlerExceptionResolver;
 
 /*
- * 무엇을 열고 무엇을 막을지만 정한다.
- * 오류 응답의 구조는 GlobalExceptionHandler 가 혼자 소유한다.
+ * 도메인에 속하지 않는 체인만 여기 둔다.
  *
- * 회원 인증(JWT + 카카오 OAuth2) 배선만 담당한다. 관리자(admin) 인증은 다른 팀원이 별도로
- * 진행 중이라 이 파일에는 admin 경로 매처를 넣지 않았다 — 나중에 admin 쪽 SecurityConfig
- * 변경과 합칠 때 함께 정리한다.
+ * 도메인 경로의 인가는 각 도메인이 자기 루트의 ~SecurityConfig 에서 소유한다.
+ * 공통 배선(csrf, cors, 세션, 인증 필터, 오류 위임)은 ApiSecurityDefaults 가 한 곳에 갖는다.
  *
- * docs/api/auth.md·member.md 기준 카카오 로그인은 프론트가 콜백(redirect_uri)을 직접 받아
- * code/state를 백엔드로 넘기는 구조라 Spring Security의 .oauth2Login(...) 필터 체인은 안 쓴다
- * (자세한 인과관계는 MemberLoginService 주석 참고) — 그래서 그 필터가 처리하던 리다이렉트/
- * 콜백 경로 매처가 없다. 대신 이 API가 쓰는 경로(/v1/auth/**, /v1/members/**)에 맞춰 매처를
- * 두고, 프론트가 다른 오리진에서 쿠키를 주고받을 수 있도록 CORS 빈을 둔다.
+ * 체인 순서
+ *   1                    액추에이터. 8081 자식 컨텍스트
+ *   10                   플랫폼 공개 경로(springdoc)
+ *   100                  도메인 체인들. 경로가 겹치지 않아 서로 같은 값이다
+ *   LOWEST_PRECEDENCE    나머지 전부. 어느 도메인도 주장하지 않은 경로를 막는다
  */
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
 
-    /*
-     * 인증 없이 여는 경로다.
-     * 여기 없는 것은 전부 인증을 요구한다. 기본값이 거부다 (SEC-1-04).
-     */
-
-	private static final String[] PUBLIC_PATHS = {
-	        "/v3/api-docs/**",
-	        "/swagger-ui/**",
-	        "/swagger-ui.html",
-	        "/webhook/kakao/unlink", // 카카오가 호출하는 웹훅 — 인증 쿠키 없이 들어옴
-	        "/v1/auth/kakao/authorize", // 로그인 시작 — 아직 토큰이 없는 시점
-	        "/v1/products",
-	        "/v1/products/*",
-	        "/v1/products:search",
-	        "/v1/categories",
-	        "/v1/products:expiringSoon",
-	};
+    private static final int PLATFORM_CHAIN_ORDER = 10;
 
     /*
-     * 필터 체인에서 난 예외를 MVC 예외 처리로 되돌린다.
-     * 이렇게 하지 않으면 인증 실패 응답만 여기서 따로 만들게 되어 오류 구조가 두 곳으로 갈린다.
+     * 도메인이 없는 플랫폼 경로다. springdoc 이 만드는 것뿐이라 여기 직접 둔다.
+     * 도메인 경로를 여기 적지 않는다. 그것이 이 파일이 모든 작업의 충돌 지점이 됐던 원인이다.
      */
-    private final HandlerExceptionResolver handlerExceptionResolver;
-    private final JwtTokenProvider jwtTokenProvider;
-    private final AccessTokenValidAfterRepository accessTokenValidAfterRepository;
-    private final StringRedisTemplate redisTemplate;
+    private static final String[] PLATFORM_PUBLIC_PATHS = {
+            "/v3/api-docs/**",
+            "/swagger-ui/**",
+            "/swagger-ui.html"
+    };
 
     @Value("${app.cors.allowed-origins}")
     private String allowedOrigins;
 
-    public SecurityConfig(
-            @Qualifier("handlerExceptionResolver") HandlerExceptionResolver handlerExceptionResolver,
-            JwtTokenProvider jwtTokenProvider,
-            AccessTokenValidAfterRepository accessTokenValidAfterRepository,
-            StringRedisTemplate redisTemplate) {
-        this.handlerExceptionResolver = handlerExceptionResolver;
-        this.jwtTokenProvider = jwtTokenProvider;
-        this.accessTokenValidAfterRepository = accessTokenValidAfterRepository;
-        this.redisTemplate = redisTemplate;
-    }
-
     /*
      * 액추에이터는 8081 로 분리되어 자식 컨텍스트로 뜬다.
-     * 아래 기본 체인이 그 포트에 적용되지 않으므로 별도 체인이 필요하다.
+     * 아래 체인들이 그 포트에 적용되지 않으므로 별도 체인이 필요하다.
      * 이것이 없으면 ALB 헬스체크와 Prometheus 스크랩이 401 을 받는다.
      *
      * 인증을 요구하지 않는 것은 경계가 네트워크에 있기 때문이다.
@@ -104,61 +68,36 @@ public class SecurityConfig {
         return http.build();
     }
 
+    // API 문서는 인증 없이 연다. 인증 필터가 필요 없어 공통 배선을 쓰지 않는다
     @Bean
-    @Order(2)
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    @Order(PLATFORM_CHAIN_ORDER)
+    public SecurityFilterChain platformFilterChain(HttpSecurity http) throws Exception {
         http
-                /*
-                 * 서버 세션을 두지 않으므로 CSRF 토큰을 보관할 곳이 없다.
-                 * 쿠키 기반 인증으로 바꾸면 이 두 줄을 함께 되돌려야 한다.
-                 *
-                 * (2026-08-18 16:20) accessToken이 다시 쿠키로 나가면서(AuthCookieFactory 참고)
-                 * 위 경고가 실제로 유효해졌다 — CSRF 노출 범위가 refreshToken 전용 좁은 경로가
-                 * 아니라 인증이 필요한 모든 API로 넓어졌다. SameSite=Strict가 대부분을 막아주지만
-                 * 완전한 방어는 아니다. CSRF 토큰(더블서밋 쿠키 등) 도입 여부는 아직 결정되지
-                 * 않았다 — 지금은 csrf(disable) 그대로 둔 채 넘어간다.
-                 */
+                .securityMatcher(PLATFORM_PUBLIC_PATHS)
                 .csrf(AbstractHttpConfigurer::disable)
-                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .formLogin(AbstractHttpConfigurer::disable)
-                .httpBasic(AbstractHttpConfigurer::disable)
-
-                .addFilterBefore(
-                        new JwtAuthenticationFilter(jwtTokenProvider, accessTokenValidAfterRepository),
-                        UsernamePasswordAuthenticationFilter.class)
-                // (2026-08-20, SEC-6-01/SEC-6-02) 로그인/재발급 레이트리밋. JwtAuthenticationFilter보다
-                // 먼저 돌 필요는 없지만(어차피 permitAll 경로라 인증 여부와 무관) 순서를 하나로
-                // 묶어두는 게 필터 체인을 훑을 때 더 읽기 쉽다.
-                .addFilterBefore(
-                        new AuthRateLimitFilter(redisTemplate),
-                        UsernamePasswordAuthenticationFilter.class)
-
-                .authorizeHttpRequests(auth -> auth
-                        .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
-                        .requestMatchers(PUBLIC_PATHS).permitAll()
-                        // 로그인/재발급은 토큰이 없거나 만료된 상태로 오는 요청이라 permitAll이어야 한다.
-                        .requestMatchers(HttpMethod.POST, "/v1/auth/tokens", "/v1/auth/tokens:refresh").permitAll()
-                        .requestMatchers("/v1/members/**").hasAuthority("TYPE_MEMBER")
-                        .requestMatchers(HttpMethod.DELETE, "/v1/auth/tokens").hasAuthority("TYPE_MEMBER")
-                        .anyRequest().authenticated())
-                /*
-                 * 넘긴 예외는 GlobalExceptionHandler 의 @ExceptionHandler 가 받는다.
-                 * handler 자리에 null 을 주는 것은 이 시점에 처리할 컨트롤러 메서드가 없기 때문이다.
-                 */
-                .exceptionHandling(handling -> handling
-                        .authenticationEntryPoint((request, response, exception) ->
-                                handlerExceptionResolver.resolveException(request, response, null, exception))
-                        .accessDeniedHandler((request, response, exception) ->
-                                handlerExceptionResolver.resolveException(request, response, null, exception)));
+                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
         return http.build();
     }
 
-    // docs/api/auth.md: accessToken/refreshToken 둘 다 HttpOnly 쿠키로 오간다 — 프론트가
-    // 백엔드와 다른 오리진(예: localhost:5173)이라 쿠키를 주고받으려면 allowCredentials(true)와
-    // 프론트 오리진을 명시한 allowedOrigins가 필요하다(둘 다 없으면 브라우저가 쿠키를 안 보낸다).
-    // allowedOrigins는 app.cors.allowed-origins(콤마 구분)에서 읽는다.
+    /*
+     * 어느 도메인도 주장하지 않은 경로를 받는다. 기본값이 거부다 (SEC-1-04).
+     * 도메인 체인을 새로 추가하는 것을 잊어도 열리지 않고 막히는 쪽으로 실패한다.
+     */
+    @Bean
+    @Order(Ordered.LOWEST_PRECEDENCE)
+    public SecurityFilterChain defaultFilterChain(HttpSecurity http, ApiSecurityDefaults defaults)
+            throws Exception {
+        return defaults.apply(http)
+                .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+                .build();
+    }
+
+    /*
+     * accessToken 과 refreshToken 이 HttpOnly 쿠키로 오간다.
+     * 프론트가 다른 오리진이라 쿠키를 주고받으려면 allowCredentials 와 명시적 오리진이 둘 다 필요하다.
+     */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();

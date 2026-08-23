@@ -18,6 +18,13 @@ import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
+/*
+ * QueryDSL 로 짜는 상품 동적 조회 전용 컴포넌트.
+ *
+ * Spring Data 의 <Repository 인터페이스명>+Impl 자동 결합 관례를 쓰지 않는다.
+ * 그 관례를 쓰면 Impl 접미사가 붙어 이 팀의 레포지토리 이름 규칙(DPB-4-10,
+ * ArchitectureTest 의 레포지토리_이름)과 충돌한다. 그냥 일반 빈으로 등록해 우회한다.
+ */
 @Repository
 @RequiredArgsConstructor
 public class ProductQueryRepository {
@@ -28,6 +35,11 @@ public class ProductQueryRepository {
 
     private final JPAQueryFactory queryFactory;
 
+    /*
+     * 조건에 맞는 상품을 옵션 최저가와 함께 조회한다. 목록 조회와 검색(:search)이 이 메서드를
+     * 공유한다 — query 조건이 있고 없고 차이뿐이라 서비스/리포지토리 로직은 동일하다.
+     * pageSize + 1 건을 가져와 다음 페이지 존재 여부를 판단할 수 있게 한다.
+     */
     public List<ProductWithMinPrice> search(ProductSearchCondition condition) {
         return queryFactory
                 .select(new QProductWithMinPrice(
@@ -46,8 +58,9 @@ public class ProductQueryRepository {
                 .where(
                         product.deletedAt.isNull(),
                         categoryIdEq(condition.categoryId()),
-                        priceGoe(condition.minPrice()),
-                        priceLoe(condition.maxPrice()),
+                        priceGoe(condition.minPriceKrw()),
+                        priceLoe(condition.maxPriceKrw()),
+                        nameContains(condition.query()),
                         createdAtCursorLt(condition))
                 .groupBy(product.id, product.name, category.id, category.name,
                         product.saleStatus, product.createdAt)
@@ -57,17 +70,40 @@ public class ProductQueryRepository {
                 .fetch();
     }
 
+    // 카테고리 조건. null 이면 where 절에서 빠져 전체 카테고리를 본다
     private BooleanExpression categoryIdEq(Long categoryId) {
         return categoryId != null ? product.categoryId.eq(categoryId) : null;
     }
 
-    // 옵션 가격 하한/상한. "이 가격대 옵션이 있는 상품을 찾는다"는 의도라 옵션 단위로 건다
-    private BooleanExpression priceGoe(Integer minPrice) {
-        return minPrice != null ? productOption.price.goe(minPrice) : null;
+    /*
+     * 가격 하한. 옵션 단위로 거른다 — "이 가격대 옵션이 있는 상품"을 찾는 필터다.
+     * where 에 두므로, 조건에 안 맞는 옵션은 이 상품의 그룹에서 제외된 채 최저가가 계산된다.
+     * 즉 응답의 minPrice 는 "조건을 만족하는 옵션들 중 최저가"이며, 상품의 절대 최저가와
+     * 다를 수 있다. (예: 4만원 이상 필터 시, 1kg=12900원 옵션이 있어도 상품 자체는 노출되고
+     * minPrice 는 조건을 만족하는 옵션 중 최저값으로 계산된다)
+     */
+    private BooleanExpression priceGoe(Integer minPriceKrw) {
+        return minPriceKrw != null ? productOption.price.goe(minPriceKrw) : null;
     }
 
-    private BooleanExpression priceLoe(Integer maxPrice) {
-        return maxPrice != null ? productOption.price.loe(maxPrice) : null;
+    // 가격 상한. 이유는 위와 같다
+    private BooleanExpression priceLoe(Integer maxPriceKrw) {
+        return maxPriceKrw != null ? productOption.price.loe(maxPriceKrw) : null;
+    }
+
+    /*
+     * 상품명 부분 일치 검색 (:search 전용). QueryDSL 이 파라미터 바인딩으로 처리하므로
+     * 검색어를 문자열로 직접 이어붙이지 않는다 (SEC-2-01).
+     * LIKE 와일드카드(%, _)를 사용자가 그대로 입력하면 의도치 않은 매칭이 되므로 이스케이프한다.
+     */
+    private BooleanExpression nameContains(String query) {
+        if (query == null) {
+            return null;
+        }
+        String escaped = query.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
+        return product.name.like("%" + escaped + "%", '\\');
     }
 
     /*
@@ -108,6 +144,12 @@ public class ProductQueryRepository {
         return sort == ProductSortType.PRICE_ASC || sort == ProductSortType.PRICE_DESC;
     }
 
+    /*
+     * 정렬 기준. id 내림차순을 항상 마지막에 붙인다.
+     * 정렬 값이 같은 행들의 순서가 실행마다 흔들리면 커서 페이징에서 행이 새거나 중복된다.
+     *
+     * SALES_DESC 는 daily_sales 가 필요해 statistics 도메인 도입 전까지 CREATED_DESC 로 처리한다.
+     */
     private OrderSpecifier<?>[] orderOf(ProductSearchCondition condition) {
         return switch (condition.sort()) {
             case PRICE_ASC -> new OrderSpecifier<?>[]{MIN_PRICE.asc(), product.id.desc()};

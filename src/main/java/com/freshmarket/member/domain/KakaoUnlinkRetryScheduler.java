@@ -22,6 +22,10 @@ public class KakaoUnlinkRetryScheduler {
 
     private final KakaoUnlinkRetryService kakaoUnlinkRetryService;
 
+    /** Todo: 인스턴스 여러 개 뜨면 이 스케줄러가 중복 실행될 수 있다
+     *  지금은 단일 인스턴스라 문제 없지만,
+     *  배치 전용 인프라(단일 인스턴스 강제 또는 DB 조건부 선점/분산실행 제어)가 갖춰지면 그때 확정한다
+     */
     @Scheduled(fixedDelay = FIXED_DELAY_MS)
     public void retryPendingUnlinks() {
         kakaoUnlinkRetryService.retryAllPending();
