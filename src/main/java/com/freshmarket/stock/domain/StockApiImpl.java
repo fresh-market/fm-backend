@@ -19,11 +19,11 @@ import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.util.List;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
-// StockApi 구현체. package-private로 감춰 다른 도메인이 이 클래스를 직접 참조하지 못하게 한다
+// StockApi 구현체. package-private로 감춰 다른 도메인이 이 클래스를 직접 참조하지 못하게 한다.
+// ApiImpl에는 트랜잭션을 걸지 않는다(DPB-3-04, DPB-7-01) — 호출하는 도메인(주문/결제)이 자신의
+// 트랜잭션 안에서 reserve/confirm/release를 호출해야, 이 메서드 전체가 그 트랜잭션의 일부로 묶인다
 @Component
-@Transactional(readOnly = true)
 class StockApiImpl implements StockApi {
 
     private final StockLotRepository stockLotRepository;
@@ -38,13 +38,13 @@ class StockApiImpl implements StockApi {
     }
 
     /*
-     * 주문상품마다 FEFO로 로트를 배분해 예약한다. 한 아이템이라도 끝까지 못 채우면 예외를 던져
-     * 트랜잭션 전체가 롤백된다(요청 안의 다른 아이템이 이미 예약한 것까지 함께 되돌아간다).
-     * 재시도는 orderItemId 기준으로 먼저 조회해 걸러낸다 — reserve()는 항상 이 메서드 전체가
-     * 한 트랜잭션이라, 커밋된 적 없는 부분 예약이 남아있을 수 없다.
+     * 주문상품마다 FEFO로 로트를 배분해 예약한다. 한 아이템이라도 끝까지 못 채우면 예외를 던진다 —
+     * 호출부의 트랜잭션 안에서 실행되므로, 이 예외가 그 트랜잭션을 롤백시켜야 요청 안의 다른
+     * 아이템이 이미 예약한 것까지 함께 되돌아간다(전체 성공 또는 전체 실패).
+     * 재시도는 orderItemId 기준으로 먼저 조회해 걸러낸다 — 커밋된 적 없는 부분 예약은
+     * 호출부 트랜잭션이 롤백되며 함께 사라지므로 남아있을 수 없다.
      */
     @Override
-    @Transactional
     public void reserve(StockReservationRequest request) {
         for (StockReservationItemRequest item : request.items()) {
             reserveItem(request.orderId(), item);
@@ -101,7 +101,6 @@ class StockApiImpl implements StockApi {
      * 대상에서 자연히 빠져 재시도해도 다시 처리되지 않는다.
      */
     @Override
-    @Transactional
     public void confirm(StockOrderItemsRequest request) {
         List<StockAllocation> allocations = stockAllocationRepository.findByOrderItemIdInAndStatus(
                 request.orderItemIds(), AllocationStatus.RESERVED);
@@ -119,7 +118,6 @@ class StockApiImpl implements StockApi {
      * 잘못 해제될 수 없다.
      */
     @Override
-    @Transactional
     public void release(StockOrderItemsRequest request) {
         List<StockAllocation> allocations = stockAllocationRepository.findByOrderItemIdInAndStatus(
                 request.orderItemIds(), AllocationStatus.RESERVED);
