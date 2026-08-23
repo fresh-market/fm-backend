@@ -1,9 +1,14 @@
 package com.freshmarket.product.domain.service;
 
+import com.freshmarket.common.response.PageResponse;
 import com.freshmarket.product.domain.dto.AdminProductCreateRequest;
+import com.freshmarket.product.domain.dto.AdminProductListItem;
 import com.freshmarket.product.domain.dto.AdminProductOptionCreateRequest;
 import com.freshmarket.product.domain.dto.AdminProductOptionResponse;
 import com.freshmarket.product.domain.dto.AdminProductResponse;
+import com.freshmarket.product.domain.dto.AdminProductSearchCondition;
+import com.freshmarket.product.domain.dto.CategorySummary;
+import com.freshmarket.product.domain.entity.Category;
 import com.freshmarket.product.domain.entity.Product;
 import com.freshmarket.product.domain.entity.ProductOption;
 import com.freshmarket.product.domain.entity.StorageType;
@@ -11,17 +16,23 @@ import com.freshmarket.product.domain.exception.ProductErrorCode;
 import com.freshmarket.product.domain.exception.ProductException;
 import com.freshmarket.product.domain.repository.CategoryRepository;
 import com.freshmarket.product.domain.repository.ProductOptionRepository;
+import com.freshmarket.product.domain.repository.ProductQueryRepository;
 import com.freshmarket.product.domain.repository.ProductRepository;
 import java.security.SecureRandom;
 import java.time.Year;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-// 관리자 화면에서 상품과 옵션을 등록하는 기능을 담당한다
+// 관리자 화면에서 상품과 옵션을 등록·조회하는 기능을 담당한다
 @Service
 @Transactional(readOnly = true)
 public class AdminProductService {
@@ -33,13 +44,52 @@ public class AdminProductService {
     private final ProductRepository productRepository;
     private final ProductOptionRepository productOptionRepository;
     private final CategoryRepository categoryRepository;
+    private final ProductQueryRepository productQueryRepository;
 
     public AdminProductService(ProductRepository productRepository,
             ProductOptionRepository productOptionRepository,
-            CategoryRepository categoryRepository) {
+            CategoryRepository categoryRepository,
+            ProductQueryRepository productQueryRepository) {
         this.productRepository = productRepository;
         this.productOptionRepository = productOptionRepository;
         this.categoryRepository = categoryRepository;
+        this.productQueryRepository = productQueryRepository;
+    }
+
+    /*
+     * 조건에 맞는 상품 목록을 페이징 조회한다. 판매안함/품절/삭제까지 전부 포함한다
+     * (includeDeleted로 삭제 상품 포함 여부만 가른다). 재고 합계는 이 이슈 범위 밖이라 넣지 않는다.
+     * 카테고리 이름은 페이지 안 상품들의 categoryId를 모아 한 번에 배치 조회한다(N+1 방지).
+     */
+    public PageResponse<AdminProductListItem> findAll(AdminProductSearchCondition condition) {
+        Pageable pageable = PageRequest.of(condition.page(), condition.size());
+        Page<Product> page = productQueryRepository.searchForAdmin(condition, pageable);
+        Map<Long, String> categoryNames = categoryNamesOf(page.getContent());
+        return PageResponse.from(page.map(product -> toListItem(product, categoryNames)));
+    }
+
+    // 상품 단건을 조회한다. 회원용 상세와 달리 삭제된 상품도 그대로 보여준다 — id 자체가 없을 때만 404
+    public AdminProductResponse findById(Long productId) {
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ProductException(ProductErrorCode.PRODUCT_NOT_FOUND));
+        return responseOf(product);
+    }
+
+    private Map<Long, String> categoryNamesOf(List<Product> products) {
+        if (products.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> categoryIds = products.stream().map(Product::getCategoryId).distinct().toList();
+        return categoryRepository.findAllById(categoryIds).stream()
+                .collect(Collectors.toMap(Category::getId, Category::getName));
+    }
+
+    private static AdminProductListItem toListItem(Product product, Map<Long, String> categoryNames) {
+        CategorySummary category = new CategorySummary(
+                product.getCategoryId(), categoryNames.get(product.getCategoryId()));
+        return new AdminProductListItem(
+                product.getId(), product.getProductCode(), product.getName(), category,
+                product.getSaleStatus(), product.isDeleted());
     }
 
     /*
