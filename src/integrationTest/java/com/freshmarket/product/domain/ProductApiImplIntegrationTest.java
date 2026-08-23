@@ -13,27 +13,20 @@ import com.freshmarket.product.domain.repository.ProductOptionRepository;
 import com.freshmarket.product.domain.repository.ProductRepository;
 import java.util.List;
 import java.util.Optional;
+import com.freshmarket.IntegrationTestSupport;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
-import org.testcontainers.containers.MySQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 // ProductApi 가 다른 도메인에 정확한 join 결과를 돌려주는지 실제 DB 로 검증한다
 @SpringBootTest
 @Transactional
 @Sql("/sql/product-test-supplier.sql")
-@Testcontainers
-class ProductApiImplIntegrationTest {
+class ProductApiImplIntegrationTest extends IntegrationTestSupport {
 
-    @Container
-    @ServiceConnection
-    static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4");
 
     @Autowired
     private ProductApi productApi;
