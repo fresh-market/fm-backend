@@ -110,7 +110,7 @@ class OrderCreateServiceTest {
     }
 
     private OrderCreateRequest request() {
-        return new OrderCreateRequest("req-1", List.of(1L, 2L), 10L, "문 앞에 놔주세요");
+        return new OrderCreateRequest("req-1", List.of(1L, 2L), null, 10L, "문 앞에 놔주세요");
     }
 
     private Order order() {

@@ -18,6 +18,7 @@ import com.freshmarket.member.MemberApi;
 import com.freshmarket.order.domain.OrderNoGenerator;
 import com.freshmarket.order.domain.PendingOrderResult;
 import com.freshmarket.order.domain.dto.OrderCreateRequest;
+import com.freshmarket.order.domain.dto.OrderCreateItemRequest;
 import com.freshmarket.order.domain.entity.Order;
 import com.freshmarket.order.domain.entity.OrderItem;
 import com.freshmarket.order.domain.entity.OrderPlacement;
@@ -28,6 +29,8 @@ import com.freshmarket.order.domain.repository.OrderItemRepository;
 import com.freshmarket.order.domain.repository.OrderRepository;
 import com.freshmarket.stock.StockApi;
 import com.freshmarket.stock.StockReservationRequest;
+import com.freshmarket.product.ProductApi;
+import com.freshmarket.product.ProductOptionInfo;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -64,6 +67,9 @@ class OrderPendingCreationServiceTest {
     private StockApi stockApi;
 
     @Mock
+    private ProductApi productApi;
+
+    @Mock
     private OrderNoGenerator orderNoGenerator;
 
     private OrderPendingCreationService sut;
@@ -72,7 +78,7 @@ class OrderPendingCreationServiceTest {
     void setUp() {
         Clock clock = Clock.fixed(Instant.parse("2026-08-21T03:00:00Z"), ZoneId.of("Asia/Seoul"));
         sut = new OrderPendingCreationService(
-                orderRepository, orderItemRepository, cartApi, memberApi, stockApi, orderNoGenerator, clock);
+                orderRepository, orderItemRepository, cartApi, memberApi, stockApi, productApi, orderNoGenerator, clock);
     }
 
     @Test
@@ -156,6 +162,38 @@ class OrderPendingCreationServiceTest {
         verify(cartApi, never()).removeCheckedOutItems(any(), any());
     }
 
+    @Test
+    void 바로구매면_상품정보로_주문스냅샷을_만들고_장바구니는_건드리지_않는다() {
+        OrderCreateRequest request = directRequest();
+        when(orderRepository.findByRequestId("direct-1")).thenReturn(Optional.empty());
+        when(memberApi.findAddress(10L, MEMBER_ID)).thenReturn(Optional.of(address()));
+        when(productApi.findOptionInfos(List.of(20L))).thenReturn(List.of(
+                new ProductOptionInfo(20L, "감귤 1kg", "1kg", 12_900, true)));
+        when(orderNoGenerator.generate()).thenReturn("TEMP-XYZ");
+        stubSave();
+
+        PendingOrderResult result = sut.createPendingOrder(MEMBER_ID, request);
+
+        assertThat(result.response().totalAmount()).isEqualTo(28_800);
+        verify(cartApi, never()).getCheckoutItems(any(), any());
+        verify(cartApi, never()).removeCheckedOutItems(any(), any());
+        verify(stockApi).reserve(any());
+    }
+
+    @Test
+    void 장바구니와_바로구매를_함께_보내면_거절한다() {
+        OrderCreateRequest request = new OrderCreateRequest("mixed-1", List.of(1L),
+                List.of(new OrderCreateItemRequest(20L, 1)), 10L, null);
+
+        assertThatThrownBy(() -> sut.createPendingOrder(MEMBER_ID, request))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.ORDER_ITEMS_MIXED);
+
+        verify(cartApi, never()).getCheckoutItems(any(), any());
+        verify(productApi, never()).findOptionInfos(any());
+    }
+
     private void stubSave() {
         when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
             Order order = invocation.getArgument(0);
@@ -173,7 +211,12 @@ class OrderPendingCreationServiceTest {
     }
 
     private OrderCreateRequest request() {
-        return new OrderCreateRequest("req-1", List.of(1L, 2L), 10L, "문 앞에 놔주세요");
+        return new OrderCreateRequest("req-1", List.of(1L, 2L), null, 10L, "문 앞에 놔주세요");
+    }
+
+    private OrderCreateRequest directRequest() {
+        return new OrderCreateRequest("direct-1", null,
+                List.of(new OrderCreateItemRequest(20L, 2)), 10L, "문 앞에 놔주세요");
     }
 
     private AddressInfo address() {
@@ -196,12 +239,13 @@ class OrderPendingCreationServiceTest {
 
     // OrderPendingCreationService.computeRequestHash와 같은 규칙으로 기대 해시를 계산한다.
     private String requestHash(Long memberId, OrderCreateRequest request) {
-        String sortedItemIds = request.cartItemIds().stream()
-                .distinct()
-                .sorted()
-                .map(String::valueOf)
+        String checkoutKey = request.cartItemIds() != null && !request.cartItemIds().isEmpty()
+                ? "cart:" + request.cartItemIds().stream().distinct().sorted()
+                .map(String::valueOf).collect(Collectors.joining(","))
+                : "direct:" + request.items().stream()
+                .map(item -> item.productOptionId() + ":" + item.qty()).sorted()
                 .collect(Collectors.joining(","));
-        String canonical = memberId + "|" + sortedItemIds + "|" + request.addressId() + "|"
+        String canonical = memberId + "|" + checkoutKey + "|" + request.addressId() + "|"
                 + (request.shipMessage() == null ? "" : request.shipMessage());
         return TokenHasher.sha256(canonical);
     }

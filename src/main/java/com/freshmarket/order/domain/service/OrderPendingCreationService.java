@@ -2,6 +2,7 @@ package com.freshmarket.order.domain.service;
 
 import com.freshmarket.cart.CartApi;
 import com.freshmarket.cart.CartCheckoutInfo;
+import com.freshmarket.cart.CartCheckoutItem;
 import com.freshmarket.common.auth.jwt.TokenHasher;
 import com.freshmarket.member.AddressInfo;
 import com.freshmarket.member.MemberApi;
@@ -10,6 +11,7 @@ import com.freshmarket.order.domain.OrderPriceCalculator;
 import com.freshmarket.order.domain.PendingOrderResult;
 import com.freshmarket.order.domain.dto.OrderCreateRequest;
 import com.freshmarket.order.domain.dto.OrderCreateResponse;
+import com.freshmarket.order.domain.dto.OrderCreateItemRequest;
 import com.freshmarket.order.domain.entity.Order;
 import com.freshmarket.order.domain.entity.OrderItem;
 import com.freshmarket.order.domain.entity.OrderItemPlacement;
@@ -21,9 +23,13 @@ import com.freshmarket.order.domain.repository.OrderRepository;
 import com.freshmarket.stock.StockApi;
 import com.freshmarket.stock.StockReservationItemRequest;
 import com.freshmarket.stock.StockReservationRequest;
+import com.freshmarket.product.ProductApi;
+import com.freshmarket.product.ProductOptionInfo;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,19 +54,13 @@ class OrderPendingCreationService {
     private final CartApi cartApi;
     private final MemberApi memberApi;
     private final StockApi stockApi;
+    private final ProductApi productApi;
     private final OrderNoGenerator orderNoGenerator;
     private final Clock clock;
 
-    /*
-     * CartApi.getCheckoutItems가 이미 락 아래에서 최신 가격/구매가능여부를 재검증한 스냅샷을
-     * 주므로, ProductApi.findOptionInfos를 여기서 다시 부르지 않는다. (주문 인수인계 문서는
-     * order가 직접 ProductApi를 부르는 흐름을 권장하는데, 그 문서가 쓰였을 때는 cart의 checkout
-     * 계약이 지금처럼 구체화되기 전이었을 가능성이 커 보인다 — cart의 getCheckoutItems 쪽 검증과
-     * 사실상 중복이라 여기서는 생략했다. 상품/옵션이 cart 조회 시점과 order 시점 사이에 바뀌는
-     * 창은 같은 트랜잭션 흐름 안 수 ms뿐이다.)
-     */
     @Transactional
     PendingOrderResult createPendingOrder(Long memberId, OrderCreateRequest request) {
+        validateCheckoutMode(request);
         String requestHash = computeRequestHash(memberId, request);
 
         Order existing = orderRepository.findByRequestId(request.requestId()).orElse(null);
@@ -75,7 +75,7 @@ class OrderPendingCreationService {
         AddressInfo address = memberApi.findAddress(request.addressId(), memberId)
                 .orElseThrow(() -> new OrderException(OrderErrorCode.ADDRESS_NOT_FOUND));
 
-        CartCheckoutInfo checkout = cartApi.getCheckoutItems(memberId, request.cartItemIds());
+        Checkout checkout = createCheckout(memberId, request);
 
         List<OrderPriceCalculator.PriceItem> priceItems = checkout.items().stream()
                 .map(item -> new OrderPriceCalculator.PriceItem(item.unitPrice(), item.qty()))
@@ -131,7 +131,9 @@ class OrderPendingCreationService {
 
         // 재고 예약이 끝난 뒤에만 장바구니에서 제거한다 — 재고가 모자라 위에서 롤백되면 장바구니는
         // 그대로 남아 있어야 한다.
-        cartApi.removeCheckedOutItems(memberId, checkout.items());
+        if (checkout.isCartOrder()) {
+            cartApi.removeCheckedOutItems(memberId, checkout.cartItems());
+        }
 
         // 명령성 상태 변화 로그 — PII/토큰/pgTid 없이 orderId/상태/금액만 남긴다.
         log.info("event=order_created orderId={} status={} amount={}",
@@ -143,13 +145,71 @@ class OrderPendingCreationService {
     // 같은 requestId가 다른 내용으로 재사용됐는지 판별하기 위한 해시다. 순서만 다른 cartItemIds는
     // 같은 요청으로 본다(정렬 후 해시).
     private String computeRequestHash(Long memberId, OrderCreateRequest request) {
-        String sortedItemIds = request.cartItemIds().stream()
-                .distinct()
-                .sorted()
-                .map(String::valueOf)
+        String checkoutKey = isPresent(request.cartItemIds())
+                ? "cart:" + request.cartItemIds().stream().distinct().sorted()
+                .map(String::valueOf).collect(Collectors.joining(","))
+                : "direct:" + request.items().stream()
+                .map(item -> item.productOptionId() + ":" + item.qty()).sorted()
                 .collect(Collectors.joining(","));
-        String canonical = memberId + "|" + sortedItemIds + "|" + request.addressId() + "|"
+        String canonical = memberId + "|" + checkoutKey + "|" + request.addressId() + "|"
                 + (request.shipMessage() == null ? "" : request.shipMessage());
         return TokenHasher.sha256(canonical);
+    }
+
+    private Checkout createCheckout(Long memberId, OrderCreateRequest request) {
+        boolean hasCartItems = isPresent(request.cartItemIds());
+        if (hasCartItems) {
+            CartCheckoutInfo cartCheckout = cartApi.getCheckoutItems(memberId, request.cartItemIds());
+            List<CheckoutItem> items = cartCheckout.items().stream().map(CheckoutItem::fromCart).toList();
+            return new Checkout(items, cartCheckout.items());
+        }
+
+        List<Long> optionIds = request.items().stream().map(OrderCreateItemRequest::productOptionId).toList();
+        if (optionIds.stream().distinct().count() != optionIds.size()) {
+            throw new OrderException(OrderErrorCode.PRODUCT_OPTION_NOT_PURCHASABLE);
+        }
+        Map<Long, ProductOptionInfo> optionsById = productApi.findOptionInfos(optionIds).stream()
+                .collect(Collectors.toMap(ProductOptionInfo::productOptionId, Function.identity()));
+        List<CheckoutItem> items = request.items().stream()
+                .map(item -> CheckoutItem.fromDirect(item, optionsById.get(item.productOptionId())))
+                .toList();
+        return new Checkout(items, null);
+    }
+
+    private boolean isPresent(List<?> items) {
+        return items != null && !items.isEmpty();
+    }
+
+    private void validateCheckoutMode(OrderCreateRequest request) {
+        boolean hasCartItems = isPresent(request.cartItemIds());
+        boolean hasDirectItems = isPresent(request.items());
+        if (!hasCartItems && !hasDirectItems) {
+            throw new OrderException(OrderErrorCode.ORDER_ITEMS_REQUIRED);
+        }
+        if (hasCartItems && hasDirectItems) {
+            throw new OrderException(OrderErrorCode.ORDER_ITEMS_MIXED);
+        }
+    }
+
+    private record Checkout(List<CheckoutItem> items, List<CartCheckoutItem> cartItems) {
+        boolean isCartOrder() {
+            return cartItems != null;
+        }
+    }
+
+    private record CheckoutItem(Long cartItemId, Long productOptionId, String productName, String optionName,
+                                int unitPrice, int qty) {
+        static CheckoutItem fromCart(CartCheckoutItem item) {
+            return new CheckoutItem(item.cartItemId(), item.productOptionId(), item.productName(), item.optionName(),
+                    item.unitPrice(), item.qty());
+        }
+
+        static CheckoutItem fromDirect(OrderCreateItemRequest item, ProductOptionInfo option) {
+            if (option == null || !option.purchasable()) {
+                throw new OrderException(OrderErrorCode.PRODUCT_OPTION_NOT_PURCHASABLE);
+            }
+            return new CheckoutItem(null, option.productOptionId(), option.productName(), option.optionName(),
+                    option.price(), item.qty());
+        }
     }
 }

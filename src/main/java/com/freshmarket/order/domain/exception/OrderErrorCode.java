@@ -15,7 +15,10 @@ public enum OrderErrorCode implements ErrorCode {
     ADDRESS_NOT_FOUND(HttpStatus.UNPROCESSABLE_CONTENT, "ORDER-003", "배송지를 찾을 수 없습니다."),
     // 같은 requestId가 이전과 다른 내용(장바구니 항목/배송지/메시지)으로 다시 왔다 — 재시도가
     // 아니라 요청 식별자를 잘못 재사용한 경우다.
-    DUPLICATE_REQUEST(HttpStatus.CONFLICT, "ORDER-004", "동일한 요청 식별자가 다른 내용으로 이미 사용됐습니다.");
+    DUPLICATE_REQUEST(HttpStatus.CONFLICT, "ORDER-004", "동일한 요청 식별자가 다른 내용으로 이미 사용됐습니다."),
+    ORDER_ITEMS_REQUIRED(HttpStatus.UNPROCESSABLE_CONTENT, "ORDER-005", "장바구니 상품 또는 바로구매 상품이 필요합니다."),
+    ORDER_ITEMS_MIXED(HttpStatus.UNPROCESSABLE_CONTENT, "ORDER-006", "장바구니 주문과 바로구매를 함께 요청할 수 없습니다."),
+    PRODUCT_OPTION_NOT_PURCHASABLE(HttpStatus.UNPROCESSABLE_CONTENT, "ORDER-007", "구매할 수 없는 상품 옵션이 포함되어 있습니다.");
 
     private final HttpStatus httpStatus;
     private final String code;
