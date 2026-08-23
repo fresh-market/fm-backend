@@ -18,7 +18,7 @@ import com.freshmarket.common.auth.jwt.JwtTokenProvider;
 import java.time.Duration;
 import java.util.Optional;
 
-import com.freshmarket.common.auth.jwt.RefreshTokenRepository;
+import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import com.freshmarket.common.auth.jwt.TokenType;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -37,7 +37,7 @@ class AdminAuthServiceTest {
             "test-only-secret-key-must-be-at-least-32-bytes-long-for-hmac-sha256";
     private static final long ACCESS_TOKEN_VALIDITY_MS = 1_800_000L;
     private static final long MEMBER_REFRESH_TOKEN_VALIDITY_MS = 1_209_600_000L;
-    private static final long ADMIN_REFRESH_TOKEN_VALIDITY_MS = 86_400_000L;
+    private static final long ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS = 86_400L;
 
     private final AdminRepository adminRepository = mock(AdminRepository.class);
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -50,7 +50,7 @@ class AdminAuthServiceTest {
             passwordEncoder,
             jwtTokenProvider,
             refreshTokenRepository,
-            ADMIN_REFRESH_TOKEN_VALIDITY_MS
+            ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS
     );
 
     @Test
@@ -94,7 +94,7 @@ class AdminAuthServiceTest {
                 "ROLE_ADMIN",
                 TokenType.ADMIN,
                 false,
-                Duration.ofMillis(ADMIN_REFRESH_TOKEN_VALIDITY_MS));
+                Duration.ofSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
     }
 
     @Test

@@ -8,8 +8,8 @@ import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminRepository;
 import com.freshmarket.common.auth.jwt.JwtTokenProvider;
-import com.freshmarket.common.auth.jwt.OpaqueTokenGenerator;
-import com.freshmarket.common.auth.jwt.RefreshTokenRepository;
+import com.freshmarket.common.auth.opaque.OpaqueTokenGenerator;
+import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import com.freshmarket.common.auth.jwt.TokenType;
 import java.time.Duration;
 import java.util.Objects;
@@ -45,7 +45,7 @@ public class AdminAuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenRepository refreshTokenRepository;
-    private final long refreshTokenValidityMs;
+    private final long refreshTokenValiditySeconds;
     private final String dummyPasswordHash;
 
     public AdminAuthService(
@@ -53,12 +53,12 @@ public class AdminAuthService {
             PasswordEncoder passwordEncoder,
             JwtTokenProvider jwtTokenProvider,
             RefreshTokenRepository refreshTokenRepository,
-            @Value("${jwt.refresh-token-validity.admin}") long refreshTokenValidityMs) {
+            @Value("${admin.refresh-token-validity-seconds}") long refreshTokenValiditySeconds) {
         this.adminRepository = adminRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
         this.refreshTokenRepository = refreshTokenRepository;
-        this.refreshTokenValidityMs = refreshTokenValidityMs;
+        this.refreshTokenValiditySeconds = refreshTokenValiditySeconds;
         // 같은 인코더로 미리 만들어 둬야 진짜 비밀번호 검증과 연산 비용(코스트 팩터)이 완전히 같다
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_SOURCE);
     }
@@ -104,7 +104,7 @@ public class AdminAuthService {
                 admin.getRole().toAuthority(),
                 TokenType.ADMIN,
                 false,
-                Duration.ofMillis(refreshTokenValidityMs));
+                Duration.ofSeconds(refreshTokenValiditySeconds));
 
         AdminLoginResponse response = new AdminLoginResponse(
                 jwtTokenProvider.getAccessTokenValidityMs() / 1000,
@@ -115,7 +115,7 @@ public class AdminAuthService {
                 admin.getId(), maskLoginId(admin.getLoginId()));
 
         // 두 토큰 원문은 응답 본문이 아니라 컨트롤러가 만드는 HttpOnly 쿠키로만 나간다
-        return new AdminLoginResult(response, accessToken, rawRefreshToken, refreshTokenValidityMs / 1000);
+        return new AdminLoginResult(response, accessToken, rawRefreshToken, refreshTokenValiditySeconds);
     }
 
     private String maskLoginId(String loginId) {

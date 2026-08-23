@@ -17,10 +17,10 @@ import org.springframework.stereotype.Component;
  * role 클레임은 Spring Security 권한 문자열 그대로("ROLE_USER", "ROLE_ADMIN", "ROLE_SUPER_ADMIN")를
  * 담는다 — MemberRole.name(), AdminRole.toAuthority() 양쪽 다 이 포맷으로 맞춰뒀다.
  *
- * (2026-08-22) opaque 토큰 전환 이후 리프레시 토큰 자체는 이 클래스가 생성하지 않는다
- * (OpaqueTokenGenerator 참고, SEC-1-04 정리).
- * refreshTokenValidityMs는 회원 Refresh Token TTL 정책값으로 유지하며,
- * 관리자 Refresh Token TTL은 jwt.refresh-token-validity.admin을 AdminAuthService가 별도로 사용한다.
+ * (2026-08-19) opaque 토큰 전환 이후 리프레시 토큰은 이 클래스가 더 이상 만들지 않는다
+ * (OpaqueTokenGenerator 참고, SEC-1-04 정리). refreshTokenValidityMs는 리프레시 토큰의 TTL
+ * 정책값으로 계속 여기 남겨둔다 — JWT를 만들진 않지만 "액세스/리프레시 토큰 수명 정책을 한
+ * 곳에서 들고 있는다"는 원래 역할은 그대로 유효하다.
  *
  * (2026-08-19 추가, 되돌림) 한때 이 클래스에도 Clock을 주입해서 발급(issuedAt/expiration)뿐
  * 아니라 jjwt 파서의 만료 판정(io.jsonwebtoken.Clock 어댑터)까지 결정적으로 만든 적이 있다 —
@@ -44,7 +44,7 @@ public class JwtTokenProvider {
     public JwtTokenProvider(
             @Value("${jwt.secret}") String secret,
             @Value("${jwt.access-token-validity-ms}") long accessTokenValidityMs,
-            @Value("${jwt.refresh-token-validity.member}") long refreshTokenValidityMs
+            @Value("${jwt.refresh-token-validity-ms}") long refreshTokenValidityMs
     ) {
         this.secretKey = Keys.hmacShaKeyFor(secret.getBytes());
         this.accessTokenValidityMs = accessTokenValidityMs;
