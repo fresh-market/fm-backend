@@ -40,6 +40,12 @@ class PaymentApiImpl implements PaymentApi {
 
     @Override
     public Optional<PaymentInfo> findPaymentInfo(Long orderId) {
-        return paymentService.findPaymentInfo(orderId);
+        return paymentService.findPayment(orderId).map(PaymentApiImpl::toPaymentInfo);
+    }
+
+    // 내부 엔티티를 공개 계약으로 변환하는 책임은 공개 API 구현체에 둔다.
+    private static PaymentInfo toPaymentInfo(Payment payment) {
+        return new PaymentInfo(payment.getId(), payment.getMethod(), payment.getAmount(),
+                payment.getStatus(), payment.getPaidAt());
     }
 }

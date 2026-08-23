@@ -10,7 +10,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.freshmarket.payment.PaymentMethod;
-import com.freshmarket.payment.PaymentInfo;
 import com.freshmarket.payment.PaymentApprovedEvent;
 import com.freshmarket.payment.PaymentRequest;
 import com.freshmarket.payment.PaymentResult;
@@ -172,18 +171,18 @@ class PaymentServiceTest {
         payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30));
         when(paymentRepository.findByOrderId(1L)).thenReturn(Optional.of(payment));
 
-        Optional<PaymentInfo> result = sut.findPaymentInfo(1L);
+        Optional<Payment> result = sut.findPayment(1L);
 
         assertThat(result).isPresent();
-        assertThat(result.orElseThrow().method()).isEqualTo(PaymentMethod.CARD);
-        assertThat(result.orElseThrow().status()).isEqualTo(PaymentStatus.PAID);
+        assertThat(result.orElseThrow().getMethod()).isEqualTo(PaymentMethod.CARD);
+        assertThat(result.orElseThrow().getStatus()).isEqualTo(PaymentStatus.PAID);
     }
 
     @Test
     void 결제가_없는_주문은_빈_결제_정보를_반환한다() {
         when(paymentRepository.findByOrderId(1L)).thenReturn(Optional.empty());
 
-        Optional<PaymentInfo> result = sut.findPaymentInfo(1L);
+        Optional<Payment> result = sut.findPayment(1L);
 
         assertThat(result).isEmpty();
     }

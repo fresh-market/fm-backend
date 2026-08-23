@@ -2,7 +2,6 @@ package com.freshmarket.payment.domain.service;
 
 import com.freshmarket.payment.PaymentRequest;
 import com.freshmarket.payment.PaymentResult;
-import com.freshmarket.payment.PaymentInfo;
 import com.freshmarket.payment.PaymentApprovedEvent;
 import com.freshmarket.payment.domain.PaymentPreparation;
 import com.freshmarket.payment.domain.client.PaymentGatewayApproval;
@@ -68,8 +67,8 @@ public class PaymentService {
         return PaymentResult.from(payment);
     }
 
-    public Optional<PaymentInfo> findPaymentInfo(Long orderId) {
-        return paymentRepository.findByOrderId(orderId).map(PaymentInfo::from);
+    public Optional<Payment> findPayment(Long orderId) {
+        return paymentRepository.findByOrderId(orderId);
     }
 
     private void validateRequest(PaymentRequest request) {
