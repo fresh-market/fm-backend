@@ -22,7 +22,9 @@ import org.springframework.security.web.SecurityFilterChain;
 @Configuration
 class ProductSecurityConfig {
 
-    private static final String ADMIN = "TYPE_ADMIN";
+    // hasRole()이 role 클레임으로 판정한다(README.md "권한은 role로 판정한다, RBAC"). MEMBER
+    // 토큰의 role(ROLE_USER)은 ADMIN을 만족 못 하므로 회원 차단도 이걸로 자연히 함께 된다.
+    private static final String ADMIN_ROLE = "ADMIN";
 
     @Bean
     @Order(ApiSecurityDefaults.DOMAIN_CHAIN_ORDER)
@@ -38,9 +40,9 @@ class ProductSecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // 목록, 상세, 검색은 비로그인도 본다
                         .requestMatchers(GET, "/v1/products", "/v1/products/**", "/v1/products:*").permitAll()
-                        // 상품 등록, 카테고리 CRUD는 관리자만 호출한다
+                        // 상품 등록, 카테고리 CRUD는 관리자만 호출한다(SUPER_ADMIN도 RoleHierarchy로 포함됨)
                         .requestMatchers("/v1/admin/products", "/v1/admin/categories", "/v1/admin/categories/*")
-                                .hasAuthority(ADMIN)
+                                .hasRole(ADMIN_ROLE)
 
                         .anyRequest().authenticated())
                 .build();
