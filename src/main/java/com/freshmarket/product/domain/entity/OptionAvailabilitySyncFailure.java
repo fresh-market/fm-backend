@@ -43,6 +43,8 @@ public class OptionAvailabilitySyncFailure extends BaseMutableTimeEntity {
     private int attemptCount;
 
     private OptionAvailabilitySyncFailure(Long productOptionId, boolean soldOut, LocalDateTime occurredAt) {
+        validateProductOptionId(productOptionId);
+        validateOccurredAt(occurredAt);
         this.productOptionId = productOptionId;
         this.soldOut = soldOut;
         this.occurredAt = occurredAt;
@@ -57,6 +59,7 @@ public class OptionAvailabilitySyncFailure extends BaseMutableTimeEntity {
 
     // 이미 대기 중인 실패가 있는 옵션에 새 이벤트가 또 실패로 들어온 경우. 목표 값을 최신 이벤트로 덮어쓴다
     public void overwriteWithNewerFailure(boolean soldOut, LocalDateTime occurredAt) {
+        validateOccurredAt(occurredAt);
         this.soldOut = soldOut;
         this.occurredAt = occurredAt;
         this.attemptCount++;
@@ -69,5 +72,17 @@ public class OptionAvailabilitySyncFailure extends BaseMutableTimeEntity {
 
     public boolean shouldGiveUp() {
         return attemptCount >= MAX_RETRY_ATTEMPTS;
+    }
+
+    private static void validateProductOptionId(Long productOptionId) {
+        if (productOptionId == null) {
+            throw new IllegalArgumentException("productOptionId 는 필수다");
+        }
+    }
+
+    private static void validateOccurredAt(LocalDateTime occurredAt) {
+        if (occurredAt == null) {
+            throw new IllegalArgumentException("occurredAt 은 필수다");
+        }
     }
 }
