@@ -78,6 +78,37 @@ coupon 에 카운터를 두고 UPDATE     한 행에 락이 몰려 직렬화된�
 
 순번을 빼면 상한 강제가 앱으로 넘어가거나, DB 에 남기려면 `coupon` 한 행에 락을 물어야 한다. **락 없이 DB 가 상한을 지키는 유일한 방법이고, 그것이 순번을 둔 이유다.** 순서 기록은 부산물이다. 누가 몇 번째인지는 `member_coupon_id` 로도 답할 수 있다.
 
+### 검토했다가 뺀 안
+
+이벤트마다 전용 테이블을 두고 순번을 `AUTO_INCREMENT` 에 맡기는 방식도 검토했다.
+
+```sql
+CREATE TABLE coupon_issue_1234 (
+    issue_seq  INT    NOT NULL AUTO_INCREMENT,
+    coupon_id  BIGINT NOT NULL,
+    member_id  BIGINT NOT NULL,
+    issued_at  DATETIME(6) NOT NULL,
+    PRIMARY KEY (issue_seq),
+    UNIQUE KEY uk_ci1234_coupon_member (coupon_id, member_id),
+    CONSTRAINT fk_ci1234_coupon FOREIGN KEY (coupon_id) REFERENCES coupon (coupon_id),
+    CONSTRAINT fk_ci1234_member FOREIGN KEY (member_id) REFERENCES member (member_id),
+    CONSTRAINT chk_ci1234_one   CHECK (coupon_id = 1234),
+    CONSTRAINT chk_ci1234_limit CHECK (issue_seq <= 10000)
+);
+```
+
+테이블이 이벤트 단위라 `AUTO_INCREMENT` 가 1 부터 시작하고 상한도 리터럴 CHECK 로 걸린다. 여기까지는 성립한다.
+
+**뺀 이유는 `AUTO_INCREMENT` 가 롤백해도 다음 숫자를 그대로 쓰기 때문이다.** 트랜잭션 밖의 카운터라 되돌아오지 않고, `ALTER TABLE ... AUTO_INCREMENT` 로도 현재 최대값 아래로는 못 내린다.
+
+```
+실패도 재시도도 연타도 전부 번호를 태운다
+-> 카운터가 10,000 에 닿아도 행은 그보다 적다
+-> 준비한 수량을 못 채운 채 끝나고 되돌릴 수단이 없다
+```
+
+Redis 카운터도 트랜잭션 밖이라 성질은 같지만, 그쪽은 실패한 번호를 따로 담아 다시 배정할 수 있다(3장). `AUTO_INCREMENT` 에는 그 자리가 없다.
+
 ### 이것이 뜻하는 바
 
 **순번 발급기가 어디에 있든 초과 발급은 나지 않는다.** 카운터가 앱 메모리에 있든 DB 행이든 Redis 든, 그 값이 틀리면 두 제약 중 하나에 걸려 insert 가 실패한다.
