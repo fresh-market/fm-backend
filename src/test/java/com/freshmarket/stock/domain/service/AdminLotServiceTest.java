@@ -9,13 +9,16 @@ import static org.mockito.Mockito.when;
 
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
+import com.freshmarket.stock.domain.dto.AdminLotListResponse;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
+import com.freshmarket.stock.domain.entity.LotStatus;
 import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.exception.StockErrorCode;
 import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -251,6 +254,59 @@ class AdminLotServiceTest {
                 .isInstanceOf(StockException.class)
                 .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.EXPIRY_BEFORE_RECEIVED);
         verify(stockLotRepository, never()).save(any());
+    }
+
+    @Test
+    void 상품의_로트_전체를_소비기한_오름차순으로_조회한다() {
+        // given
+        when(productApi.findOptionIds(12L)).thenReturn(List.of(31L, 45L));
+        StockLot lot1 = lotOf(31L, LocalDate.of(2026, 8, 31), 77L);
+        StockLot lot2 = lotOf(45L, LocalDate.of(2026, 9, 10), 78L);
+        when(stockLotRepository.findByProductOptionIdInOrderByExpiryDateAsc(List.of(31L, 45L)))
+                .thenReturn(List.of(lot1, lot2));
+
+        // when
+        AdminLotListResponse result = adminLotService.findAllByProduct(12L, false);
+
+        // then
+        assertThat(result.lots()).hasSize(2);
+        assertThat(result.lots().get(0).stockLotId()).isEqualTo(77L);
+        assertThat(result.lots().get(1).stockLotId()).isEqualTo(78L);
+    }
+
+    @Test
+    void availableOnly가_true면_판매_가능_로트만_조회한다() {
+        // given
+        when(productApi.findOptionIds(12L)).thenReturn(List.of(31L));
+        StockLot lot = lotOf(31L, LocalDate.of(2026, 8, 31), 77L);
+        when(stockLotRepository.findByProductOptionIdInAndStatusOrderByExpiryDateAsc(
+                List.of(31L), LotStatus.AVAILABLE)).thenReturn(List.of(lot));
+
+        // when
+        AdminLotListResponse result = adminLotService.findAllByProduct(12L, true);
+
+        // then
+        assertThat(result.lots()).hasSize(1);
+        verify(stockLotRepository, never()).findByProductOptionIdInOrderByExpiryDateAsc(any());
+    }
+
+    @Test
+    void 상품에_옵션이_하나도_없으면_상품_없음으로_실패한다() {
+        // given — 상품 등록 시 옵션이 최소 1개 필수라, 옵션 ID 목록이 비어있다는 건 상품 자체가 없다는 뜻이다
+        when(productApi.findOptionIds(999L)).thenReturn(List.of());
+
+        // when, then
+        assertThatThrownBy(() -> adminLotService.findAllByProduct(999L, false))
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.OPTION_NOT_FOUND);
+        verify(stockLotRepository, never()).findByProductOptionIdInOrderByExpiryDateAsc(any());
+        verify(stockLotRepository, never()).findByProductOptionIdInAndStatusOrderByExpiryDateAsc(any(), any());
+    }
+
+    private StockLot lotOf(Long optionId, LocalDate expiryDate, Long id) {
+        StockLot lot = StockLot.register("req-" + id, optionId, LocalDate.of(2026, 8, 1), expiryDate, 100);
+        ReflectionTestUtils.setField(lot, "id", id);
+        return lot;
     }
 
     // 실제 저장이 없는 단위 테스트에서 JPA가 채워줄 생성 ID를 대신 채워준다.
