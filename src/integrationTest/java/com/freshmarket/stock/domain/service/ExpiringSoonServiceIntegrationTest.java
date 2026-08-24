@@ -2,6 +2,7 @@ package com.freshmarket.stock.domain.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.freshmarket.common.response.CursorPageResponse;
 import com.freshmarket.product.domain.entity.Product;
 import com.freshmarket.product.domain.entity.ProductOption;
 import com.freshmarket.product.domain.entity.StorageType;
@@ -12,7 +13,6 @@ import com.freshmarket.stock.domain.dto.ExpiringSoonResponse;
 import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import java.time.LocalDate;
-import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -23,8 +23,7 @@ import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-// 소비기한 임박 판정(소비기한 - saleAvailableDaysFromExpiry <= 오늘 + withinDays)이
-// 실제 DB 로 정확히 계산되는지 검증한다
+// 소비기한 임박 판정과 커서 페이지네이션이 실제 DB 로 정확히 계산되는지 검증한다
 @SpringBootTest
 @Transactional
 @Sql("/sql/product-test-supplier.sql")
@@ -79,11 +78,12 @@ class ExpiringSoonServiceIntegrationTest {
         saveOptionWithLot("감귤", 10, LocalDate.now().plusDays(13));
 
         // when
-        List<ExpiringSoonResponse> result = expiringSoonService.getExpiringSoonProducts(3, null);
+        CursorPageResponse<ExpiringSoonResponse> result =
+                expiringSoonService.getExpiringSoonProducts(3, null, null, 20);
 
         // then
-        assertThat(result).hasSize(1);
-        assertThat(result.get(0).productName()).isEqualTo("감귤");
+        assertThat(result.items()).hasSize(1);
+        assertThat(result.items().get(0).productName()).isEqualTo("감귤");
     }
 
     @Test
@@ -93,10 +93,11 @@ class ExpiringSoonServiceIntegrationTest {
         saveOptionWithLot("복숭아", 3, LocalDate.now().plusDays(30));
 
         // when
-        List<ExpiringSoonResponse> result = expiringSoonService.getExpiringSoonProducts(3, null);
+        CursorPageResponse<ExpiringSoonResponse> result =
+                expiringSoonService.getExpiringSoonProducts(3, null, null, 20);
 
         // then
-        assertThat(result).isEmpty();
+        assertThat(result.items()).isEmpty();
     }
 
     @Test
@@ -105,12 +106,24 @@ class ExpiringSoonServiceIntegrationTest {
         saveOptionWithLot("사과", 5, LocalDate.now().plusDays(13));
 
         // when
-        List<ExpiringSoonResponse> withDefaultDays = expiringSoonService.getExpiringSoonProducts(3, null);
-        List<ExpiringSoonResponse> withTenDays = expiringSoonService.getExpiringSoonProducts(10, null);
+        CursorPageResponse<ExpiringSoonResponse> withDefaultDays =
+                expiringSoonService.getExpiringSoonProducts(3, null, null, 20);
 
         // then
-        assertThat(withDefaultDays).isEmpty();
-        assertThat(withTenDays).hasSize(1);
+        assertThat(withDefaultDays.items()).isEmpty();
+    }
+
+    @Test
+    void withinDays를_늘리면_더_넓은_범위가_임박으로_판정된다() {
+        // given
+        saveOptionWithLot("사과", 5, LocalDate.now().plusDays(13));
+
+        // when
+        CursorPageResponse<ExpiringSoonResponse> withTenDays =
+                expiringSoonService.getExpiringSoonProducts(10, null, null, 20);
+
+        // then
+        assertThat(withTenDays.items()).hasSize(1);
     }
 
     @Test
@@ -120,22 +133,48 @@ class ExpiringSoonServiceIntegrationTest {
         saveOptionWithLot("배", 10, LocalDate.now().plusDays(13));
 
         // when
-        List<ExpiringSoonResponse> matched =
-        		expiringSoonService.getExpiringSoonProducts(3, categoryId);
-        List<ExpiringSoonResponse> unmatched =
-        		expiringSoonService.getExpiringSoonProducts(3, 999999L);
+        CursorPageResponse<ExpiringSoonResponse> matched =
+                expiringSoonService.getExpiringSoonProducts(3, categoryId, null, 20);
+        CursorPageResponse<ExpiringSoonResponse> unmatched =
+                expiringSoonService.getExpiringSoonProducts(3, 999999L, null, 20);
 
         // then
-        assertThat(matched).hasSize(1);
-        assertThat(unmatched).isEmpty();
+        assertThat(matched.items()).hasSize(1);
+        assertThat(unmatched.items()).isEmpty();
     }
 
     @Test
     void 임박_상품이_없으면_빈_목록을_준다() {
         // when
-    	List<ExpiringSoonResponse> result = expiringSoonService.getExpiringSoonProducts(3, null);
+        CursorPageResponse<ExpiringSoonResponse> result =
+                expiringSoonService.getExpiringSoonProducts(3, null, null, 20);
 
         // then
-        assertThat(result).isEmpty();
+        assertThat(result.items()).isEmpty();
+    }
+
+    @Test
+    void 결과가_pageSize보다_많으면_다음_페이지_토큰으로_이어서_조회된다() {
+        // given — 옵션 3개, pageSize 1
+        saveOptionWithLot("감귤", 10, LocalDate.now().plusDays(13));
+        saveOptionWithLot("복숭아", 10, LocalDate.now().plusDays(13));
+        saveOptionWithLot("사과", 10, LocalDate.now().plusDays(13));
+
+        // when — 1페이지
+        CursorPageResponse<ExpiringSoonResponse> firstPage =
+                expiringSoonService.getExpiringSoonProducts(3, null, null, 1);
+
+        // then
+        assertThat(firstPage.items()).hasSize(1);
+        assertThat(firstPage.nextPageToken()).isNotNull();
+
+        // when — 2페이지, 1페이지와 겹치지 않아야 한다
+        CursorPageResponse<ExpiringSoonResponse> secondPage = expiringSoonService
+                .getExpiringSoonProducts(3, null, Long.valueOf(firstPage.nextPageToken()), 1);
+
+        // then
+        assertThat(secondPage.items()).hasSize(1);
+        assertThat(secondPage.items().get(0).productOptionId())
+                .isNotEqualTo(firstPage.items().get(0).productOptionId());
     }
 }
