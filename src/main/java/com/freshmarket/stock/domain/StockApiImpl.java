@@ -117,15 +117,15 @@ class StockApiImpl implements StockApi {
 
     /*
      * RESERVED 할당만 확정한다. status 조건으로 조회하기 때문에 이미 CONFIRMED/RELEASED인 건
-     * 대상에서 자연히 빠져 재시도해도 다시 처리되지 않는다.
+     * 대상에서 자연히 빠져 순차 재시도해도 다시 처리되지 않는다. 조회 자체가 쓰기 락이라
+     * (StockAllocationRepository.findByOrderItemIdInAndStatus 참고) 진짜 동시 중복 호출도 막힌다.
      */
     @Override
     public void confirm(StockOrderItemsRequest request) {
         if (request.orderItemIds() == null || request.orderItemIds().isEmpty()) {
             return;
         }
-        List<StockAllocation> allocations = stockAllocationRepository.findByOrderItemIdInAndStatus(
-                request.orderItemIds(), AllocationStatus.RESERVED);
+        List<StockAllocation> allocations = findReservedAllocationsForUpdate(request.orderItemIds());
         if (allocations.isEmpty()) {
             return;
         }
@@ -141,15 +141,14 @@ class StockApiImpl implements StockApi {
 
     /*
      * RESERVED 할당만 해제한다. CONFIRMED는 findByOrderItemIdInAndStatus 조건에서 아예 빠지므로
-     * 잘못 해제될 수 없다.
+     * 잘못 해제될 수 없다. confirm()과 마찬가지로 조회 자체가 쓰기 락이라 동시 중복 호출도 막힌다.
      */
     @Override
     public void release(StockOrderItemsRequest request) {
         if (request.orderItemIds() == null || request.orderItemIds().isEmpty()) {
             return;
         }
-        List<StockAllocation> allocations = stockAllocationRepository.findByOrderItemIdInAndStatus(
-                request.orderItemIds(), AllocationStatus.RESERVED);
+        List<StockAllocation> allocations = findReservedAllocationsForUpdate(request.orderItemIds());
         if (allocations.isEmpty()) {
             return;
         }
@@ -161,6 +160,15 @@ class StockApiImpl implements StockApi {
             lot.restore(allocation.getQty());
             stockMovementRepository.save(
                     StockMovement.release(lot.getId(), allocation.getQty(), beforeQty, request.orderId()));
+        }
+    }
+
+    // 락 대기 타임아웃/교착은 도메인 밖으로 raw 타입을 새어나가게 두지 않고 재시도 가능한 오류로 감싼다
+    private List<StockAllocation> findReservedAllocationsForUpdate(List<Long> orderItemIds) {
+        try {
+            return stockAllocationRepository.findByOrderItemIdInAndStatus(orderItemIds, AllocationStatus.RESERVED);
+        } catch (PessimisticLockingFailureException e) {
+            throw new StockException(StockErrorCode.RESERVATION_IN_PROGRESS, e);
         }
     }
 

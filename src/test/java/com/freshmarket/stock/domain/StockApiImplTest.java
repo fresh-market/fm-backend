@@ -216,6 +216,19 @@ class StockApiImplTest {
     }
 
     @Test
+    void 확정_대상_조회_중_락_경합이_나면_처리중_오류로_감싼다() {
+        // given — findByOrderItemIdInAndStatus 자체가 쓰기 락 조회라 락 대기 타임아웃/교착이 날 수 있다
+        when(stockAllocationRepository.findByOrderItemIdInAndStatus(List.of(501L), AllocationStatus.RESERVED))
+                .thenThrow(new CannotAcquireLockException("Lock wait timeout"));
+        StockOrderItemsRequest request = new StockOrderItemsRequest(9001L, List.of(501L));
+
+        // when, then
+        assertThatThrownBy(() -> stockApiImpl.confirm(request))
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.RESERVATION_IN_PROGRESS);
+    }
+
+    @Test
     void RESERVED_할당을_확정하고_이력을_남긴다() {
         // given
         StockAllocation allocation = reservedAllocation(1L, 501L, 77L, 20);
