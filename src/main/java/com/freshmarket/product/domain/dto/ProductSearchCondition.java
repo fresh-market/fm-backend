@@ -1,5 +1,7 @@
 package com.freshmarket.product.domain.dto;
 
+import com.freshmarket.common.response.PageCursor;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 
 // 상품 목록/검색 조회 조건. 컨트롤러가 요청 파라미터를 조립해 서비스로 넘긴다.
