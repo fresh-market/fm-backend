@@ -2,8 +2,8 @@ package com.freshmarket.product.domain.service;
 
 import com.freshmarket.common.response.CursorPageResponse;
 import com.freshmarket.product.domain.dto.CategorySummary;
-import com.freshmarket.product.domain.dto.PageCursor;
-import com.freshmarket.product.domain.dto.PageTokens;
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.domain.dto.ProductDetailResponse;
 import com.freshmarket.product.domain.dto.ProductDetailImageResponse;
 import com.freshmarket.product.domain.dto.ProductListItem;
