@@ -27,7 +27,7 @@ public class OptionAvailabilitySyncOutcomeService {
     @Transactional
     public void markFailed(Long failureId, Exception cause) {
         failureRepository.findById(failureId).ifPresent(failure -> {
-            failure.markRetryFailed(failure.isSoldOut());
+            failure.markRetryFailed();
             if (failure.shouldGiveUp()) {
                 // 여기부턴 실제 재고와 노출 상태가 계속 어긋난 채로 남는 것이라 사람이 봐야 한다
                 log.error("event=OPTION_AVAILABILITY_SYNC_GAVE_UP productOptionId={} soldOut={} attempts={}",

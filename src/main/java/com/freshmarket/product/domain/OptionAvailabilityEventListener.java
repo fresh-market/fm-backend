@@ -21,13 +21,15 @@ public class OptionAvailabilityEventListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handle(OptionAvailabilityChangedEvent event) {
         try {
-            productOptionAvailabilityService.updateSoldOut(event.productOptionId(), event.soldOut());
+            productOptionAvailabilityService.updateSoldOut(event.productOptionId(), event.soldOut(),
+                    event.occurredAt());
         } catch (Exception e) {
             // (DI-6-01) 여기서 다시 던지지 않는다 — AFTER_COMMIT 리스너의 예외는 원 요청 스레드로
             // 동기 전파돼, 이미 성공적으로 끝난 로트 입고 요청을 뒤늦게 500으로 만든다.
             log.warn("event=OPTION_AVAILABILITY_SYNC_FAILED productOptionId={} soldOut={} — 아웃박스에 기록, 스케줄러가 재시도",
                     event.productOptionId(), event.soldOut(), e);
-            optionAvailabilitySyncRetryService.recordFailure(event.productOptionId(), event.soldOut());
+            optionAvailabilitySyncRetryService.recordFailure(event.productOptionId(), event.soldOut(),
+                    event.occurredAt());
         }
     }
 }

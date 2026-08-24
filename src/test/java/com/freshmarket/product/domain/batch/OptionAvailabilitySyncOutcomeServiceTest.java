@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 
 import com.freshmarket.product.domain.entity.OptionAvailabilitySyncFailure;
 import com.freshmarket.product.domain.repository.OptionAvailabilitySyncFailureRepository;
+import java.time.LocalDateTime;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
 class OptionAvailabilitySyncOutcomeServiceTest {
+
+    private static final LocalDateTime OCCURRED_AT = LocalDateTime.of(2026, 8, 24, 10, 0);
 
     @Mock
     private OptionAvailabilitySyncFailureRepository failureRepository;
@@ -36,7 +39,7 @@ class OptionAvailabilitySyncOutcomeServiceTest {
 
     @Test
     void 재시도_한도_전이면_카운트만_늘리고_유지한다() {
-        OptionAvailabilitySyncFailure failure = OptionAvailabilitySyncFailure.record(11L, true);
+        OptionAvailabilitySyncFailure failure = OptionAvailabilitySyncFailure.record(11L, true, OCCURRED_AT);
         when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
 
         sut.markFailed(1L, new RuntimeException("lock timeout"));
@@ -48,9 +51,9 @@ class OptionAvailabilitySyncOutcomeServiceTest {
     @Test
     void 재시도_한도를_넘으면_그래도_행은_유지한다() {
         // 5회(MAX_RETRY_ATTEMPTS)까지 계속 실패시킨 상태를 재현
-        OptionAvailabilitySyncFailure failure = OptionAvailabilitySyncFailure.record(11L, true);
+        OptionAvailabilitySyncFailure failure = OptionAvailabilitySyncFailure.record(11L, true, OCCURRED_AT);
         for (int i = 0; i < 4; i++) {
-            failure.markRetryFailed(true);
+            failure.markRetryFailed();
         }
         when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
 

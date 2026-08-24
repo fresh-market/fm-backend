@@ -6,6 +6,10 @@ CREATE TABLE option_availability_sync_failure (
     option_availability_sync_failure_id BIGINT AUTO_INCREMENT PRIMARY KEY,
     product_option_id BIGINT NOT NULL,
     sold_out BOOLEAN NOT NULL,
+    -- (DI-2-01) 원래 이벤트가 발생한 시각. 재시도 시각이 아니다 — product_option의 조건부 UPDATE가
+    -- "이 사실보다 더 최신 사실이 이미 반영됐는지"를 비교하는 기준이라, 재시도할 때도 이 값을
+    -- 그대로 다시 실어 보내야 한다.
+    occurred_at DATETIME(6) NOT NULL,
     attempt_count INT NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,

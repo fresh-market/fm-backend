@@ -3,6 +3,7 @@ package com.freshmarket.product.domain.batch;
 import com.freshmarket.product.domain.entity.OptionAvailabilitySyncFailure;
 import com.freshmarket.product.domain.repository.OptionAvailabilitySyncFailureRepository;
 import com.freshmarket.product.domain.service.ProductOptionAvailabilityService;
+import java.time.LocalDateTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,21 +25,22 @@ public class OptionAvailabilitySyncRetryService {
     private final OptionAvailabilitySyncOutcomeService outcomeService;
 
     @Transactional
-    public void recordFailure(Long productOptionId, boolean soldOut) {
+    public void recordFailure(Long productOptionId, boolean soldOut, LocalDateTime occurredAt) {
         failureRepository.findByProductOptionId(productOptionId).ifPresentOrElse(
-                failure -> failure.markRetryFailed(soldOut),
-                () -> failureRepository.save(OptionAvailabilitySyncFailure.record(productOptionId, soldOut)));
+                failure -> failure.overwriteWithNewerFailure(soldOut, occurredAt),
+                () -> failureRepository.save(
+                        OptionAvailabilitySyncFailure.record(productOptionId, soldOut, occurredAt)));
     }
 
     public void retryAllPending() {
         for (OptionAvailabilitySyncFailure failure : failureRepository.findAll()) {
-            retryOne(failure.getId(), failure.getProductOptionId(), failure.isSoldOut());
+            retryOne(failure.getId(), failure.getProductOptionId(), failure.isSoldOut(), failure.getOccurredAt());
         }
     }
 
-    private void retryOne(Long failureId, Long productOptionId, boolean soldOut) {
+    private void retryOne(Long failureId, Long productOptionId, boolean soldOut, LocalDateTime occurredAt) {
         try {
-            productOptionAvailabilityService.updateSoldOut(productOptionId, soldOut);
+            productOptionAvailabilityService.updateSoldOut(productOptionId, soldOut, occurredAt);
             outcomeService.markSucceeded(failureId);
         } catch (Exception e) {
             outcomeService.markFailed(failureId, e);
