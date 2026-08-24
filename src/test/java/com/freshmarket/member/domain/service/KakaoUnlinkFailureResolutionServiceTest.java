@@ -13,6 +13,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
 @ExtendWith(MockitoExtension.class)
 class KakaoUnlinkFailureResolutionServiceTest {
@@ -38,6 +40,22 @@ class KakaoUnlinkFailureResolutionServiceTest {
         sut.resolve(1L);
 
         assertThat(failure.isResolved()).isTrue();
+    }
+
+    @Test
+    void 미해소_포기_건을_페이지로_조회한다() {
+        PageRequest pageable = PageRequest.of(0, 20);
+        KakaoUnlinkFailure failure = KakaoUnlinkFailure.record(1L, "kakao-1");
+        for (int i = 0; i < 4; i++) {
+            failure.markRetryFailed();
+        }
+        when(failureRepository.findByAttemptCountGreaterThanEqualAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS, pageable))
+                .thenReturn(new PageImpl<>(java.util.List.of(failure), pageable, 1));
+
+        org.springframework.data.domain.Page<KakaoUnlinkFailure> result = sut.getStuckFailures(pageable);
+
+        assertThat(result.getContent()).containsExactly(failure);
     }
 
     @Test

@@ -5,6 +5,8 @@ import com.freshmarket.member.domain.exception.MemberErrorCode;
 import com.freshmarket.member.domain.exception.MemberException;
 import com.freshmarket.member.domain.repository.KakaoUnlinkFailureRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,6 +16,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class KakaoUnlinkFailureResolutionService {
 
     private final KakaoUnlinkFailureRepository failureRepository;
+
+    @Transactional(readOnly = true)
+    public Page<KakaoUnlinkFailure> getStuckFailures(Pageable pageable) {
+        return failureRepository.findByAttemptCountGreaterThanEqualAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS, pageable);
+    }
 
     @Transactional
     public void resolve(Long failureId) {
