@@ -183,17 +183,13 @@ public class AdminAuthService {
             log.warn("event=ADMIN_REDIS_DELETE_FAILED role={} adminId={} — DB 백업 삭제만 반영", role, adminId, e);
         }
 
-        try {
-            accessTokenValidAfterRepository.invalidateBefore(
-                    role,
-                    adminId,
-                    LocalDateTime.now(clock),
-                    Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs()));
-        } catch (DataAccessException e) {
-            // 공용 JwtAuthenticationFilter도 Redis 장애 시 fail-open 정책을 사용한다.
-            // 커트라인 저장 실패 하나 때문에 로그아웃 전체를 500으로 만들지 않고 같은 정책을 따른다.
-            log.warn("event=ADMIN_INVALIDATE_BEFORE_FAILED role={} adminId={}", role, adminId, e);
-        }
+        // Access Token 무효화는 로그아웃의 필수 보안 처리다.
+        // 커트라인 저장에 실패하면 성공으로 처리하지 않고 예외를 호출자에게 전달한다.
+        accessTokenValidAfterRepository.invalidateBefore(
+                role,
+                adminId,
+                LocalDateTime.now(clock),
+                Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs()));
 
         adminAuditLogRepository.save(
                 AdminAuditLog.of(adminId, "ADMIN_LOGOUT", String.valueOf(adminId), null));

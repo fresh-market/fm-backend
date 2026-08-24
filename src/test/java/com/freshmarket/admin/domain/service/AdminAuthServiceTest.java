@@ -411,7 +411,7 @@ class AdminAuthServiceTest {
     }
 
     @Test
-    void 로그아웃시_AccessToken_커트라인_기록에_실패해도_처리를_계속한다() {
+    void 로그아웃시_AccessToken_커트라인_기록에_실패하면_예외를_전달한다() {
         // given
         Admin admin = AdminFixture.active(
                 "admin.kim",
@@ -442,18 +442,10 @@ class AdminAuthServiceTest {
                         Duration.ofMillis(
                                 ACCESS_TOKEN_VALIDITY_MS));
 
-        // when
-        adminAuthService.logout(
-                1L,
-                "ROLE_ADMIN");
-
-        // then
-        /*
-         * Access Token 커트라인을 Redis에 기록하는 데 실패해도
-         * 로그아웃 전체를 예외로 종료하지 않고 감사 로그까지 진행한다.
-         */
-        verify(adminAuditLogRepository)
-                .save(any(AdminAuditLog.class));
+        // when & then
+        assertThatThrownBy(() -> adminAuthService.logout(1L, "ROLE_ADMIN"))
+                .isInstanceOf(DataAccessResourceFailureException.class)
+                .hasMessage("redis down");
     }
 
     /*
