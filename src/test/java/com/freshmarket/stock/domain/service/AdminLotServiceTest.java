@@ -359,6 +359,37 @@ class AdminLotServiceTest {
         verify(eventPublisher, never()).publishEvent(any());
     }
 
+    @Test
+    void 가용_수량이_0인_로트는_이력_없이_상태만_전환한다() {
+        // given — 예약으로 이미 다 소진됐지만 SOLD_OUT 전환이 없어 status는 여전히 AVAILABLE인 로트.
+        // StockMovement가 quantity>0을 강제하므로, 여기서 이력을 남기려 하면 배치 전체가 예외로 롤백된다
+        StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
+        ReflectionTestUtils.setField(lot, "availableQty", 0);
+        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
+                .thenReturn(List.of(lot));
+        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
+
+        // when
+        AdminLotExpireResponse result = adminLotService.expireLots();
+
+        // then
+        assertThat(result.lots()).hasSize(1);
+        assertThat(result.lots().get(0).status()).isEqualTo("EXPIRED");
+        verify(stockMovementRepository, never()).save(any());
+    }
+
+    @Test
+    void 만료_대상_조회_중_락_경합이_나면_처리중_오류로_감싼다() {
+        // given — findByStatusAndExpiryDateBefore 자체가 쓰기 락 조회라 락 대기 타임아웃/교착이 날 수 있다
+        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
+                .thenThrow(new CannotAcquireLockException("Lock wait timeout exceeded"));
+
+        // when, then
+        assertThatThrownBy(() -> adminLotService.expireLots())
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.EXPIRE_IN_PROGRESS);
+    }
+
     private StockLot lotFixture(Long id, Long productOptionId, LocalDate expiryDate, int availableQty) {
         StockLot lot = StockLot.register("req-" + id, productOptionId, expiryDate.minusDays(14), expiryDate,
                 availableQty);

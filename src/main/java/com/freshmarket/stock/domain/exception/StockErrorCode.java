@@ -22,7 +22,9 @@ public enum StockErrorCode implements ErrorCode {
      * 옵션의 로트를 재시도 응답으로 돌려주지 않는다. 그 결과, 같은 requestId를 다른 옵션에 다시 쓰면
      * 재시도로도 안 잡히고 DB 유니크 위반도 나는 진짜 충돌 상황이 생기는데, 그걸 여기로 구분한다.
      */
-    REQUEST_ID_ALREADY_USED(HttpStatus.CONFLICT, "STOCK-007", "이미 다른 옵션에 사용된 요청 식별자입니다.");
+    REQUEST_ID_ALREADY_USED(HttpStatus.CONFLICT, "STOCK-007", "이미 다른 옵션에 사용된 요청 식별자입니다."),
+    // STOCK-008/009는 feat/stock-reservation-api가 확정 전이라(INSUFFICIENT_STOCK/RESERVATION_IN_PROGRESS) 비워두고 010부터 쓴다
+    EXPIRE_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-010", "만료 처리 중 다른 요청과 경합했습니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus httpStatus;
     private final String code;

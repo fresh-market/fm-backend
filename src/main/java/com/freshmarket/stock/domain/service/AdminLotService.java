@@ -110,8 +110,7 @@ public class AdminLotService {
      */
     @Transactional
     public AdminLotExpireResponse expireLots() {
-        List<StockLot> targets = stockLotRepository.findByStatusAndExpiryDateBefore(
-                LotStatus.AVAILABLE, LocalDate.now());
+        List<StockLot> targets = findExpiredTargetsForUpdate();
 
         List<StockLot> expiredLots = new ArrayList<>();
         for (StockLot lot : targets) {
@@ -119,7 +118,15 @@ public class AdminLotService {
             if (!lot.expire()) {
                 continue;
             }
-            stockMovementRepository.save(StockMovement.expire(lot.getId(), beforeQty));
+            /*
+             * 예약으로 이미 다 소진된(availableQty=0) 로트도 status는 AVAILABLE로 남아있어(SOLD_OUT
+             * 전환이 아직 없다) 이 조회에 걸릴 수 있다. 그런 로트는 줄어들 수량이 없으므로 EXPIRE
+             * 이력을 남기지 않는다 — StockMovement가 quantity>0을 강제해서, 0을 넘기면 이 배치
+             * 전체가 예외로 롤백된다.
+             */
+            if (beforeQty > 0) {
+                stockMovementRepository.save(StockMovement.expire(lot.getId(), beforeQty));
+            }
             expiredLots.add(lot);
         }
 
@@ -131,6 +138,20 @@ public class AdminLotService {
                 .forEach(optionId -> eventPublisher.publishEvent(new OptionAvailabilityChangedEvent(optionId, true)));
 
         return AdminLotExpireResponse.of(expiredLots);
+    }
+
+    /*
+     * 락 대기 타임아웃/교착은 도메인 밖으로 raw 타입을 새어나가게 두지 않고 재시도 가능한 오류로 감싼다.
+     * 조회 자체가 쓰기 락이라(StockLotRepository.findByStatusAndExpiryDateBefore 참고) 같은 로트를
+     * 건드리는 reserve()와 경합하면 여기서 실패할 수 있다 — 그 사이 beforeQty가 낡은 값이 되는 걸
+     * 막기 위한 것이라, 실패하면 이 배치 전체를 롤백하고 재시도를 안내한다.
+     */
+    private List<StockLot> findExpiredTargetsForUpdate() {
+        try {
+            return stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now());
+        } catch (PessimisticLockingFailureException e) {
+            throw new StockException(StockErrorCode.EXPIRE_IN_PROGRESS, e);
+        }
     }
 
     /*
