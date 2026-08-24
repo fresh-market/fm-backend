@@ -14,6 +14,10 @@ import org.springframework.stereotype.Component;
  * 폐기 등록 연계는 여기서 하지 않는다 — DB가 DISPOSE 이력에 admin_id를 강제해서(chk_movement_disposal)
  * 관리자 세션이 없는 배치가 자동으로 폐기까지 끝낼 수 없다. 이 배치는 EXPIRED 전환까지만 하고,
  * 실제 폐기는 별도의 관리자 수동 API(:dispose, 아직 미구현)가 맡는다.
+ *
+ * (INF-1-01) 배치 유형: 멱등 전이형(idempotent transition). 대상 조회 조건이 status=AVAILABLE라
+ * 한 번 EXPIRED로 전환된 행은 다음 실행에서 자연히 대상에서 빠진다 — 같은 날 여러 번 돌거나 재시도로
+ * 다시 실행돼도 중복 전환/중복 이력이 안 생긴다. 그래서 재시도·수동 재실행이 항상 안전하다.
  */
 @Component
 // 빈 자체를 batch 프로필로 묶는다. @EnableScheduling만 끄면 빈은 남아 실수로 호출될 수 있다

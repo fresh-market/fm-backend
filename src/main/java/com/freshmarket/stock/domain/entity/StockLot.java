@@ -72,6 +72,13 @@ public class StockLot extends BaseMutableTimeEntity {
      * 소비기한이 지난 로트를 만료 처리한다. AVAILABLE만 전환 대상이다 — 이미 SOLD_OUT/DISPOSED/EXPIRED로
      * 바뀐 로트는 조용히 건너뛴다(호출부가 배치라 한 건 상태 불일치로 전체를 실패시키지 않는다).
      * 반환값으로 실제 전환 여부를 알려줘, 호출부가 EXPIRE 이력을 남길지와 응답에 포함할지를 결정한다.
+     *
+     * (INF-2-03/INF-6-03) 이 메서드 자체는 조건부 UPDATE가 아니라 단순 필드 대입이지만, 유일한
+     * 호출 경로인 AdminLotService.expireLots()가 StockLotRepository.findByStatusAndExpiryDateBefore()로
+     * status=AVAILABLE인 행만 비관적 잠금(PESSIMISTIC_WRITE)을 걸고 가져온 뒤 이 메서드를 부른다 —
+     * 조회~커밋 사이 다른 트랜잭션이 이 행 상태를 바꿀 창이 원천적으로 없어(잠금이 조건부 UPDATE보다
+     * 강한 보장이다) 별도 조건부 UPDATE가 여기선 실익이 없다. 락 없이 이 메서드를 부르는 새 호출
+     * 경로가 생기면 그때는 이 가정이 깨지므로 조건부 UPDATE를 다시 검토해야 한다.
      */
     public boolean expire() {
         if (status != LotStatus.AVAILABLE) {
