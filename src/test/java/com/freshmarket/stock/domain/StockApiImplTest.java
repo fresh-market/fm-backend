@@ -213,9 +213,17 @@ class StockApiImplTest {
     }
 
     @Test
-    void 예약_항목이_없으면_아무것도_하지_않는다() {
+    void 예약_항목이_null이면_아무것도_하지_않는다() {
         // when
         stockApiImpl.reserve(new StockReservationRequest(9001L, null));
+
+        // then
+        verify(stockAllocationRepository, never()).findByOrderItemId(any());
+    }
+
+    @Test
+    void 예약_항목이_빈_목록이면_아무것도_하지_않는다() {
+        // when
         stockApiImpl.reserve(new StockReservationRequest(9001L, List.of()));
 
         // then
