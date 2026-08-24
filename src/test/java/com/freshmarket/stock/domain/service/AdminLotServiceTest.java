@@ -4,19 +4,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.freshmarket.product.OptionAvailabilityChangedEvent;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
+import com.freshmarket.stock.domain.dto.AdminLotExpireResponse;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
+import com.freshmarket.stock.domain.entity.LotStatus;
 import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.exception.StockErrorCode;
 import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -257,6 +261,115 @@ class AdminLotServiceTest {
                 .isInstanceOf(StockException.class)
                 .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.EXPIRY_BEFORE_RECEIVED);
         verify(stockLotRepository, never()).save(any());
+    }
+
+    @Test
+    void 만료_대상이_없으면_빈_응답을_돌려준다() {
+        // given
+        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
+                .thenReturn(List.of());
+
+        // when
+        AdminLotExpireResponse result = adminLotService.expireLots();
+
+        // then
+        assertThat(result.lots()).isEmpty();
+        verify(stockMovementRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void 소비기한이_지난_로트를_만료_처리하고_이력을_남긴다() {
+        // given
+        StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
+        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
+                .thenReturn(List.of(lot));
+        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
+
+        // when
+        AdminLotExpireResponse result = adminLotService.expireLots();
+
+        // then
+        assertThat(result.lots()).hasSize(1);
+        assertThat(result.lots().get(0).status()).isEqualTo("EXPIRED");
+        assertThat(lot.getAvailableQty()).isEqualTo(0);
+        verify(stockMovementRepository).save(any());
+    }
+
+    @Test
+    void 만료_처리로_옵션에_가용_로트가_없으면_품절_이벤트를_발행한다() {
+        // given
+        StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
+        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
+                .thenReturn(List.of(lot));
+        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
+
+        // when
+        adminLotService.expireLots();
+
+        // then
+        verify(eventPublisher).publishEvent(new OptionAvailabilityChangedEvent(31L, true));
+    }
+
+    @Test
+    void 만료_처리_후에도_옵션에_다른_가용_로트가_남아있으면_이벤트를_발행하지_않는다() {
+        // given
+        StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
+        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
+                .thenReturn(List.of(lot));
+        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(true);
+
+        // when
+        adminLotService.expireLots();
+
+        // then
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void 같은_옵션의_로트_여러_개가_만료되면_품절_이벤트는_한_번만_발행한다() {
+        // given — 옵션 31에 속한 로트 두 개가 같은 배치에서 함께 만료되는 상황
+        StockLot lotA = lotFixture(77L, 31L, LocalDate.now().minusDays(2), 10);
+        StockLot lotB = lotFixture(78L, 31L, LocalDate.now().minusDays(1), 20);
+        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
+                .thenReturn(List.of(lotA, lotB));
+        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
+
+        // when
+        adminLotService.expireLots();
+
+        // then
+        verify(stockLotRepository, times(1)).existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE);
+        verify(eventPublisher, times(1)).publishEvent(new OptionAvailabilityChangedEvent(31L, true));
+    }
+
+    @Test
+    void 이미_처리된_로트는_건너뛴다() {
+        // given — 조회 조건이 AVAILABLE이지만, 조회와 처리 사이 상태가 바뀐 경우를 방어적으로 대비한다
+        StockLot lot = nonAvailableLotFixture(77L, 31L, LocalDate.now().minusDays(1), LotStatus.DISPOSED);
+        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
+                .thenReturn(List.of(lot));
+
+        // when
+        AdminLotExpireResponse result = adminLotService.expireLots();
+
+        // then
+        assertThat(result.lots()).isEmpty();
+        verify(stockMovementRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    private StockLot lotFixture(Long id, Long productOptionId, LocalDate expiryDate, int availableQty) {
+        StockLot lot = StockLot.register("req-" + id, productOptionId, expiryDate.minusDays(14), expiryDate,
+                availableQty);
+        ReflectionTestUtils.setField(lot, "id", id);
+        return lot;
+    }
+
+    private StockLot nonAvailableLotFixture(Long id, Long productOptionId, LocalDate expiryDate, LotStatus status) {
+        StockLot lot = lotFixture(id, productOptionId, expiryDate, 50);
+        ReflectionTestUtils.setField(lot, "status", status);
+        return lot;
     }
 
     // 실제 저장이 없는 단위 테스트에서 JPA가 채워줄 생성 ID를 대신 채워준다.

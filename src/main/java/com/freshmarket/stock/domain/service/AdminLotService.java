@@ -5,7 +5,9 @@ import static com.freshmarket.common.exception.ConstraintViolations.isConstraint
 import com.freshmarket.product.OptionAvailabilityChangedEvent;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
+import com.freshmarket.stock.domain.dto.AdminLotExpireResponse;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
+import com.freshmarket.stock.domain.entity.LotStatus;
 import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.entity.StockMovement;
 import com.freshmarket.stock.domain.exception.StockErrorCode;
@@ -13,6 +15,8 @@ import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -20,7 +24,7 @@ import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-// 관리자 화면에서 로트를 입고 등록하는 기능을 담당한다
+// 관리자 화면에서 로트를 입고 등록하고 만료 처리하는 기능을 담당한다
 @Service
 @Transactional(readOnly = true)
 public class AdminLotService {
@@ -93,6 +97,40 @@ public class AdminLotService {
         eventPublisher.publishEvent(new OptionAvailabilityChangedEvent(optionId, false));
 
         return AdminLotResponse.of(stockLot);
+    }
+
+    /*
+     * 소비기한이 지난 AVAILABLE 로트를 찾아 EXPIRED로 전환하고 EXPIRE 이력을 남긴다(stock.md "만료
+     * 로트 처리"). 하루 한 번 배치로 돌거나 관리자가 수동 호출한다.
+     *
+     * 품절 이벤트는 로트 하나하나가 아니라, 이번 호출로 영향받은 옵션 단위로 한 번씩만 발행한다.
+     * 루프 안에서 로트를 만료시킬 때마다 바로 확인하면, 같은 옵션의 로트 여러 개가 한 번에 만료될 때
+     * 마지막 로트가 아직 처리되지 않은 시점에도 "가용 로트 없음"으로 잘못 판단해 이벤트가 여러 번
+     * 발행될 수 있다. 전부 만료시킨 뒤 옵션별로 한 번만 확인해야 이 문제가 없다.
+     */
+    @Transactional
+    public AdminLotExpireResponse expireLots() {
+        List<StockLot> targets = stockLotRepository.findByStatusAndExpiryDateBefore(
+                LotStatus.AVAILABLE, LocalDate.now());
+
+        List<StockLot> expiredLots = new ArrayList<>();
+        for (StockLot lot : targets) {
+            int beforeQty = lot.getAvailableQty();
+            if (!lot.expire()) {
+                continue;
+            }
+            stockMovementRepository.save(StockMovement.expire(lot.getId(), beforeQty));
+            expiredLots.add(lot);
+        }
+
+        expiredLots.stream()
+                .map(StockLot::getProductOptionId)
+                .distinct()
+                .filter(optionId -> !stockLotRepository.existsByProductOptionIdAndStatus(
+                        optionId, LotStatus.AVAILABLE))
+                .forEach(optionId -> eventPublisher.publishEvent(new OptionAvailabilityChangedEvent(optionId, true)));
+
+        return AdminLotExpireResponse.of(expiredLots);
     }
 
     /*
