@@ -53,7 +53,7 @@ public class AdminAuthService {
             PasswordEncoder passwordEncoder,
             JwtTokenProvider jwtTokenProvider,
             RefreshTokenRepository refreshTokenRepository,
-            @Value("${admin.refresh-token-validity-seconds}") long refreshTokenValiditySeconds) {
+            @Value("${ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS:86400}") long refreshTokenValiditySeconds) {
         this.adminRepository = adminRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
