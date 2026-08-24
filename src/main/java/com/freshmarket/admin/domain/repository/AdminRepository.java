@@ -13,6 +13,8 @@ public interface AdminRepository extends JpaRepository<Admin, Long> {
 
     Optional<Admin> findByLoginId(String loginId);
 
+    boolean existsByLoginId(String loginId);
+
     // Redis가 완전히 장애 난 경우 opaque Refresh Token의 SHA-256 해시로 관리자를 역조회한다.
     Optional<Admin> findByRefreshTokenHash(String refreshTokenHash);
 

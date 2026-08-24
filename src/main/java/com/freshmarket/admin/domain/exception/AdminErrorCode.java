@@ -19,7 +19,11 @@ public enum AdminErrorCode implements ErrorCode {
     ACCOUNT_INACTIVE(HttpStatus.FORBIDDEN, "ADMIN-002", "비활성화된 계정입니다."),
 
     // auth.md에서 관리자 재발급은 회원과 같은 정책을 따르므로 만료·재사용 Refresh Token 오류는 AUTH-004를 사용한다.
-    REFRESH_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "AUTH-004", "만료되었거나 이미 사용된 토큰입니다.");
+    REFRESH_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "AUTH-004", "만료되었거나 이미 사용된 토큰입니다."),
+
+    SUPER_ADMIN_REQUIRED(HttpStatus.FORBIDDEN, "ADMIN-005", "최고관리자 권한이 필요합니다."),
+
+    LOGIN_ID_DUPLICATED(HttpStatus.CONFLICT, "ADMIN-006", "이미 사용 중인 관리자 아이디입니다.");
 
     private final HttpStatus httpStatus;
     private final String code;
