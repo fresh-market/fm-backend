@@ -6,6 +6,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.freshmarket.common.auth.jwt.JwtTokenProvider;
+import com.freshmarket.common.auth.jwt.TokenType;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +32,9 @@ class SecurityAuthorizationIntegrationTest extends IntegrationTestSupport {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private JwtTokenProvider jwtTokenProvider;
 
     @Test
     void 상품_목록은_비로그인도_연다() throws Exception {
@@ -91,6 +96,38 @@ class SecurityAuthorizationIntegrationTest extends IntegrationTestSupport {
     void 어느_도메인도_주장하지_않는_경로는_막힌다() throws Exception {
         mockMvc.perform(get("/v1/admin/categories"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    /*
+     * 관리자 경로에 로그인한 일반 회원(TYPE_MEMBER)이 들어오면 인증은 통과하지만 권한이 없어
+     * 403이어야 한다. 앞의 "어느_도메인도_주장하지_않는_경로는_막힌다"는 비로그인(401)만 확인해서,
+     * "로그인만 하면 관리자 API가 열리는" 진짜 문제는 이 테스트가 아니면 못 잡는다.
+     */
+    @Test
+    void 로그인한_일반_회원은_관리자_카테고리_조회를_할_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(get("/v1/admin/categories").header("Authorization", "Bearer " + memberToken))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void 관리자로_로그인하면_관리자_카테고리_조회를_할_수_있다() throws Exception {
+        String adminToken = jwtTokenProvider.createAccessToken(1L, TokenType.ADMIN, "ROLE_ADMIN");
+
+        mockMvc.perform(get("/v1/admin/categories").header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void 로그인한_일반_회원은_관리자_로트_입고_등록을_할_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(post("/v1/admin/products/1/options/1/lots")
+                        .header("Authorization", "Bearer " + memberToken)
+                        .contentType("application/json")
+                        .content("{}"))
+                .andExpect(status().isForbidden());
     }
 
     @Test
