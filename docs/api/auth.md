@@ -265,7 +265,16 @@ POST   /v1/admin/auth/tokens:refresh
 DELETE /v1/admin/auth/tokens
 ```
 
-**관리자 토큰 재발급과 로그아웃은 현재 관리자 로그인 구현 범위에 포함하지 않는다.**
+**관리자 토큰 재발급은 이번 관리자 로그아웃 구현 범위에 포함하지 않는다.**
+
+관리자 로그아웃 시 현재 관리자 계정의 Refresh Token을 폐기하고, 로그아웃 이전에 발급된 Access Token도 즉시 사용할 수 없도록 처리한다.
+
+로그아웃 대상은 별도의 관리자 ID를 요청받지 않고 현재 인증된 Access Token의 주체를 기준으로 결정한다.
+
+로그아웃 시 `accessToken`, `refreshToken` 쿠키를 모두 `Max-Age=0`으로 만료한다.
+관리자 Refresh Token 쿠키는 발급 시와 동일한 `Path=/v1/admin/auth/`를 사용한다.
+
+정상 처리 시 `204 No Content`를 반환한다.
 
 ```
 Set-Cookie: refreshToken=...; HttpOnly; Secure; SameSite=Strict;
