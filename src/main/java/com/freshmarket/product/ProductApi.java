@@ -9,6 +9,9 @@ public interface ProductApi {
     // productId 소속으로 optionId가 실제 존재하는지 확인한다
     boolean existsOption(Long productId, Long optionId);
 
+    // productId 소속 옵션들의 ID 목록을 반환한다. 빈 리스트면 상품이 없다는 뜻이다
+    List<Long> findOptionIds(Long productId);
+
     // 옵션 하나의 상품명/옵션명/가격/구매가능여부를 가져온다. 없거나 삭제된 상품/옵션이면 빈 값
     Optional<ProductOptionInfo> findOptionInfo(Long productOptionId);
 

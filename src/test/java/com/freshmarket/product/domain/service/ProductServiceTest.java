@@ -9,8 +9,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
 import com.freshmarket.common.response.CursorPageResponse;
-import com.freshmarket.product.domain.dto.PageCursor;
-import com.freshmarket.product.domain.dto.PageTokens;
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.domain.dto.ProductDetailResponse;
 import com.freshmarket.product.domain.dto.ProductListItem;
 import com.freshmarket.product.domain.dto.ProductSearchCondition;

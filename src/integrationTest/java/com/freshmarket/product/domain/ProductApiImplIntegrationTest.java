@@ -64,10 +64,13 @@ class ProductApiImplIntegrationTest extends IntegrationTestSupport {
 
         // then
         assertThat(result).isPresent();
+        assertThat(result.get().productId()).isEqualTo(product.getId());
+        assertThat(result.get().categoryId()).isEqualTo(categoryId);
         assertThat(result.get().productName()).isEqualTo("감귤");
         assertThat(result.get().optionName()).isEqualTo("1kg");
         assertThat(result.get().price()).isEqualTo(12900);
         assertThat(result.get().purchasable()).isTrue();
+        assertThat(result.get().saleAvailableDaysFromExpiry()).isEqualTo(3);
     }
 
     @Test
