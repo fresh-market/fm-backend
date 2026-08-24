@@ -68,8 +68,11 @@ public class HttpBodyLoggingFilter extends OncePerRequestFilter {
     // 값 부분을 별도 캡처 그룹(3번)으로 빼서 PiiMasker.redact()에 그대로 넘긴다 — REDACTED 리터럴을
     // 여기 직접 하드코딩하면 마스킹 문자열이 필요할 때마다 여러 곳에서 따로 관리돼서, 나중에
     // 마스킹 표기를 바꾸거나 정책을 통일할 때 여기만 고치고 끝나지 않는다.
+    // (2026-08-24, SEC-4-05) temporaryPassword(관리자 계정 발급 응답)도 password류와 같은 이유로
+    // 넣는다 — 발급 시점 응답 본문에 평문으로 실리는 유일한 필드라, 빠지면 password를 마스킹하는
+    // 의미가 없어진다(docs/api/admin.md: "임시 비밀번호 원문은 애플리케이션 로그에 기록하지 않는다").
     private static final Pattern SENSITIVE_JSON_FIELD = Pattern.compile(
-            "(?i)(\"(password|accessToken|refreshToken|token|secret|authorization|idToken|clientSecret"
+            "(?i)(\"(password|temporaryPassword|accessToken|refreshToken|token|secret|authorization|idToken|clientSecret"
                     + "|phone|address|recipient|zipcode|roadAddress|detailAddress|name"
                     + "|authorizationCode|state|nonce|code)\"\\s*:\\s*\")([^\"]*)(\")");
 
@@ -78,7 +81,7 @@ public class HttpBodyLoggingFilter extends OncePerRequestFilter {
     // 오는 요청의 민감 키도 동일한 키 목록으로 잡아서 "key=" 뒤 값(다음 "&" 전까지) 전체를 REDACTED 처리한다.
     // SENSITIVE_JSON_FIELD와 같은 키 목록을 쓴다 — 인코딩만 다를 뿐 같은 값이 새면 위험도가 같다.
     private static final Pattern SENSITIVE_FORM_FIELD = Pattern.compile(
-            "(?i)((?:^|&)(?:password|accessToken|refreshToken|token|secret|authorization|idToken|clientSecret"
+            "(?i)((?:^|&)(?:password|temporaryPassword|accessToken|refreshToken|token|secret|authorization|idToken|clientSecret"
                     + "|phone|address|recipient|zipcode|roadAddress|detailAddress|name"
                     + "|authorizationCode|state|nonce|code)=)([^&]*)");
 
