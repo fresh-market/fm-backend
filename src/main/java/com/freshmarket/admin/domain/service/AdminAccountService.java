@@ -10,6 +10,8 @@ import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
 import com.freshmarket.admin.domain.repository.AdminRepository;
 import com.freshmarket.common.logging.PiiMasker;
 import java.security.SecureRandom;
+import java.util.Objects;
+
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -58,12 +60,15 @@ public class AdminAccountService {
             String name,
             AdminRole role) {
 
-        if (issuerAdminId == null || issuerRole == null) {
+        if (issuerAdminId == null || issuerRole == null || issuerRole.isBlank()) {
             throw new AdminException(AdminErrorCode.SUPER_ADMIN_REQUIRED);
         }
         if (!SUPER_ADMIN_AUTHORITY.equals(issuerRole)) {
             throw new AdminException(AdminErrorCode.SUPER_ADMIN_REQUIRED);
         }
+
+        validateIssueInput(loginId, name, role);
+
         if (adminRepository.existsByLoginId(loginId)) {
             throw new AdminException(AdminErrorCode.LOGIN_ID_DUPLICATED);
         }
@@ -93,6 +98,25 @@ public class AdminAccountService {
                 admin.getName(),
                 admin.getRole(),
                 temporaryPassword);
+    }
+
+    private static void validateIssueInput(String loginId, String name, AdminRole role) {
+        Objects.requireNonNull(loginId, "loginId");
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(role, "role");
+
+        if (loginId.isBlank()) {
+            throw new IllegalArgumentException("loginId 는 필수다");
+        }
+        if (loginId.length() > 50) {
+            throw new IllegalArgumentException("loginId 는 50자를 넘을 수 없다: " + loginId.length());
+        }
+        if (name.isBlank()) {
+            throw new IllegalArgumentException("name 은 필수다");
+        }
+        if (name.length() > 50) {
+            throw new IllegalArgumentException("name 은 50자를 넘을 수 없다: " + name.length());
+        }
     }
 
     private String generateTemporaryPassword() {

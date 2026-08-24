@@ -26,6 +26,7 @@ import com.freshmarket.common.logging.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -167,6 +168,11 @@ public class AdminAuthService {
         RefreshTokenRepository.RotateOutcome outcome;
         try {
             outcome = refreshTokenRepository.compareAndRotate(oldRefreshToken, newRefreshToken, refreshTtl);
+        } catch (QueryTimeoutException e) {
+            // 타임아웃은 Redis가 Rotation을 끝냈는지 알 수 없는 "결과 미확정" 상태다.
+            // 이때 DB 폴백까지 수행하면 같은 토큰을 두 번 회전시킬 수 있으므로 재발급을 중단한다.
+            log.error("event=ADMIN_REDIS_CAS_OUTCOME_UNKNOWN — 타임아웃으로 Rotation 결과를 확정할 수 없어 DB 폴백을 수행하지 않는다", e);
+            throw e;
         } catch (DataAccessException e) {
             log.warn("event=ADMIN_REDIS_CAS_FAILED — DB 백업으로 재발급 폴백 시도", e);
             return reissueViaDbFallback(oldRefreshToken, newRefreshToken, refreshTtl, expiresAt);

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -28,6 +29,7 @@ import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import com.freshmarket.common.auth.opaque.TokenHasher;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -274,6 +276,18 @@ class AdminAuthServiceTest {
         verify(refreshTokenRepository).deleteByHash("c".repeat(64));
         verify(accessTokenValidAfterRepository).invalidateBefore(
                 eq("ROLE_ADMIN"), eq(1L), any(), any());
+    }
+
+    @Test
+    void Redis_회전이_타임아웃되면_결과미확정으로_보고_DB_폴백을_수행하지_않는다() {
+        when(refreshTokenRepository.compareAndRotate(eq("old-rt"), anyString(), any()))
+                .thenThrow(new QueryTimeoutException("redis timeout"));
+
+        assertThatThrownBy(() -> adminAuthService.reissue("old-rt"))
+                .isInstanceOf(QueryTimeoutException.class);
+
+        verify(adminRepository, never()).findByRefreshTokenHash(anyString());
+        verify(adminRepository, never()).compareAndSetRefreshToken(anyLong(), anyString(), anyString(), any());
     }
 
     @Test

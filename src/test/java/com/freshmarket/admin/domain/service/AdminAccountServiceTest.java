@@ -94,6 +94,20 @@ class AdminAccountServiceTest {
     }
 
     @Test
+    void 계정발급_입력값이_잘못되면_DB조회전에_거부한다() {
+        assertThatThrownBy(() -> adminAccountService.issue(
+                1L,
+                "ROLE_SUPER_ADMIN",
+                " ",
+                "이관리",
+                AdminRole.ADMIN))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        verify(adminRepository, never()).existsByLoginId(any());
+        verify(adminRepository, never()).saveAndFlush(any(Admin.class));
+    }
+
+    @Test
     void 이미_사용중인_로그인아이디면_계정발급을_거부한다() {
         when(adminRepository.existsByLoginId("admin.lee")).thenReturn(true);
 
