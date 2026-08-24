@@ -50,7 +50,8 @@ public class StockMovement extends BaseImmutableTimeEntity {
     @Column(name = "reason", length = 200)
     private String reason;
 
-    private StockMovement(Long stockLotId, MovementType movementType, int quantity, int qtyBefore, int qtyAfter) {
+    private StockMovement(Long stockLotId, MovementType movementType, int quantity, int qtyBefore, int qtyAfter,
+            Long orderId) {
         validateStockLotId(stockLotId);
         validateMovementType(movementType);
         validateQuantity(quantity);
@@ -59,11 +60,29 @@ public class StockMovement extends BaseImmutableTimeEntity {
         this.quantity = quantity;
         this.qtyBefore = qtyBefore;
         this.qtyAfter = qtyAfter;
+        this.orderId = orderId;
     }
 
     // 신규 입고 이력을 남긴다. 가용 수량이 0에서 입고 수량만큼 늘어난 것으로 기록한다
     public static StockMovement inbound(Long stockLotId, int quantity) {
-        return new StockMovement(stockLotId, MovementType.INBOUND, quantity, 0, quantity);
+        return new StockMovement(stockLotId, MovementType.INBOUND, quantity, 0, quantity, null);
+    }
+
+    // 예약 이력을 남긴다. availableQty가 quantity만큼 줄어든 것으로 기록한다
+    public static StockMovement reserve(Long stockLotId, int quantity, int qtyBefore, Long orderId) {
+        return new StockMovement(stockLotId, MovementType.RESERVE, quantity, qtyBefore, qtyBefore - quantity,
+                orderId);
+    }
+
+    // 확정 이력을 남긴다. availableQty는 예약 시점에 이미 빠졌으므로 앞뒤 수량이 같다
+    public static StockMovement confirm(Long stockLotId, int quantity, int qtyBefore, Long orderId) {
+        return new StockMovement(stockLotId, MovementType.CONFIRM, quantity, qtyBefore, qtyBefore, orderId);
+    }
+
+    // 해제 이력을 남긴다. availableQty가 quantity만큼 복원된 것으로 기록한다
+    public static StockMovement release(Long stockLotId, int quantity, int qtyBefore, Long orderId) {
+        return new StockMovement(stockLotId, MovementType.RELEASE, quantity, qtyBefore, qtyBefore + quantity,
+                orderId);
     }
 
     private static void validateStockLotId(Long stockLotId) {

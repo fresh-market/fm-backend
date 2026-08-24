@@ -1,4 +1,4 @@
-package com.freshmarket.product.domain.dto;
+package com.freshmarket.common.response;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
