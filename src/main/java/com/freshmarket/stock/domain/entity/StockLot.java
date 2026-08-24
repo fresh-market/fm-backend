@@ -68,6 +68,20 @@ public class StockLot extends BaseMutableTimeEntity {
         return new StockLot(requestId, productOptionId, receivedDate, expiryDate, initialQty);
     }
 
+    /*
+     * 소비기한이 지난 로트를 만료 처리한다. AVAILABLE만 전환 대상이다 — 이미 SOLD_OUT/DISPOSED/EXPIRED로
+     * 바뀐 로트는 조용히 건너뛴다(호출부가 배치라 한 건 상태 불일치로 전체를 실패시키지 않는다).
+     * 반환값으로 실제 전환 여부를 알려줘, 호출부가 EXPIRE 이력을 남길지와 응답에 포함할지를 결정한다.
+     */
+    public boolean expire() {
+        if (status != LotStatus.AVAILABLE) {
+            return false;
+        }
+        this.availableQty = 0;
+        this.status = LotStatus.EXPIRED;
+        return true;
+    }
+
     // 요청 식별자가 비어있지 않고 길이 제한을 넘지 않는지 검사한다
     private static void validateRequestId(String requestId) {
         if (requestId == null || requestId.isBlank()) {
