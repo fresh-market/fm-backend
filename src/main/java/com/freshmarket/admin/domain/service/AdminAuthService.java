@@ -184,12 +184,17 @@ public class AdminAuthService {
         }
 
         // Access Token 무효화는 로그아웃의 필수 보안 처리다.
-        // 커트라인 저장에 실패하면 성공으로 처리하지 않고 예외를 호출자에게 전달한다.
-        accessTokenValidAfterRepository.invalidateBefore(
-                role,
-                adminId,
-                LocalDateTime.now(clock),
-                Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs()));
+        // 저장소 구현 예외를 서비스 경계 밖으로 노출하지 않고 관리자 인증 예외로 변환한다.
+        try {
+            accessTokenValidAfterRepository.invalidateBefore(
+                    role,
+                    adminId,
+                    LocalDateTime.now(clock),
+                    Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs()));
+        } catch (DataAccessException e) {
+            log.error("event=ADMIN_ACCESS_TOKEN_INVALIDATION_FAILED role={} adminId={}", role, adminId, e);
+            throw new AdminException(AdminErrorCode.LOGOUT_FAILED, e);
+        }
 
         adminAuditLogRepository.save(
                 AdminAuditLog.of(adminId, "ADMIN_LOGOUT", String.valueOf(adminId), null));

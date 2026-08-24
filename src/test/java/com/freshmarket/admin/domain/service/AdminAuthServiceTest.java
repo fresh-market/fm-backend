@@ -444,8 +444,9 @@ class AdminAuthServiceTest {
 
         // when & then
         assertThatThrownBy(() -> adminAuthService.logout(1L, "ROLE_ADMIN"))
-                .isInstanceOf(DataAccessResourceFailureException.class)
-                .hasMessage("redis down");
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.LOGOUT_FAILED);
     }
 
     /*
