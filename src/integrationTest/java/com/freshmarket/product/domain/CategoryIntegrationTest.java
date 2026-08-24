@@ -6,13 +6,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.freshmarket.config.JpaAuditingConfig;
 import com.freshmarket.product.domain.entity.Category;
 import com.freshmarket.product.domain.repository.CategoryRepository;
-import com.freshmarket.IntegrationTestSupport;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.context.ActiveProfiles;
+import org.testcontainers.containers.MySQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -23,8 +27,13 @@ import org.springframework.dao.DataIntegrityViolationException;
  */
 @Import(JpaAuditingConfig.class)
 // CategoryRepository가 실제 MySQL 스키마의 유니크 제약과 FK 제약을 그대로 지키는지 검증한다
-class CategoryIntegrationTest extends IntegrationTestSupport {
+@Testcontainers
+@ActiveProfiles("integrationTest")
+class CategoryIntegrationTest {
 
+    @Container
+    @ServiceConnection
+    static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4");
 
     @Autowired
     private CategoryRepository categoryRepository;
