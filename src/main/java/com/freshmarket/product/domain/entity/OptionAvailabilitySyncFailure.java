@@ -23,7 +23,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class OptionAvailabilitySyncFailure extends BaseMutableTimeEntity {
 
-    private static final int MAX_RETRY_ATTEMPTS = 5;
+    // (REL-2-07) 재시도 조회 쪽(OptionAvailabilitySyncFailureRepository)도 이 한도로 대상을 거른다
+    public static final int MAX_RETRY_ATTEMPTS = 5;
 
     @Column(name = "product_option_id", nullable = false, unique = true)
     private Long productOptionId;

@@ -1,6 +1,7 @@
 package com.freshmarket.product.domain.batch;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -79,10 +80,16 @@ class OptionAvailabilitySyncRetryServiceTest {
 
     // ---- retryAllPending() ----
 
+    private void stubPage(Long afterId, List<OptionAvailabilitySyncFailure> content) {
+        when(failureRepository.findByIdGreaterThanAndAttemptCountLessThanOrderByIdAsc(eq(afterId), anyInt(), any()))
+                .thenReturn(content);
+    }
+
     @Test
     void 재시도가_성공하면_성공_처리로_넘긴다() {
         OptionAvailabilitySyncFailure failure = newFailure(10L, 11L, true);
-        when(failureRepository.findAll()).thenReturn(List.of(failure));
+        stubPage(0L, List.of(failure));
+        stubPage(10L, List.of());
 
         sut.retryAllPending();
 
@@ -94,7 +101,8 @@ class OptionAvailabilitySyncRetryServiceTest {
     @Test
     void 재시도가_또_실패하면_실패_처리로_넘긴다() {
         OptionAvailabilitySyncFailure failure = newFailure(10L, 11L, true);
-        when(failureRepository.findAll()).thenReturn(List.of(failure));
+        stubPage(0L, List.of(failure));
+        stubPage(10L, List.of());
         doThrow(new RuntimeException("lock timeout")).when(productOptionAvailabilityService)
                 .updateSoldOut(11L, true, OCCURRED_AT);
 
@@ -105,10 +113,11 @@ class OptionAvailabilitySyncRetryServiceTest {
     }
 
     @Test
-    void 미완료_건이_여러개면_전부_처리한다() {
+    void 미완료_건이_한_페이지에_여러개면_전부_처리한다() {
         OptionAvailabilitySyncFailure f1 = newFailure(10L, 11L, true);
         OptionAvailabilitySyncFailure f2 = newFailure(20L, 12L, false);
-        when(failureRepository.findAll()).thenReturn(List.of(f1, f2));
+        stubPage(0L, List.of(f1, f2));
+        stubPage(20L, List.of());
 
         sut.retryAllPending();
 
@@ -116,5 +125,31 @@ class OptionAvailabilitySyncRetryServiceTest {
         verify(productOptionAvailabilityService, times(1)).updateSoldOut(12L, false, OCCURRED_AT);
         verify(outcomeService).markSucceeded(10L);
         verify(outcomeService).markSucceeded(20L);
+    }
+
+    // (PERF-4-03) 페이지 경계를 넘는 미완료 건도 id 커서로 이어서 다음 페이지까지 처리하는지 검증한다
+    @Test
+    void 페이지_경계를_넘는_미완료_건도_커서로_이어서_처리한다() {
+        OptionAvailabilitySyncFailure f1 = newFailure(10L, 11L, true);
+        OptionAvailabilitySyncFailure f2 = newFailure(20L, 12L, false);
+        stubPage(0L, List.of(f1));
+        stubPage(10L, List.of(f2));
+        stubPage(20L, List.of());
+
+        sut.retryAllPending();
+
+        verify(productOptionAvailabilityService).updateSoldOut(11L, true, OCCURRED_AT);
+        verify(productOptionAvailabilityService).updateSoldOut(12L, false, OCCURRED_AT);
+    }
+
+    // (REL-2-07) 재시도 한도를 조회 조건으로 넘기는지 검증한다 — 한도를 넘긴 행은 조회 자체에서 빠진다
+    @Test
+    void 재시도_한도를_조회_조건으로_넘긴다() {
+        stubPage(0L, List.of());
+
+        sut.retryAllPending();
+
+        verify(failureRepository).findByIdGreaterThanAndAttemptCountLessThanOrderByIdAsc(
+                eq(0L), eq(OptionAvailabilitySyncFailure.MAX_RETRY_ATTEMPTS), any());
     }
 }

@@ -4,7 +4,10 @@ import com.freshmarket.product.domain.entity.OptionAvailabilitySyncFailure;
 import com.freshmarket.product.domain.repository.OptionAvailabilitySyncFailureRepository;
 import com.freshmarket.product.domain.service.ProductOptionAvailabilityService;
 import java.time.LocalDateTime;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class OptionAvailabilitySyncRetryService {
 
+    private static final int PAGE_SIZE = 200;
+
     private final OptionAvailabilitySyncFailureRepository failureRepository;
     private final ProductOptionAvailabilityService productOptionAvailabilityService;
     private final OptionAvailabilitySyncOutcomeService outcomeService;
@@ -32,10 +37,23 @@ public class OptionAvailabilitySyncRetryService {
                         OptionAvailabilitySyncFailure.record(productOptionId, soldOut, occurredAt)));
     }
 
+    /*
+     * (PERF-4-03) 미완료 건 전체를 findAll()로 한 번에 메모리에 올리지 않고 id 기준 keyset
+     * 페이지네이션으로 나눠 처리한다. 페이지 안에서 성공한 행이 삭제돼도(markSucceeded) "id > 마지막
+     * 처리 id" 조건이라 다음 페이지 조회가 밀리거나 건너뛰지 않는다.
+     */
     public void retryAllPending() {
-        for (OptionAvailabilitySyncFailure failure : failureRepository.findAll()) {
-            retryOne(failure.getId(), failure.getProductOptionId(), failure.isSoldOut(), failure.getOccurredAt());
-        }
+        Long afterId = 0L;
+        List<OptionAvailabilitySyncFailure> page;
+        Pageable pageable = PageRequest.of(0, PAGE_SIZE);
+        do {
+            page = failureRepository.findByIdGreaterThanAndAttemptCountLessThanOrderByIdAsc(
+                    afterId, OptionAvailabilitySyncFailure.MAX_RETRY_ATTEMPTS, pageable);
+            for (OptionAvailabilitySyncFailure failure : page) {
+                retryOne(failure.getId(), failure.getProductOptionId(), failure.isSoldOut(), failure.getOccurredAt());
+                afterId = failure.getId();
+            }
+        } while (!page.isEmpty());
     }
 
     private void retryOne(Long failureId, Long productOptionId, boolean soldOut, LocalDateTime occurredAt) {
