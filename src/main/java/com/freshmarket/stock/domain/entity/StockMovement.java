@@ -51,7 +51,7 @@ public class StockMovement extends BaseImmutableTimeEntity {
     private String reason;
 
     private StockMovement(Long stockLotId, MovementType movementType, int quantity, int qtyBefore, int qtyAfter,
-            Long orderId) {
+            Long orderId, Long adminId, DisposalReason disposalReason, String reason) {
         validateStockLotId(stockLotId);
         validateMovementType(movementType);
         validateQuantity(quantity);
@@ -61,28 +61,45 @@ public class StockMovement extends BaseImmutableTimeEntity {
         this.qtyBefore = qtyBefore;
         this.qtyAfter = qtyAfter;
         this.orderId = orderId;
+        this.adminId = adminId;
+        this.disposalReason = disposalReason;
+        this.reason = reason;
     }
 
     // 신규 입고 이력을 남긴다. 가용 수량이 0에서 입고 수량만큼 늘어난 것으로 기록한다
     public static StockMovement inbound(Long stockLotId, int quantity) {
-        return new StockMovement(stockLotId, MovementType.INBOUND, quantity, 0, quantity, null);
+        return new StockMovement(stockLotId, MovementType.INBOUND, quantity, 0, quantity, null, null, null, null);
     }
 
     // 예약 이력을 남긴다. availableQty가 quantity만큼 줄어든 것으로 기록한다
     public static StockMovement reserve(Long stockLotId, int quantity, int qtyBefore, Long orderId) {
         return new StockMovement(stockLotId, MovementType.RESERVE, quantity, qtyBefore, qtyBefore - quantity,
-                orderId);
+                orderId, null, null, null);
     }
 
     // 확정 이력을 남긴다. availableQty는 예약 시점에 이미 빠졌으므로 앞뒤 수량이 같다
     public static StockMovement confirm(Long stockLotId, int quantity, int qtyBefore, Long orderId) {
-        return new StockMovement(stockLotId, MovementType.CONFIRM, quantity, qtyBefore, qtyBefore, orderId);
+        return new StockMovement(stockLotId, MovementType.CONFIRM, quantity, qtyBefore, qtyBefore, orderId, null,
+                null, null);
     }
 
     // 해제 이력을 남긴다. availableQty가 quantity만큼 복원된 것으로 기록한다
     public static StockMovement release(Long stockLotId, int quantity, int qtyBefore, Long orderId) {
         return new StockMovement(stockLotId, MovementType.RELEASE, quantity, qtyBefore, qtyBefore + quantity,
-                orderId);
+                orderId, null, null, null);
+    }
+
+    /*
+     * 폐기 이력을 남긴다. availableQty가 quantity만큼 줄어든 것으로 기록한다.
+     * chk_movement_disposal(DB)이 최종 방어하지만, 엔티티도 스스로 지킨다(EXPIRY_BEFORE_RECEIVED와
+     * 같은 패턴) — adminId/disposalReason 둘 다 필수다.
+     */
+    public static StockMovement dispose(Long stockLotId, int quantity, int qtyBefore, int qtyAfter, Long adminId,
+            DisposalReason disposalReason, String reason) {
+        validateAdminId(adminId);
+        validateDisposalReason(disposalReason);
+        return new StockMovement(stockLotId, MovementType.DISPOSE, quantity, qtyBefore, qtyAfter, null, adminId,
+                disposalReason, reason);
     }
 
     private static void validateStockLotId(Long stockLotId) {
@@ -100,6 +117,18 @@ public class StockMovement extends BaseImmutableTimeEntity {
     private static void validateQuantity(int quantity) {
         if (quantity <= 0) {
             throw new IllegalArgumentException("quantity 는 0보다 커야 한다: " + quantity);
+        }
+    }
+
+    private static void validateAdminId(Long adminId) {
+        if (adminId == null) {
+            throw new IllegalArgumentException("adminId 는 필수다");
+        }
+    }
+
+    private static void validateDisposalReason(DisposalReason disposalReason) {
+        if (disposalReason == null) {
+            throw new IllegalArgumentException("disposalReason 은 필수다");
         }
     }
 }
