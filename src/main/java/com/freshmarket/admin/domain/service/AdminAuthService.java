@@ -36,8 +36,12 @@ import org.springframework.transaction.annotation.Transactional;
  * 5회 실패 시 30분 잠금은 이번 범위에서 뺐다.
  * (admin 테이블에 fail_count, locked_until 컬럼이 없다. auth.md "정하지 못한 것" 절에도 같은 이유로 보류돼 있다.)
  *
- * JWT 서명·Access Token 발급은 member/admin이 공유하는 common.auth.jwt.JwtTokenProvider를 사용한다.
- * Refresh Token도 member와 같은 공통 RefreshTokenRepository(Redis)에 저장하며, 재발급 시 Rotation은 compareAndRotate()로 처리한다.
+ * (merge: feat/member-auth와 합치며 추가) JWT 서명·액세스 토큰 발급은 member/admin이 공유하는
+ * common.auth.jwt.JwtTokenProvider를 그대로 쓴다 — admin이 따로 두던 common.security.JwtTokenProvider와
+ * 거의 동일한 구현을 독립적으로 만들었던 것이라, 중복을 없애고 이쪽으로 통합했다.
+ * 액세스 토큰 유효기간도 이제 JwtTokenProvider가 갖고 있어(jwt.access-token-validity-ms) 별도 파라미터가 필요 없다.
+ * 리프레시 토큰은 member와 같은 공통 RefreshTokenRepository(Redis)에 저장한다.
+ * 로그인은 최초 발급만 담당하고, Rotation은 별도 재발급 API에서 compareAndRotate()로 처리한다.
  */
 @Slf4j
 @Service
@@ -64,7 +68,7 @@ public class AdminAuthService {
             AccessTokenValidAfterRepository accessTokenValidAfterRepository,
             AdminAuditLogRepository adminAuditLogRepository,
             Clock clock,
-            @Value("${admin.refresh-token-validity-seconds}") long refreshTokenValiditySeconds) {
+            @Value("${ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS:86400}") long refreshTokenValiditySeconds) {
         this.adminRepository = adminRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;

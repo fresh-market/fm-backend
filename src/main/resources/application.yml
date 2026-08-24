@@ -143,15 +143,10 @@ cdn:
 
 jwt:
   secret: "${JWT_SECRET}"
-  access-token-validity-ms: 1800000
+  access-token-validity-ms: "${JWT_ACCESS_VALIDITY_MS:1800000}"
   refresh-token-validity-ms: "${JWT_REFRESH_VALIDITY_MS:1209600000}"
   cookie:
-    secure: false
-
-admin:
-  # 관리자 Refresh Token은 회원(14일)과 별도로 1일만 유지한다.
-  # Refresh Token은 opaque이므로 관리자 TTL을 jwt 하위에 두지 않는다.
-  refresh-token-validity-seconds: "${ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS:86400}"
+    secure: "${JWT_COOKIE_SECURE:false}"
 
 kakao:
   app-id: "${KAKAO_APP_ID}"

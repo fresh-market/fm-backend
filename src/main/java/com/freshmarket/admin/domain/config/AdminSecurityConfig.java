@@ -12,7 +12,7 @@ import org.springframework.security.access.hierarchicalroles.RoleHierarchy;
 import org.springframework.security.access.hierarchicalroles.RoleHierarchyImpl;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.crypto.factory.PasswordEncoderFactories;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
@@ -25,6 +25,10 @@ import org.springframework.security.web.servlet.util.matcher.PathPatternRequestM
  * ProductSecurityConfig 주석에 있듯 "/v1/admin/**" 전체를 한 도메인이 갖지 않는다
  * (예: AdminCategoryController는 "/v1/admin/categories"를 쓰지만 product 도메인 소속이다).
  * 이 체인은 admin 도메인이 실제로 소유한 로그인/인증 경로만 잡는다.
+ *
+ * 관리자 로그인은 회원과 달리 DB의 비밀번호를 BCrypt로 검증한다.
+ * 요구사항의 "비밀번호 5회 오입력 시 30분 잠금" 정책은 현재 구현 범위에서 제외했으며,
+ * 관리자 전용 Rate Limit도 별도 요구사항으로 두지 않았으므로 이번 범위에서는 추가하지 않는다.
  *
  * CSRF: 공통 기본값(ApiSecurityDefaults)은 CSRF를 꺼둔다 — 회원 쪽은 아직 정하지
  * 못한 상태라서다(docs/api/auth.md "정하지 못한 것" 절).
@@ -79,6 +83,6 @@ class AdminSecurityConfig {
     // 관리자 비밀번호 해싱 전용. 회원은 카카오에 인증을 위임하므로 비밀번호 자체가 없다
     @Bean
     public PasswordEncoder passwordEncoder() {
-        return PasswordEncoderFactories.createDelegatingPasswordEncoder();
+        return new BCryptPasswordEncoder();
     }
 }
