@@ -1,0 +1,57 @@
+# 이 파일을 같은 폴더의 application-local.yml 로 복사해서 값을 채운다.
+#
+#   cp src/main/resources/application-local.yml.example src/main/resources/application-local.yml
+#
+# application-local.yml 은 .gitignore 가 막는다. 실제 값이 든 파일은 올리지 않는다.
+#
+# 따로 켤 것은 없다. application.yml 이 기본 프로필을 local 로 둔다.
+# 배포와 테스트는 프로필을 직접 주므로 그때는 이 파일이 안 읽힌다.
+#
+# .env 와 헷갈리지 않는다. .env 는 Docker Compose 만 읽어 컨테이너를 어떻게 띄울지 정하고,
+# 이 파일은 Spring 이 읽어 앱이 쓸 값을 정한다. 자세한 것은 docs/configuration.md 에 있다.
+
+# 아래는 application.yml 이 기본값 없이 "${VAR}" 로 둔 키다.
+# 전부 비밀값이라 기본값을 두지 않는다. 값이 없으면 앱이 아예 뜨지 않는다.
+
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            # 카카오 개발자 콘솔 > 내 애플리케이션 > 앱 키 > REST API 키
+            client-id: ""
+            # 카카오 개발자 콘솔 > 카카오 로그인 > 보안 > Client Secret
+            client-secret: ""
+
+jwt:
+  # HS256 서명 키라 32바이트 이상이어야 한다. 아무 긴 문자열이어도 되며 로컬 값은 공유하지 않는다.
+  secret: ""
+
+kakao:
+  # 카카오 개발자 콘솔 > 내 애플리케이션 > 앱 설정 > 요약 정보 > 앱 ID
+  app-id: ""
+  # 카카오 개발자 콘솔 > 내 애플리케이션 > 앱 키 > Admin 키
+  admin-key: ""
+
+# 아래는 안 적어도 된다. 기본값이 compose 구성에 맞고 bootRun 은 컨테이너 값으로 그마저 덮는다.
+# compose 를 안 쓰고 다른 DB 에 붙을 때만 푼다.
+#
+# spring:
+#   datasource:
+#     url: "jdbc:mysql://localhost:13306/freshmarket"
+#     username: "freshmarket"
+#     password: "freshmarket"
+
+# 카카오 콘솔에 등록한 리다이렉트 주소가 기본값과 다를 때만 푼다.
+# 기본값은 http://localhost:5173/oauth/callback 이다.
+# 빈 문자열로 두면 안 된다. 여기 있는 키는 값이 무엇이든 application.yml 의 기본값을 이기므로,
+# ""로 남기면 그 기본값이 지워져 ClientRegistration 이 기동을 막는다.
+#
+# spring:
+#   security:
+#     oauth2:
+#       client:
+#         registration:
+#           kakao:
+#             redirect-uri: "http://localhost:5173/oauth/callback"

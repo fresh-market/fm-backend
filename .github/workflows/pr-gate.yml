@@ -112,5 +112,12 @@ jobs:
     needs: build
     if: github.base_ref == 'develop'
     uses: fresh-market/.github/.github/workflows/llm-verify.yml@main
+    with:
+      # 다른 저장소 항목까지 판정한다.
+      # 끄면 backend 275건만 보고 common 의 품질 속성과 infra 의 인프라 제약은
+      # 아무도 강제로 보지 않는다. 켜면 484건이고 호출이 1회에서 2회로 는다.
+      full: true
     secrets:
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # 갱신 잡이 조립해 둔 CLI 인증 파일이다. 없으면 API 키로 떨어진다.
+      CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

@@ -13,6 +13,7 @@ import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabas
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -27,6 +28,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Import(JpaAuditingConfig.class)
 // CategoryRepository가 실제 MySQL 스키마의 유니크 제약과 FK 제약을 그대로 지키는지 검증한다
 @Testcontainers
+@ActiveProfiles("integrationTest")
 class CategoryIntegrationTest {
 
     @Container

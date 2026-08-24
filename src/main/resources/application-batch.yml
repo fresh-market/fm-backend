@@ -1,0 +1,22 @@
+# 배치 전용 인스턴스 설정이다. prod 와 함께 켠다.
+#
+#   --spring.profiles.active=prod,batch
+#
+# 스케줄러는 이 프로필에서만 돈다 (INF-1-10).
+# 앱 인스턴스는 prod 만 켜서 스케줄러를 재운다. 분산 락이 없어 중복 실행을 막을 다른 수단이 없다.
+
+spring:
+  datasource:
+    hikari:
+      # 커넥션 예산에서 배치 몫이 10 이다 (앱과DB 장애대응구조 4.5절).
+      # max_connections 약 60 에서 앱 2대 20, 배치 10, 익스포터와 운영자 몫을 빼면 여유가 25% 다
+      maximum-pool-size: 10
+      minimum-idle: 10
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # 배치는 ALB 에 붙지 않아 readiness 를 볼 사람이 없다.
+        # Prometheus 스크랩과 프로세스 생존 확인만 남긴다
+        include: health, prometheus

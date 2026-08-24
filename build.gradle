@@ -58,11 +58,44 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
 
     /*
+     * ALB 대상 그룹이 /actuator/health/readiness 를 찌르고 Prometheus 가 /actuator/prometheus 를 긁는다.
+     * 둘 다 인프라 확정값이라 이 의존성이 없으면 인스턴스가 healthy 가 되지 않는다.
+     */
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // 버전은 Boot 4.0.5 의 BOM 이 관리한다.
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+
+    /*
      * 인증 방식은 아직 확정 항목이 아니다.
      * infra 의 기술스택 확정문서 8장이 "프로젝트 적용 시 채워야 할 항목" 으로 남겨 두었다.
      * 지금은 서버 세션을 두지 않는 구성으로 시작하고, 확정되면 SecurityConfig 를 그에 맞춘다.
      */
     implementation 'org.springframework.boot:spring-boot-starter-security'
+
+    /*
+     * 회원 로그인(카카오 OIDC). ClientRegistration/ClientRegistrationRepository는
+     * spring-security-oauth2-client가, id_token 검증(NimbusJwtDecoder, JwtException 등)은
+     * spring-security-oauth2-jose가 준다 — 이 스타터가 둘 다 전이 의존성으로 끌고 온다.
+     * (branch 전환 중 스태시가 꼬이면서 한 번 빠졌던 적이 있어 다시 추가함 — 2026-08-18)
+     */
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
+
+    /*
+     * 로그인 state/nonce(KakaoLoginStateRepository), access token valid-after 커트라인,
+     * refresh token rotation(CAS Lua 스크립트)이 전부 Redis에 있다.
+     */
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+
+    /*
+     * JwtTokenProvider가 io.jsonwebtoken(JJWT) 0.12.x 플루언트 API(Jwts.builder()...signWith(),
+     * Jwts.parser()...parseSignedClaims())를 쓴다. api는 컴파일 타임에, impl/jackson은 런타임에만
+     * 필요하다(서명 클레임 직렬화에 Jackson을 쓴다).
+     * (branch 전환 중 스태시가 꼬이면서 build.gradle에서 통째로 빠졌던 걸 다시 추가함 — 2026-08-18)
+     */
+    implementation 'io.jsonwebtoken:jjwt-api:0.12.7'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.7'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.7'
 
     /*
      * Boot 4 는 자동설정을 기술별 모듈로 쪼갰다.
@@ -77,6 +110,25 @@ dependencies {
      * 3.0.3 이 Boot 4.0.5 를 parent 로 빌드된 것이다.
      */
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.3'
+
+    /*
+     * 외부 API 호출 로깅(ExternalApiLoggingExchangeFilter, TraceIdExchangeFilter)이
+     * WebClient의 ExchangeFilterFunction을 구현한다. MVC 서버라도 이 타입을 쓰려면
+     * 리액티브 웹 모듈이 클래스패스에 있어야 한다.
+     */
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+
+    /*
+     * @Scheduled 메서드 공통 로깅(SchedulerLoggingAspect)이 커스텀 애노테이션
+     * 포인트컷(@annotation(...))을 쓴다. spring-aop 자체는 spring-data-jpa가
+     * (→ @Transactional 프록시) 전이 의존성으로 이미 들여오지만, AspectJ 애노테이션
+     * 스타일 포인트컷을 실제로 짜려면 aspectjweaver가 클래스패스에 있어야 한다 —
+     * 없으면 @Aspect 빈이 등록만 되고 조용히 아무 효과도 내지 않는다.
+     */
+    implementation 'org.aspectj:aspectjweaver:1.9.22'
+
+    // logback-spring.xml의 prod 프로필이 JSON 라인으로 로그를 남긴다(로그 수집기가 파싱하기 쉽도록).
+    implementation 'net.logstash.logback:logstash-logback-encoder:8.0'
 
     /*
      * QueryDSL 버전은 Boot 4.0.5 의 BOM 이 5.1.0 으로 관리한다.
@@ -125,15 +177,45 @@ dependencies {
     integrationTestImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     integrationTestImplementation 'org.testcontainers:testcontainers-mysql'
 
-    /*
-     * 검증용 엔티티가 이 소스셋에 있으므로 APT 를 여기에도 건다.
-     * 걸지 않으면 Q클래스가 생성되지 않아 컴파일이 깨진다.
-     */
+    /* 검증용 엔티티가 이 소스셋에 있으므로 APT 를 여기에도 건다.
+       걸지 않으면 Q클래스가 생성되지 않아 컴파일이 깨진다. */
     integrationTestCompileOnly 'org.projectlombok:lombok'
     integrationTestAnnotationProcessor 'org.projectlombok:lombok'
     integrationTestAnnotationProcessor 'com.querydsl:querydsl-apt::jakarta'
     integrationTestAnnotationProcessor 'jakarta.annotation:jakarta.annotation-api'
     integrationTestAnnotationProcessor 'jakarta.persistence:jakarta.persistence-api'
+
+}
+
+/*
+ * bootJar 만 만든다.
+ * 의존성이 빠진 plain jar 가 함께 있으면 Dockerfile 의 COPY *.jar 가 무엇을 담을지 글롭 순서에 좌우된다.
+ * 잘못 담기면 기동 시점에야 드러난다.
+ */
+tasks.named('jar') {
+    enabled = false
+}
+
+/*
+ * bootJar 만 만든다.
+ * 의존성이 빠진 plain jar 가 함께 있으면 Dockerfile 의 COPY *.jar 가 무엇을 담을지 글롭 순서에 좌우된다.
+ * 잘못 담기면 기동 시점에야 드러난다.
+ */
+/*
+ * 로컬 비밀값이 배포 산출물에 실리지 않게 막는다.
+ * application-local.yml 은 카카오 키와 JWT 서명 키를 담고 src/main/resources 아래에 있어서,
+ * 두면 jar 에 그대로 들어가고 컨테이너 이미지까지 따라간다.
+ * .gitignore 는 커밋만 막지 빌드는 못 막는다.
+ *
+ * processResources 가 아니라 bootJar 에서 뺀다.
+ * 이 파일은 클래스패스에 있어야 bootRun 이 읽으므로 build/resources/main 에는 남겨야 한다.
+ */
+tasks.named('bootJar') {
+    exclude '**/application-local.yml'
+}
+
+tasks.named('jar') {
+    enabled = false
 }
 
 tasks.named('test') {
@@ -147,6 +229,12 @@ tasks.register('integrationTest', Test) {
     classpath = sourceSets.integrationTest.runtimeClasspath
     useJUnitPlatform()
     shouldRunAfter tasks.named('test')
+
+    /*
+     * application-integrationTest.yml 을 켠다.
+     * IDE 에서 테스트 클래스를 직접 실행하면 이 설정이 안 걸리므로 클래스에도 @ActiveProfiles 를 붙여 둔다.
+     */
+    systemProperty 'spring.profiles.active', 'integrationTest'
 }
 
 jacoco {

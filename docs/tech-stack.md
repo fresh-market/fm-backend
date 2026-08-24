@@ -6,7 +6,7 @@
 이 저장소가 쓰는 언어, 프레임워크, 라이브러리와 그 선정 근거를 정리한다.
 `build.gradle` 을 쓰거나 고칠 때 여기를 본다.
 
-**인프라가 강제하는 것은 여기 없다.** MySQL 8.4 와 Redis 7.0 은 RDS 와 ElastiCache 가 지원하는 버전에서 정해진 것이라
+**인프라가 강제하는 것은 여기 없다.** MySQL 8.4 와 Valkey 9.0 은 RDS 와 ElastiCache 가 지원하는 버전에서 정해진 것이라
 `fresh-market/fm-infra` 의 [기술 스택 확정 문서](https://github.com/fresh-market/fm-infra/blob/main/docs/system-design/%EB%B0%B1%EC%97%94%EB%93%9C%EA%B3%B5%ED%86%B5_%EA%B8%B0%EC%88%A0%EC%8A%A4%ED%83%9D_%ED%99%95%EC%A0%95%EB%AC%B8%EC%84%9C.md) 2.3절이 갖는다.
 
 빌드 게이트(커버리지, 정적 분석)는 점검 항목과 근거를 따로 두었다.

@@ -22,10 +22,15 @@ public class Product extends BaseMutableTimeEntity {
 
     private static final int PRODUCT_CODE_MAX_LENGTH = 50;
     private static final int NAME_MAX_LENGTH = 255;
+    private static final int REQUEST_ID_MAX_LENGTH = 100;
 
     // 자동생성 상품코드. 소프트딜리트해도 이 값은 다시 쓰지 않는다
     @Column(name = "product_code", nullable = false, length = PRODUCT_CODE_MAX_LENGTH)
     private String productCode;
+
+    // 재시도 감지용 요청 식별자(클라이언트 생성). 같은 값으로 다시 등록 요청이 오면 새로 만들지 않는다 (API-5-07, AIP-155)
+    @Column(name = "request_id", nullable = false, length = REQUEST_ID_MAX_LENGTH)
+    private String requestId;
 
     // 진열되는 상품명
     @Column(name = "name", nullable = false, length = NAME_MAX_LENGTH)
@@ -62,14 +67,16 @@ public class Product extends BaseMutableTimeEntity {
     private LocalDateTime deletedAt;
 
     // 검증을 모으는 유일한 생성 경로. 모든 팩터리가 여기로 들어온다
-    private Product(String productCode, String name, Long categoryId, Long supplierId,
+    private Product(String requestId, String productCode, String name, Long categoryId, Long supplierId,
                     StorageType storageType, int saleAvailableDaysFromExpiry, String description) {
+        validateRequestId(requestId);
         validateProductCode(productCode);
         validateName(name);
         validateCategoryId(categoryId);
         validateSupplierId(supplierId);
         validateStorageType(storageType);
         validateSaleAvailableDaysFromExpiry(saleAvailableDaysFromExpiry);
+        this.requestId = requestId;
         this.productCode = productCode;
         this.name = name;
         this.categoryId = categoryId;
@@ -81,24 +88,35 @@ public class Product extends BaseMutableTimeEntity {
     }
 
     // 설명 없이 상품을 등록한다
-    public static Product register(String productCode, String name, Long categoryId,
+    public static Product register(String requestId, String productCode, String name, Long categoryId,
                                    Long supplierId, StorageType storageType,
                                    int saleAvailableDaysFromExpiry) {
-        return new Product(productCode, name, categoryId, supplierId,
+        return new Product(requestId, productCode, name, categoryId, supplierId,
                 storageType, saleAvailableDaysFromExpiry, null);
     }
 
     // 설명을 함께 붙여 상품을 등록한다
-    public static Product register(String productCode, String name, Long categoryId,
+    public static Product register(String requestId, String productCode, String name, Long categoryId,
                                    Long supplierId, StorageType storageType,
                                    int saleAvailableDaysFromExpiry, String description) {
-        return new Product(productCode, name, categoryId, supplierId,
+        return new Product(requestId, productCode, name, categoryId, supplierId,
                 storageType, saleAvailableDaysFromExpiry, description);
     }
 
     // 삭제된 상품인지 본다. 조회에서 목록 노출 여부를 가른다
     public boolean isDeleted() {
         return this.deletedAt != null;
+    }
+
+    // 요청 식별자가 비어있지 않고 길이 제한을 넘지 않는지 검사한다
+    private static void validateRequestId(String requestId) {
+        if (requestId == null || requestId.isBlank()) {
+            throw new IllegalArgumentException("requestId 는 필수다");
+        }
+        if (requestId.length() > REQUEST_ID_MAX_LENGTH) {
+            throw new IllegalArgumentException(
+                    "requestId 는 " + REQUEST_ID_MAX_LENGTH + "자를 넘을 수 없다: " + requestId.length());
+        }
     }
 
     // 상품코드가 비어있지 않고 길이 제한을 넘지 않는지 검사한다

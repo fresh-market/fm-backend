@@ -1,0 +1,10 @@
+# jar 만 넣는다. 나머지는 이미지 크기와 빌드 캐시만 버린다.
+.git
+.github
+docs
+src
+gradle
+build/classes
+build/tmp
+build/reports
+*.md

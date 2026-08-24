@@ -16,7 +16,7 @@ GET /v1/products?categoryId={id}&sort=SALES_DESC&pageSize=20
 |---|---|---|
 | `categoryId` | 카테고리 | 전체 |
 | `sort` | `SALES_DESC`, `CREATED_DESC`, `PRICE_ASC`, `PRICE_DESC` | `SALES_DESC` |
-| `minPrice`, `maxPrice` | 정수 | 없음 |
+| `minPriceKrw`, `maxPriceKrw` | 정수(원) | 없음 |
 
 **삭제된 상품은 나오지 않는다.** 품절은 목록에서 빼지 않고 표시만 한다.
 
@@ -27,7 +27,7 @@ GET /v1/products?categoryId={id}&sort=SALES_DESC&pageSize=20
       "productId": 12,
       "name": "제주 감귤 1kg",
       "category": { "categoryId": 4, "name": "과일" },
-      "minPrice": 12900,
+      "minPriceKrw": 12900,
       "saleStatus": "ON_SALE",
       "soldOut": false,
       "mainImageUrl": "https://cdn.example.com/products/ab/3f9c.jpg"
@@ -80,7 +80,7 @@ GET /v1/products/{productId}
   "storageType": "COLD",
   "saleStatus": "ON_SALE",
   "options": [
-    { "productOptionId": 31, "name": "1kg", "price": 12900, "saleStatus": "ON_SALE", "soldOut": false }
+    { "productOptionId": 31, "name": "1kg", "priceKrw": 12900, "saleStatus": "ON_SALE", "soldOut": false }
   ],
   "images": [
     { "productImageId": 88, "url": "https://...", "isMain": true, "sortOrder": 0 }
@@ -202,6 +202,7 @@ POST /v1/admin/products
 ```json
 {
   "name": "제주 감귤 1kg",
+  "requestId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
   "categoryId": 4,
   "supplierId": 2,
   "storageType": "COLD",
@@ -214,6 +215,7 @@ POST /v1/admin/products
 | 필드 | 필수 | 제약 |
 |---|---|---|
 | `name` | O | 255자 이하 |
+| `requestId` | O | 클라이언트가 생성하는 요청 식별자. 100자 이하 |
 | `categoryId` | O | 존재하는 카테고리 |
 | `supplierId` | O | 존재하는 공급처 |
 | `storageType` | O | `ROOM`, `COLD`, `FROZEN` |
@@ -222,6 +224,7 @@ POST /v1/admin/products
 
 **상품코드는 서버가 만든다** (`API-2-06`). 클라이언트가 보내지 않는다.
 **재고와 소비기한은 여기서 받지 않는다.** 로트 입고로만 들어온다.
+**같은 `requestId`로 재시도하면 새로 등록하지 않고 최초 등록 결과를 그대로 돌려준다** (`API-5-07`, `AIP-155`).
 
 ### 수정과 삭제
 
