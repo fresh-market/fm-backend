@@ -265,7 +265,8 @@ POST   /v1/admin/auth/tokens:refresh
 DELETE /v1/admin/auth/tokens
 ```
 
-**관리자 토큰 재발급과 로그아웃은 현재 관리자 로그인 구현 범위에 포함하지 않는다.**
+**관리자 인증은 로그인뿐 아니라 토큰 재발급과 로그아웃도 지원한다.**
+재발급 시 Refresh Token Rotation을 적용하며, 로그아웃 시 Refresh Token을 폐기하고 Access Token도 즉시 사용할 수 없도록 처리한다.
 
 ```
 Set-Cookie: refreshToken=...; HttpOnly; Secure; SameSite=Strict;
