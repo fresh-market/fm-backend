@@ -197,6 +197,13 @@ class StockApiImplTest {
     }
 
     @Test
+    void 요청이_null이면_예약을_거부한다() {
+        // when, then
+        assertThatThrownBy(() -> stockApiImpl.reserve(null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void 수량이_0_이하면_예약_요청_자체가_잘못됐다고_본다() {
         // when, then
         assertThatThrownBy(() -> stockApiImpl.reserve(new StockReservationRequest(9001L,
@@ -213,6 +220,13 @@ class StockApiImplTest {
 
         // then
         verify(stockAllocationRepository, never()).findByOrderItemId(any());
+    }
+
+    @Test
+    void 요청이_null이면_확정을_거부한다() {
+        // when, then
+        assertThatThrownBy(() -> stockApiImpl.confirm(null))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -268,6 +282,13 @@ class StockApiImplTest {
 
         // then
         verify(stockAllocationRepository, never()).findByOrderItemIdInAndStatus(any(), any());
+    }
+
+    @Test
+    void 요청이_null이면_해제를_거부한다() {
+        // when, then
+        assertThatThrownBy(() -> stockApiImpl.release(null))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

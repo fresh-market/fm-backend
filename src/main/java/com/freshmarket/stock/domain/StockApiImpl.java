@@ -50,6 +50,9 @@ class StockApiImpl implements StockApi {
      */
     @Override
     public void reserve(StockReservationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request 는 필수다");
+        }
         if (request.items() == null) {
             return;
         }
@@ -122,6 +125,9 @@ class StockApiImpl implements StockApi {
      */
     @Override
     public void confirm(StockOrderItemsRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request 는 필수다");
+        }
         if (request.orderItemIds() == null || request.orderItemIds().isEmpty()) {
             return;
         }
@@ -145,6 +151,9 @@ class StockApiImpl implements StockApi {
      */
     @Override
     public void release(StockOrderItemsRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request 는 필수다");
+        }
         if (request.orderItemIds() == null || request.orderItemIds().isEmpty()) {
             return;
         }
