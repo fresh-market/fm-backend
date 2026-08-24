@@ -1,6 +1,7 @@
 package com.freshmarket.product.domain.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.when;
 
 import com.freshmarket.product.domain.entity.ProductOption;
@@ -41,6 +42,7 @@ class ProductOptionAvailabilityServiceTest {
         when(productOptionRepository.findById(999L)).thenReturn(Optional.empty());
 
         // when, then — 예외 없이 조용히 넘어간다
-        productOptionAvailabilityService.updateSoldOut(999L, false);
+        assertThatCode(() -> productOptionAvailabilityService.updateSoldOut(999L, false))
+                .doesNotThrowAnyException();
     }
 }
