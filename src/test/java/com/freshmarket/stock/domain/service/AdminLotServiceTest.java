@@ -10,8 +10,10 @@ import static org.mockito.Mockito.when;
 import com.freshmarket.product.OptionAvailabilityChangedEvent;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
+import com.freshmarket.stock.domain.dto.AdminLotDisposeRequest;
 import com.freshmarket.stock.domain.dto.AdminLotListResponse;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
+import com.freshmarket.stock.domain.entity.DisposalReason;
 import com.freshmarket.stock.domain.entity.LotStatus;
 import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.exception.StockErrorCode;
@@ -313,6 +315,104 @@ class AdminLotServiceTest {
                 .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.OPTION_NOT_FOUND);
         verify(stockLotRepository, never()).findByProductOptionIdInOrderByExpiryDateAsc(any());
         verify(stockLotRepository, never()).findByProductOptionIdInAndStatusOrderByExpiryDateAsc(any(), any());
+    }
+
+    // ---- dispose() ----
+
+    @Test
+    void 부분_폐기하면_남은_수량만큼_유지되고_품절_이벤트는_안_뜬다() {
+        // given
+        StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 100);
+        ReflectionTestUtils.setField(lot, "id", 77L);
+        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest(30, DisposalReason.DAMAGED, "파손분");
+
+        // when
+        AdminLotResponse result = adminLotService.dispose(77L, 5L, request);
+
+        // then
+        assertThat(result.availableQty()).isEqualTo(70);
+        assertThat(result.status()).isEqualTo("AVAILABLE");
+        verify(stockMovementRepository).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void 전량_폐기하고_남은_가용_로트가_없으면_품절_이벤트를_발행한다() {
+        // given
+        StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 100);
+        ReflectionTestUtils.setField(lot, "id", 77L);
+        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
+        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest(100, DisposalReason.EXPIRED, null);
+
+        // when
+        AdminLotResponse result = adminLotService.dispose(77L, 5L, request);
+
+        // then
+        assertThat(result.availableQty()).isEqualTo(0);
+        assertThat(result.status()).isEqualTo("DISPOSED");
+        ArgumentCaptor<OptionAvailabilityChangedEvent> eventCaptor =
+                ArgumentCaptor.forClass(OptionAvailabilityChangedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().productOptionId()).isEqualTo(31L);
+        assertThat(eventCaptor.getValue().soldOut()).isTrue();
+    }
+
+    @Test
+    void 전량_폐기해도_다른_가용_로트가_있으면_품절_이벤트를_발행하지_않는다() {
+        // given
+        StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 100);
+        ReflectionTestUtils.setField(lot, "id", 77L);
+        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
+        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(true);
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest(100, DisposalReason.EXPIRED, null);
+
+        // when
+        adminLotService.dispose(77L, 5L, request);
+
+        // then
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void 존재하지_않는_로트를_폐기하면_실패한다() {
+        // given
+        when(stockLotRepository.findByIdForUpdate(999L)).thenReturn(Optional.empty());
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest(10, DisposalReason.DAMAGED, null);
+
+        // when, then
+        assertThatThrownBy(() -> adminLotService.dispose(999L, 5L, request))
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.LOT_NOT_FOUND);
+    }
+
+    @Test
+    void 폐기_수량이_잔량을_넘으면_실패한다() {
+        // given
+        StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 50);
+        ReflectionTestUtils.setField(lot, "id", 77L);
+        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest(51, DisposalReason.DAMAGED, null);
+
+        // when, then
+        assertThatThrownBy(() -> adminLotService.dispose(77L, 5L, request))
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.DISPOSAL_QUANTITY_EXCEEDS_LOT);
+        verify(stockMovementRepository, never()).save(any());
+    }
+
+    @Test
+    void 폐기_중_락_경합이_발생하면_처리중_오류를_던진다() {
+        // given
+        when(stockLotRepository.findByIdForUpdate(77L))
+                .thenThrow(new CannotAcquireLockException("Lock wait timeout exceeded"));
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest(10, DisposalReason.DAMAGED, null);
+
+        // when, then
+        assertThatThrownBy(() -> adminLotService.dispose(77L, 5L, request))
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.DISPOSAL_IN_PROGRESS);
     }
 
     private StockLot lotOf(Long optionId, LocalDate expiryDate, Long id) {

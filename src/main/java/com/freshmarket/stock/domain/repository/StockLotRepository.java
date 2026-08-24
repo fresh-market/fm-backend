@@ -56,4 +56,17 @@ public interface StockLotRepository extends JpaRepository<StockLot, Long> {
     // 위와 같되 상태로도 거른다. availableOnly=true일 때 AVAILABLE만 보는 데 쓰인다
     List<StockLot> findByProductOptionIdInAndStatusOrderByExpiryDateAsc(List<Long> productOptionIds,
             LotStatus status);
+
+    /*
+     * 로트 하나에 쓰기 락을 건다(CategoryRepository/MemberRepository의 findByIdForUpdate와 같은
+     * 취지). 폐기는 조회한 available_qty를 그대로 stock_movement 원장에 남기는데, 락 없는 조회 뒤에
+     * 별도 UPDATE를 하면 그 사이 reserve/release 등 다른 트랜잭션이 값을 바꿔 원장이 실제 이력과
+     * 어긋날 수 있다. 락을 걸어 읽은 값이 커밋까지 그대로 유지되게 한다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select s from StockLot s where s.id = :id")
+    Optional<StockLot> findByIdForUpdate(@Param("id") Long id);
+
+    // 그 옵션에 아직 AVAILABLE 상태인 로트가 하나라도 남아있는지. 폐기 뒤 품절 전환 여부 판정에 쓴다
+    boolean existsByProductOptionIdAndStatus(Long productOptionId, LotStatus status);
 }

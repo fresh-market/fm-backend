@@ -5,6 +5,7 @@ import static com.freshmarket.common.exception.ConstraintViolations.isConstraint
 import com.freshmarket.product.OptionAvailabilityChangedEvent;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
+import com.freshmarket.stock.domain.dto.AdminLotDisposeRequest;
 import com.freshmarket.stock.domain.dto.AdminLotListResponse;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
 import com.freshmarket.stock.domain.entity.LotStatus;
@@ -123,6 +124,51 @@ public class AdminLotService {
         return stockLotRepository.findByRequestIdAndProductOptionId(requestId, optionId)
                 .map(AdminLotResponse::of)
                 .orElseThrow(() -> new StockException(StockErrorCode.REGISTRATION_IN_PROGRESS, cause));
+    }
+
+    /*
+     * 로트를 폐기 처리하고 DISPOSE 변동 이력을 함께 남긴다(stock.md "폐기").
+     * 이 로트가 다 소진되고(availableQty=0) 그 옵션에 남은 AVAILABLE 로트가 없으면 품절 이벤트를
+     * 발행한다 — register()가 입고 시 항상 soldOut=false를 발행하는 것의 반대 경로다.
+     */
+    @Transactional
+    public AdminLotResponse dispose(Long lotId, Long adminId, AdminLotDisposeRequest request) {
+        StockLot stockLot = findLotForUpdate(lotId);
+
+        if (request.quantity() > stockLot.getAvailableQty()) {
+            throw new StockException(StockErrorCode.DISPOSAL_QUANTITY_EXCEEDS_LOT);
+        }
+
+        int qtyBefore = stockLot.getAvailableQty();
+        stockLot.dispose(request.quantity());
+        int qtyAfter = stockLot.getAvailableQty();
+
+        StockMovement movement = StockMovement.dispose(stockLot.getId(), request.quantity(), qtyBefore, qtyAfter,
+                adminId, request.disposalReason(), request.reason());
+        stockMovementRepository.save(movement);
+
+        if (qtyAfter == 0 && !stockLotRepository.existsByProductOptionIdAndStatus(
+                stockLot.getProductOptionId(), LotStatus.AVAILABLE)) {
+            eventPublisher.publishEvent(
+                    new OptionAvailabilityChangedEvent(stockLot.getProductOptionId(), true, LocalDateTime.now()));
+        }
+
+        return AdminLotResponse.of(stockLot);
+    }
+
+    /*
+     * 락 대기 타임아웃/교착은 도메인 밖으로 raw 타입을 새어나가게 두지 않고 재시도 가능한 오류로 감싼다.
+     * 조회 자체가 쓰기 락이라 같은 로트를 건드리는 reserve/confirm/release/expire와 경합하면
+     * 여기서 실패할 수 있다 — 그 사이 beforeQty가 낡은 값이 되는 걸 막기 위한 것이라, 실패하면
+     * 재시도를 안내한다.
+     */
+    private StockLot findLotForUpdate(Long lotId) {
+        try {
+            return stockLotRepository.findByIdForUpdate(lotId)
+                    .orElseThrow(() -> new StockException(StockErrorCode.LOT_NOT_FOUND));
+        } catch (PessimisticLockingFailureException e) {
+            throw new StockException(StockErrorCode.DISPOSAL_IN_PROGRESS, e);
+        }
     }
 
     /*
