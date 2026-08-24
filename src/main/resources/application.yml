@@ -133,6 +133,14 @@ app:
   cors:
     allowed-origins: "${CORS_ALLOWED_ORIGINS:http://localhost:5173}"
 
+# 이미지 URL 앞에 붙는 주소다. 운영은 CloudFront 도메인이 CDN_BASE_URL 로 들어온다
+# (infra 의 terraform/templates/compose.yaml.tftpl).
+#
+# 기본값을 비워 둔다. 로컬에는 오브젝트 스토리지가 없어 어차피 이미지가 열리지 않는데,
+# 여기에 localhost 를 적어 두면 운영에서 값이 빠졌을 때 그 주소가 응답에 실려 나간다.
+cdn:
+  base-url: "${CDN_BASE_URL:}"
+
 jwt:
   secret: "${JWT_SECRET}"
   access-token-validity-ms: "${JWT_ACCESS_VALIDITY_MS:1800000}"

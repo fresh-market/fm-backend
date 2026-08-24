@@ -8,8 +8,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.freshmarket.product.domain.entity.ProductImage;
 import com.freshmarket.product.domain.entity.UploadStatus;
 import com.freshmarket.product.domain.repository.ProductImageRepository;
-import com.freshmarket.product.domain.dto.PageCursor;
-import com.freshmarket.product.domain.dto.PageTokens;
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.domain.entity.Product;
 import com.freshmarket.product.domain.entity.ProductOption;
 import com.freshmarket.product.domain.entity.StorageType;
@@ -20,31 +20,22 @@ import com.freshmarket.product.domain.entity.SaleStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import com.freshmarket.IntegrationTestSupport;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
-import org.testcontainers.containers.MySQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
 @Sql("/sql/product-test-supplier.sql")
-@Testcontainers
 // Gradle 로 돌릴 때는 integrationTest 태스크가 켜주고, IDE 에서 직접 실행할 때는 이 줄이 켠다.
-@ActiveProfiles("integrationTest")
-class ProductApiIntegrationTest {
+class ProductApiIntegrationTest extends IntegrationTestSupport {
 
-    @Container
-    @ServiceConnection
-    static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4");
 
     @Autowired
     private MockMvc mockMvc;

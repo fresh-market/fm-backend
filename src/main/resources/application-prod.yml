@@ -2,13 +2,38 @@
 # 배포에서 SPRING_PROFILES_ACTIVE=prod 로 켠다.
 #
 # 비밀값(카카오 키, JWT 서명 키)은 여기 두지 않고 같은 이름의 환경변수로 준다.
+#
+# application.yml 의 기본값은 로컬을 전제한다. 그 값이 운영까지 살아나면 사고가 되는 키를
+# 여기서 다시 선언한다. 판단 기준은 "환경마다 다른가" 가 아니라
+# "로컬 기본값이 운영에 살아나면 사고인가" 다.
+#
+# 다만 재선언이 곧 기동 차단은 아니다. @ConfigurationProperties 바인딩은 못 푼 플레이스홀더를
+# 예외로 만들지 않고 리터럴 문자열로 남긴다. 그래서 키마다 실제 방어 수단이 다르다.
+#   datasource   Flyway 가 기동 중에 커넥션을 열어 그 자리에서 막힌다
+#   redis        Lettuce 가 지연 접속이라 기동은 된다. /actuator/health 가 DOWN 으로 알린다
+#   jwt.cookie   리터럴이라 값이 그대로 박힌다
 
 spring:
-  # 기본값을 두지 않는다. 값이 빠지면 로컬 DB 로 붙는 대신 기동을 막는다
+  # 기본값을 두지 않는다. 값이 빠지면 로컬 DB 로 붙는 대신 기동을 막는다.
+  # 막는 주체는 플레이스홀더가 아니라 Flyway 다. 기동 중에 커넥션을 열기 때문이다.
   datasource:
     url: "${DB_URL}"
     username: "${DB_USERNAME}"
     password: "${DB_PASSWORD}"
+
+  # 캐시는 인증 경로의 매 요청 의존성이라(JwtAuthenticationFilter 의 커트라인 조회,
+  # AuthRateLimitFilter) localhost 로 붙으면 로그인과 인가가 통째로 깨진다.
+  #
+  # 값이 빠져도 기동은 된다. Lettuce 가 지연 접속이라 첫 인증 요청에서야 500 이 난다.
+  # 그 상태를 배포 중에 잡는 것은 actuator 의 RedisHealthIndicator 다.
+  # /actuator/health 가 DOWN 이 되므로 배포 스모크 테스트가 그 경로를 확인해야 한다.
+  # readiness 그룹에는 넣지 않는다. 캐시 장애로 전 인스턴스가 동시에 대상 그룹에서
+  # 빠지면 상황이 악화된다 (INF-4-01).
+  #
+  # 포트는 ElastiCache 도 6379 라 공통 기본값을 그대로 쓴다.
+  data:
+    redis:
+      host: "${VALKEY_HOST}"
 
   jpa:
     properties:
@@ -19,3 +44,22 @@ spring:
   flyway:
     # 이력이 없는 스키마를 조용히 baseline 하고 마이그레이션을 건너뛰는 사고를 막는다
     baseline-on-migrate: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # 공통 목록에 loggers 를 더한다.
+        # HttpBodyLoggingFilter 가 "운영 중 /actuator/loggers 로 이 로거만 DEBUG 로 올려
+        # 재배포 없이 바디를 본다" 를 전제하는데, 노출되지 않아 실제로는 불가능했다.
+        #
+        # loggers 는 POST 로 레벨을 바꾸는 쓰기 엔드포인트다. 8081 은 인증을 요구하지 않으므로
+        # 이 포트에 닿을 수 있는 사람은 로그 레벨을 바꿀 수 있다. 경계는 보안 그룹이 맡는다.
+        include: health, info, prometheus, loggers
+
+jwt:
+  cookie:
+    # 운영은 HTTPS 다. 이건 환경마다 다른 값이 아니라 사실이라 환경변수를 두지 않는다.
+    # 공통 기본값이 false 인데 그게 살아나면 토큰 쿠키가 평문 http 에도 실려 나간다.
+    # 환경변수로 두면 오타 하나로 운영이 무방비가 되는 경로가 남는다.
+    secure: true

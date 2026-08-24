@@ -2,24 +2,21 @@
 <configuration>
 
     <!-- ================================================================
-         로컬/개발: 사람이 읽기 좋은 콘솔 포맷 + MDC(traceId 등) 노출
+         로컬: 사람이 읽기 좋은 콘솔 포맷 + MDC(traceId 등) 노출 + DEBUG
 
-         이 프로젝트는 아직 spring.profiles.active/default 를 정해두지 않았다("prod" 프로필도
-         아직 별도 application-prod.yml 이 없다). 그래서 "local" 대신 "!prod"(prod가 아니면)로
-         걸어서, 프로필을 아무것도 안 켠 기본 실행에서도 로그가 비지 않게 한다. prod 프로필이
-         실제로 도입되는 시점엔 이 조건을 그대로 둬도 되고, 로컬 전용 설정이 더 필요해지면 그때
-         "local"로 좁혀도 된다.
+         application.yml 이 spring.profiles.default 를 local 로 두므로 프로필을 아무것도
+         안 켠 실행도 이 블록에 걸린다. springProfile 은 기본 프로필도 활성으로 본다.
          ================================================================ -->
-    <springProfile name="!prod">
-        <!-- %line(파일명:라인번호)은 caller data가 필요해서 성능 비용이 있다 — 로컬은 트래픽이
+    <springProfile name="local">
+        <!-- %line(파일명:라인번호)은 caller data가 필요해서 성능 비용이 있다. 로컬은 트래픽이
              적고 동기 로깅이라 부담이 작고, IntelliJ 콘솔은 "ClassName.java:42" 패턴을 인식해서
              클릭하면 바로 그 줄로 이동하는 링크로 만들어주기 때문에 로컬에서만 켠다. prod는
              AsyncAppender의 includeCallerData=false와 일관되게 caller data를 아예 안 켠다
-             (비동기 로깅에서 caller data 계산 비용이 더 커지기 때문 — 아래 prod 프로필 참고).
+             (비동기 로깅에서 caller data 계산 비용이 더 커지기 때문. 아래 prod 프로필 참고).
 
              주의: %logger{36} 바로 뒤에 괄호로 시작하는 리터럴("(%F:%line)")을 붙이면 Logback의
              PatternParser가 그 여는 괄호를 또 다른 컴포지트 컨버터(%word(...) 형태)의 시작으로
-             오인해서 그 뒤 " - %msg%n"까지 파싱에 실패해 통째로 사라진다 — 그래서 괄호 없이
+             오인해서 그 뒤 " - %msg%n"까지 파싱에 실패해 통째로 사라진다. 그래서 괄호 없이
              %F:%line으로 쓴다. 또한 %X{traceId:-} 같은 ":-" 기본값 문법은 Log4j2 전용이라
              Logback의 %X는 지원하지 않으므로(값이 없으면 그냥 빈 문자열) 콜론 없이 %X{traceId}로
              쓴다. -->
@@ -31,9 +28,27 @@
             </encoder>
         </appender>
 
-        <root level="INFO">
+        <!-- DEBUG 로 둔다. HttpBodyLoggingFilter 가 정상 응답의 요청/응답 본문을 DEBUG 에서만
+             남기므로, 로컬에서 그 본문을 보려면 이 레벨이어야 한다.
+             서드파티까지 전부 DEBUG 라 기동 로그가 길다. 줄이려면 시끄러운 것만 따로 올린다.
+             예: <logger name="org.hibernate" level="INFO"/> -->
+        <root level="DEBUG">
             <appender-ref ref="CONSOLE"/>
         </root>
+    </springProfile>
+
+    <!-- ================================================================
+         통합 테스트: 로그를 남기지 않는다.
+
+         Testcontainers 기동, Flyway 마이그레이션, Hibernate 초기화가 클래스마다 반복되어
+         정작 무엇이 실패했는지가 묻힌다. 실패 원인은 로그가 아니라 JUnit 리포트
+         (build/test-results/integrationTest/*.xml)에 스택과 함께 남으므로 여기서 꺼도
+         진단 수단이 사라지지 않는다.
+
+         특정 테스트를 파고들 때는 이 블록의 레벨을 잠시 DEBUG 로 올린다.
+         ================================================================ -->
+    <springProfile name="integrationTest">
+        <root level="OFF"/>
     </springProfile>
 
     <!-- ================================================================
