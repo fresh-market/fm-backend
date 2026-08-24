@@ -8,8 +8,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.freshmarket.product.domain.entity.ProductImage;
 import com.freshmarket.product.domain.entity.UploadStatus;
 import com.freshmarket.product.domain.repository.ProductImageRepository;
-import com.freshmarket.product.domain.dto.PageCursor;
-import com.freshmarket.product.domain.dto.PageTokens;
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.domain.entity.Product;
 import com.freshmarket.product.domain.entity.ProductOption;
 import com.freshmarket.product.domain.entity.StorageType;

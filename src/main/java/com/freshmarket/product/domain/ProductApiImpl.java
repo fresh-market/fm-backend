@@ -8,6 +8,7 @@ import com.freshmarket.product.ProductApi;
 import com.freshmarket.product.ProductOptionInfo;
 import com.freshmarket.product.domain.dto.ProductOptionProjection;
 import com.freshmarket.product.domain.dto.QProductOptionProjection;
+import com.freshmarket.product.domain.entity.ProductOption;
 import com.freshmarket.product.domain.entity.SaleStatus;
 import com.freshmarket.product.domain.repository.ProductOptionRepository;
 import com.querydsl.jpa.impl.JPAQueryFactory;
@@ -32,6 +33,14 @@ class ProductApiImpl implements ProductApi {
         return productOptionRepository.existsByIdAndProductId(optionId, productId);
     }
 
+    // 재시도 응답 재구성용으로 이미 있는 findAllByProductId를 그대로 재사용해 ID만 뽑는다
+    @Override
+    public List<Long> findOptionIds(Long productId) {
+        return productOptionRepository.findAllByProductId(productId).stream()
+                .map(ProductOption::getId)
+                .toList();
+    }
+
     @Override
     public Optional<ProductOptionInfo> findOptionInfo(Long productOptionId) {
         return findOptionInfos(List.of(productOptionId)).stream().findFirst();
@@ -49,12 +58,15 @@ class ProductApiImpl implements ProductApi {
         }
         List<ProductOptionProjection> rows = queryFactory
                 .select(new QProductOptionProjection(
+                        product.id,
+                        product.categoryId,
                         productOption.id,
                         product.name,
                         productOption.name,
                         productOption.price,
                         product.deletedAt.isNull()
-                                .and(equalsAsCs(productOption.saleStatus, SaleStatus.ON_SALE))))
+                                .and(equalsAsCs(productOption.saleStatus, SaleStatus.ON_SALE)),
+                        product.saleAvailableDaysFromExpiry))
                 .from(productOption)
                 .join(product).on(product.id.eq(productOption.productId))
                 .where(productOption.id.in(productOptionIds))
@@ -62,8 +74,9 @@ class ProductApiImpl implements ProductApi {
 
         return rows.stream()
                 .map(row -> new ProductOptionInfo(
-                        row.productOptionId(), row.productName(), row.optionName(),
-                        row.price(), row.purchasable()))
+                        row.productId(), row.categoryId(), row.productOptionId(),
+                        row.productName(), row.optionName(), row.price(), row.purchasable(),
+                        row.saleAvailableDaysFromExpiry()))
                 .toList();
     }
 }

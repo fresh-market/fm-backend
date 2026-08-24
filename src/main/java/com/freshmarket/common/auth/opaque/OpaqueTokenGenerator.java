@@ -1,4 +1,4 @@
-package com.freshmarket.common.auth.jwt;
+package com.freshmarket.common.auth.opaque;
 
 import java.security.SecureRandom;
 import java.util.Base64;

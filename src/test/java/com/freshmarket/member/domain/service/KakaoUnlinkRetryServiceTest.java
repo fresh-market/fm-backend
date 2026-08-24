@@ -110,4 +110,21 @@ class KakaoUnlinkRetryServiceTest {
         verify(outcomeService).markSucceeded(10L);
         verify(outcomeService).markSucceeded(11L);
     }
+
+    @Test
+    void 포기_문턱을_넘은_행은_카카오를_다시_부르지_않는다() {
+        KakaoUnlinkFailure givenUp = newFailure(10L, 1L, "kakao-1");
+        for (int i = 0; i < 4; i++) {
+            givenUp.markRetryFailed();
+        }
+        KakaoUnlinkFailure stillRetrying = newFailure(11L, 2L, "kakao-2");
+        when(failureRepository.findAll()).thenReturn(List.of(givenUp, stillRetrying));
+
+        sut.retryAllPending();
+
+        verify(kakaoUnlinkClient, never()).unlink("kakao-1");
+        verify(outcomeService, never()).markSucceeded(10L);
+        verify(outcomeService, never()).markFailed(eq(10L), any());
+        verify(kakaoUnlinkClient).unlink("kakao-2");
+    }
 }

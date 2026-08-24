@@ -3,10 +3,10 @@ package com.freshmarket.member.domain.service;
 import com.freshmarket.common.auth.AuthCookieFactory;
 import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
 import com.freshmarket.common.auth.jwt.JwtTokenProvider;
-import com.freshmarket.common.auth.jwt.RefreshTokenRepository;
+import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import com.freshmarket.common.auth.jwt.TokenType;
-import com.freshmarket.common.auth.jwt.OpaqueTokenGenerator;
-import com.freshmarket.common.auth.jwt.TokenHasher;
+import com.freshmarket.common.auth.opaque.OpaqueTokenGenerator;
+import com.freshmarket.common.auth.opaque.TokenHasher;
 import com.freshmarket.member.domain.MemberLogoutEvent;
 import com.freshmarket.member.domain.entity.Member;
 import com.freshmarket.member.domain.repository.MemberRepository;
@@ -29,7 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 // 조립하는 데 쓸 수 있게 한다. 재발급 실패는 BadCredentialsException(스프링 시큐리티 제네릭
 // 타입) 대신 AuthException(AUTH-004)으로 던져 문서가 정한 에러코드가 그대로 응답에 실린다.
 /**
- * 회원 로그인/재발급/로그아웃 시 토큰(access/refresh) 발급·회전·폐기를 담당. common.auth.jwt의
+ * 회원 로그인/재발급/로그아웃 시 토큰(access/refresh) 발급·회전·폐기를 담당. common.auth.opaque의
  * RefreshTokenRepository(순수 Redis)를 1차 저장소로 쓰고, Member 행의
  * refreshTokenHash/refreshTokenExpiresAt에 DB 백업을 write-through로 남긴다.
  *
