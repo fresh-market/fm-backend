@@ -34,12 +34,17 @@ class ProductSecurityConfig {
                 /*
                  * 검색은 콜론 커스텀 메서드(AIP-136)라 /v1/products/** 에 걸리지 않는다.
                  * 콜론 뒤는 경로 구분자가 아니어서 별도 패턴으로 적어야 한다.
+                 *
+                 * /v1/categories 는 카테고리(Category)가 product 도메인 소속 리소스라
+                 * 여기서 함께 소유한다.
                  */
-                .securityMatcher("/v1/products", "/v1/products/**", "/v1/products:*",
+                .securityMatcher("/v1/products", "/v1/products/**", "/v1/products:*", "/v1/categories",
                         "/v1/admin/products", "/v1/admin/categories", "/v1/admin/categories/*")
                 .authorizeHttpRequests(auth -> auth
-                        // 목록, 상세, 검색은 비로그인도 본다
-                        .requestMatchers(GET, "/v1/products", "/v1/products/**", "/v1/products:*").permitAll()
+                        // 목록, 상세, 검색, 카테고리 목록은 비로그인도 본다
+                        .requestMatchers(GET,
+                                "/v1/products", "/v1/products/**", "/v1/products:*", "/v1/categories")
+                        .permitAll()
                         // 상품 등록, 카테고리 CRUD는 관리자만 호출한다(SUPER_ADMIN도 RoleHierarchy로 포함됨)
                         .requestMatchers("/v1/admin/products", "/v1/admin/categories", "/v1/admin/categories/*")
                                 .hasRole(ADMIN_ROLE)

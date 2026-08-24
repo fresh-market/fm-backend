@@ -1,5 +1,7 @@
 package com.freshmarket.stock.domain.config;
 
+import static org.springframework.http.HttpMethod.GET;
+
 import com.freshmarket.common.auth.ApiSecurityDefaults;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,7 +15,10 @@ import org.springframework.security.web.SecurityFilterChain;
  * stock이 실제로 소유한 관리자 경로는 "/v1/admin/products/{productId}"로 시작하지만, 그 앞부분은
  * product 도메인이 소유한 "/v1/admin/products"(정확한 경로)와 겹치지 않는다 — product 쪽은
  * 경로 세그먼트가 더 없는 정확한 매치만 잡고, 여기는 그 뒤에 세그먼트가 더 붙는 경로만 잡는다
- * (ProductSecurityConfig 참고). 전부 관리자 전용이다.
+ * (ProductSecurityConfig 참고). "/v1/admin/lots:expire"도 stock이 소유한 관리자 경로다.
+ *
+ * 소비기한 임박 조회는 URL이 /v1/products: 아래지만(명세 계약), 실제 로직은 stock 도메인 소유다.
+ * product가 아니라 여기서 인가를 소유하고, 비로그인도 볼 수 있게 공개한다.
  */
 @Configuration
 class StockSecurityConfig {
@@ -26,9 +31,16 @@ class StockSecurityConfig {
     @Order(ApiSecurityDefaults.DOMAIN_CHAIN_ORDER)
     SecurityFilterChain stockSecurityFilterChain(HttpSecurity http, ApiSecurityDefaults defaults) throws Exception {
         return defaults.apply(http)
-                .securityMatcher("/v1/admin/products/*/options/*/lots", "/v1/admin/products/*/lots")
-                // SUPER_ADMIN도 RoleHierarchy(AdminSecurityConfig)로 ADMIN에 포함되어 통과한다
-                .authorizeHttpRequests(auth -> auth.anyRequest().hasRole(ADMIN_ROLE))
+                .securityMatcher("/v1/admin/products/*/options/*/lots", "/v1/admin/products/*/lots",
+                        "/v1/admin/lots:expire", "/v1/products:expiringSoon")
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(GET, "/v1/products:expiringSoon").permitAll()
+                        // 로트 입고/조회/만료 처리는 관리자만 호출한다(SUPER_ADMIN도 RoleHierarchy로 포함됨)
+                        .requestMatchers("/v1/admin/products/*/options/*/lots", "/v1/admin/products/*/lots",
+                                "/v1/admin/lots:expire")
+                        .hasRole(ADMIN_ROLE)
+
+                        .anyRequest().authenticated())
                 .build();
     }
 }
