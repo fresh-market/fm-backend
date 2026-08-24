@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class OptionAvailabilitySyncScheduler {
 
-    private static final long FIXED_DELAY_MS = 10 * 60 * 1000; // 10분
+    private static final long FIXED_DELAY_MS = 10 * 60 * 1000L; // 10분
 
     private final OptionAvailabilitySyncRetryService optionAvailabilitySyncRetryService;
 
