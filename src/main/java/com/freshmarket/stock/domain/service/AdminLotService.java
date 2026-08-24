@@ -8,6 +8,7 @@ import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
 import com.freshmarket.stock.domain.dto.AdminLotDisposeRequest;
 import com.freshmarket.stock.domain.dto.AdminLotListResponse;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
+import com.freshmarket.stock.domain.entity.DisposalReason;
 import com.freshmarket.stock.domain.entity.LotStatus;
 import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.entity.StockMovement;
@@ -128,32 +129,73 @@ public class AdminLotService {
 
     /*
      * 로트를 폐기 처리하고 DISPOSE 변동 이력을 함께 남긴다(stock.md "폐기").
+     * 같은 requestId로 재시도가 오면(API-5-07, AIP-155) 다시 차감하지 않고 최초 결과를 그대로
+     * 돌려준다 — register()와 같은 이유·같은 이중 방어 구조다(사전 조회 + save() 시점 유니크 위반).
+     *
+     * RETURNED(재입고하지 않은 회수품)는 애초에 이 로트의 가용 수량으로 들어온 적이 없어서 수량을
+     * 바꾸지 않는다 — stock.md, chk_movement_delta(DB)가 DISPOSE+RETURNED는 qty_after=qty_before를
+     * 강제한다. 그 외 사유는 실제로 잔량에서 차감한다.
+     *
      * 이 로트가 다 소진되고(availableQty=0) 그 옵션에 남은 AVAILABLE 로트가 없으면 품절 이벤트를
      * 발행한다 — register()가 입고 시 항상 soldOut=false를 발행하는 것의 반대 경로다.
      */
     @Transactional
     public AdminLotResponse dispose(Long lotId, Long adminId, AdminLotDisposeRequest request) {
-        StockLot stockLot = findLotForUpdate(lotId);
-
-        if (request.quantity() > stockLot.getAvailableQty()) {
-            throw new StockException(StockErrorCode.DISPOSAL_QUANTITY_EXCEEDS_LOT);
+        Optional<StockMovement> existingMovement = stockMovementRepository.findByRequestId(request.requestId());
+        if (existingMovement.isPresent()) {
+            return responseOfExistingDisposal(existingMovement.get(), lotId);
         }
 
+        StockLot stockLot = findLotForUpdate(lotId);
+
         int qtyBefore = stockLot.getAvailableQty();
-        stockLot.dispose(request.quantity());
-        int qtyAfter = stockLot.getAvailableQty();
+        int qtyAfter;
+        if (request.disposalReason() == DisposalReason.RETURNED) {
+            qtyAfter = qtyBefore;
+        } else {
+            if (request.quantity() > qtyBefore) {
+                throw new StockException(StockErrorCode.DISPOSAL_QUANTITY_EXCEEDS_LOT);
+            }
+            stockLot.dispose(request.quantity());
+            qtyAfter = stockLot.getAvailableQty();
+        }
 
-        StockMovement movement = StockMovement.dispose(stockLot.getId(), request.quantity(), qtyBefore, qtyAfter,
-                adminId, request.disposalReason(), request.reason());
-        stockMovementRepository.save(movement);
+        StockMovement movement = StockMovement.dispose(request.requestId(), stockLot.getId(), request.quantity(),
+                qtyBefore, qtyAfter, adminId, request.disposalReason(), request.reason());
+        try {
+            stockMovementRepository.save(movement);
+        } catch (DataIntegrityViolationException e) {
+            if (isConstraintViolation(e, "uk_movement_request_id")) {
+                return stockMovementRepository.findByRequestId(request.requestId())
+                        .map(existing -> responseOfExistingDisposal(existing, lotId))
+                        .orElseThrow(() -> new IllegalStateException(
+                                "request_id 유니크 위반 직후 재조회에 실패했다: " + request.requestId()));
+            }
+            throw e;
+        }
 
-        if (qtyAfter == 0 && !stockLotRepository.existsByProductOptionIdAndStatus(
+        if (qtyBefore != qtyAfter && qtyAfter == 0 && !stockLotRepository.existsByProductOptionIdAndStatus(
                 stockLot.getProductOptionId(), LotStatus.AVAILABLE)) {
             eventPublisher.publishEvent(
                     new OptionAvailabilityChangedEvent(stockLot.getProductOptionId(), true, LocalDateTime.now()));
         }
 
         return AdminLotResponse.of(stockLot);
+    }
+
+    /*
+     * 같은 requestId를 다른 lotId로 재사용했으면 클라이언트의 잘못된 재사용이다 — 엉뚱한 로트의
+     * 결과를 성공 응답으로 돌려주는 대신 명확한 충돌 오류로 알려준다(register()의
+     * findByRequestIdOrThrow와 같은 이유).
+     */
+    private AdminLotResponse responseOfExistingDisposal(StockMovement movement, Long expectedLotId) {
+        if (!movement.getStockLotId().equals(expectedLotId)) {
+            throw new StockException(StockErrorCode.REQUEST_ID_ALREADY_USED);
+        }
+        return stockLotRepository.findById(movement.getStockLotId())
+                .map(AdminLotResponse::of)
+                .orElseThrow(() -> new IllegalStateException(
+                        "폐기 이력이 가리키는 로트를 찾을 수 없다: " + movement.getStockLotId()));
     }
 
     /*

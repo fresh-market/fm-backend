@@ -16,6 +16,7 @@ import com.freshmarket.stock.domain.dto.AdminLotResponse;
 import com.freshmarket.stock.domain.entity.DisposalReason;
 import com.freshmarket.stock.domain.entity.LotStatus;
 import com.freshmarket.stock.domain.entity.StockLot;
+import com.freshmarket.stock.domain.entity.StockMovement;
 import com.freshmarket.stock.domain.exception.StockErrorCode;
 import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
@@ -325,7 +326,7 @@ class AdminLotServiceTest {
         StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 100);
         ReflectionTestUtils.setField(lot, "id", 77L);
         when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
-        AdminLotDisposeRequest request = new AdminLotDisposeRequest(30, DisposalReason.DAMAGED, "파손분");
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 30, DisposalReason.DAMAGED, "파손분");
 
         // when
         AdminLotResponse result = adminLotService.dispose(77L, 5L, request);
@@ -344,7 +345,7 @@ class AdminLotServiceTest {
         ReflectionTestUtils.setField(lot, "id", 77L);
         when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
         when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
-        AdminLotDisposeRequest request = new AdminLotDisposeRequest(100, DisposalReason.EXPIRED, null);
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 100, DisposalReason.EXPIRED, null);
 
         // when
         AdminLotResponse result = adminLotService.dispose(77L, 5L, request);
@@ -366,7 +367,7 @@ class AdminLotServiceTest {
         ReflectionTestUtils.setField(lot, "id", 77L);
         when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
         when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(true);
-        AdminLotDisposeRequest request = new AdminLotDisposeRequest(100, DisposalReason.EXPIRED, null);
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 100, DisposalReason.EXPIRED, null);
 
         // when
         adminLotService.dispose(77L, 5L, request);
@@ -376,10 +377,86 @@ class AdminLotServiceTest {
     }
 
     @Test
+    void RETURNED_폐기는_수량을_바꾸지_않고_수량_초과_검증도_건너뛴다() {
+        // given — 회수품 폐기는 애초에 가용 재고로 들어온 적이 없어 잔량(50)보다 큰 수량(200)도 허용된다
+        StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 50);
+        ReflectionTestUtils.setField(lot, "id", 77L);
+        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 200, DisposalReason.RETURNED, null);
+
+        // when
+        AdminLotResponse result = adminLotService.dispose(77L, 5L, request);
+
+        // then — qtyBefore == qtyAfter (chk_movement_delta), 로트 상태도 그대로 AVAILABLE
+        assertThat(result.availableQty()).isEqualTo(50);
+        assertThat(result.status()).isEqualTo("AVAILABLE");
+        verify(stockMovementRepository).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void 같은_요청_식별자로_재시도하면_다시_차감하지_않고_기존_결과를_반환한다() {
+        // given — 이전 요청으로 이미 처리된 폐기 이력이 있는 상황(사전 조회에서 바로 잡힘)
+        StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 70);
+        ReflectionTestUtils.setField(lot, "id", 77L);
+        StockMovement existing = StockMovement.dispose("dispose-1", 77L, 30, 100, 70, 5L, DisposalReason.DAMAGED,
+                "파손분");
+        when(stockMovementRepository.findByRequestId("dispose-1")).thenReturn(Optional.of(existing));
+        when(stockLotRepository.findById(77L)).thenReturn(Optional.of(lot));
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 30, DisposalReason.DAMAGED, "파손분");
+
+        // when
+        AdminLotResponse result = adminLotService.dispose(77L, 5L, request);
+
+        // then
+        assertThat(result.availableQty()).isEqualTo(70);
+        verify(stockLotRepository, never()).findByIdForUpdate(any());
+        verify(stockMovementRepository, never()).save(any());
+    }
+
+    @Test
+    void 다른_로트에_이미_사용된_요청_식별자면_충돌_오류를_던진다() {
+        // given — requestId "dispose-1"은 로트 77에 이미 쓰였지만, 이번 요청은 로트 88이다
+        StockMovement existing = StockMovement.dispose("dispose-1", 77L, 30, 100, 70, 5L, DisposalReason.DAMAGED,
+                null);
+        when(stockMovementRepository.findByRequestId("dispose-1")).thenReturn(Optional.of(existing));
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 10, DisposalReason.DAMAGED, null);
+
+        // when, then
+        assertThatThrownBy(() -> adminLotService.dispose(88L, 5L, request))
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.REQUEST_ID_ALREADY_USED);
+        verify(stockLotRepository, never()).findByIdForUpdate(any());
+    }
+
+    @Test
+    void 저장_중_요청_식별자가_동시에_중복되면_기존_결과를_반환한다() {
+        // given — 사전 조회 시점엔 없었지만, save() 직전에 동시 재시도가 먼저 커밋을 마친 경합 상황
+        StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 70);
+        ReflectionTestUtils.setField(lot, "id", 77L);
+        StockLot lockedLot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31),
+                100);
+        ReflectionTestUtils.setField(lockedLot, "id", 77L);
+        when(stockMovementRepository.findByRequestId("dispose-1")).thenReturn(Optional.empty(),
+                Optional.of(StockMovement.dispose("dispose-1", 77L, 30, 100, 70, 5L, DisposalReason.DAMAGED, null)));
+        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lockedLot));
+        when(stockMovementRepository.save(any())).thenThrow(new DataIntegrityViolationException(
+                "Duplicate entry 'dispose-1' for key 'stock_movement.uk_movement_request_id'"));
+        when(stockLotRepository.findById(77L)).thenReturn(Optional.of(lot));
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 30, DisposalReason.DAMAGED, null);
+
+        // when
+        AdminLotResponse result = adminLotService.dispose(77L, 5L, request);
+
+        // then
+        assertThat(result.availableQty()).isEqualTo(70);
+    }
+
+    @Test
     void 존재하지_않는_로트를_폐기하면_실패한다() {
         // given
         when(stockLotRepository.findByIdForUpdate(999L)).thenReturn(Optional.empty());
-        AdminLotDisposeRequest request = new AdminLotDisposeRequest(10, DisposalReason.DAMAGED, null);
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 10, DisposalReason.DAMAGED, null);
 
         // when, then
         assertThatThrownBy(() -> adminLotService.dispose(999L, 5L, request))
@@ -393,7 +470,7 @@ class AdminLotServiceTest {
         StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 50);
         ReflectionTestUtils.setField(lot, "id", 77L);
         when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
-        AdminLotDisposeRequest request = new AdminLotDisposeRequest(51, DisposalReason.DAMAGED, null);
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 51, DisposalReason.DAMAGED, null);
 
         // when, then
         assertThatThrownBy(() -> adminLotService.dispose(77L, 5L, request))
@@ -407,7 +484,7 @@ class AdminLotServiceTest {
         // given
         when(stockLotRepository.findByIdForUpdate(77L))
                 .thenThrow(new CannotAcquireLockException("Lock wait timeout exceeded"));
-        AdminLotDisposeRequest request = new AdminLotDisposeRequest(10, DisposalReason.DAMAGED, null);
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 10, DisposalReason.DAMAGED, null);
 
         // when, then
         assertThatThrownBy(() -> adminLotService.dispose(77L, 5L, request))
