@@ -19,9 +19,6 @@ import com.querydsl.jpa.impl.JPAQueryFactory;
 import java.time.LocalDateTime;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
 /*
@@ -81,38 +78,42 @@ public class ProductQueryRepository {
      * 판매안함/품절/삭제까지 전부 보여주고, 재고 합계는 이 이슈 범위 밖이라 넣지 않는다.
      * 카테고리 이름은 여기서 조인하지 않고, 호출부가 categoryId를 모아 한 번에 배치 조회한다.
      * 엔티티 전체가 아니라 목록에 필요한 컬럼만 프로젝션한다(JPA-4-03).
+     *
+     * 회원용 search()와 같은 방식으로 커서 기반 페이지네이션을 쓴다(API-3-04, API-5-01) — 정렬이
+     * createdAt desc, id desc 고정이라 회원용처럼 정렬축 분기가 필요 없다. pageSize + 1건을 가져와
+     * 다음 페이지 존재 여부를 판단한다.
      */
-    public Page<AdminProductListRow> searchForAdmin(AdminProductSearchCondition condition, Pageable pageable) {
-        List<AdminProductListRow> content = queryFactory
+    public List<AdminProductListRow> searchForAdmin(AdminProductSearchCondition condition) {
+        return queryFactory
                 .select(new QAdminProductListRow(
                         product.id,
                         product.productCode,
                         product.name,
                         product.categoryId,
                         product.saleStatus,
-                        product.deletedAt.isNotNull()))
+                        product.deletedAt.isNotNull(),
+                        product.createdAt))
                 .from(product)
                 .where(
                         deletedFilter(condition.includeDeleted()),
                         categoryIdEq(condition.categoryId()),
                         saleStatusEq(condition.saleStatus()),
-                        nameContains(condition.query()))
+                        nameContains(condition.query()),
+                        adminCreatedAtCursorLt(condition))
                 .orderBy(product.createdAt.desc(), product.id.desc())
-                .offset(pageable.getOffset())
-                .limit(pageable.getPageSize())
+                .limit(condition.pageSize() + 1L)
                 .fetch();
+    }
 
-        long total = queryFactory
-                .select(product.id.count())
-                .from(product)
-                .where(
-                        deletedFilter(condition.includeDeleted()),
-                        categoryIdEq(condition.categoryId()),
-                        saleStatusEq(condition.saleStatus()),
-                        nameContains(condition.query()))
-                .fetchOne();
-
-        return new PageImpl<>(content, pageable, total);
+    // 관리자 목록 커서 조건. 정렬이 createdAt desc, id desc 고정이라 동점 처리도 id desc 하나뿐이다
+    private BooleanExpression adminCreatedAtCursorLt(AdminProductSearchCondition condition) {
+        if (condition.cursor() == null) {
+            return null;
+        }
+        LocalDateTime cursorCreatedAt = LocalDateTime.parse(condition.cursor().sortValue());
+        Long cursorId = condition.cursor().id();
+        return product.createdAt.lt(cursorCreatedAt)
+                .or(product.createdAt.eq(cursorCreatedAt).and(product.id.lt(cursorId)));
     }
 
     // includeDeleted가 아니면 삭제되지 않은 상품만 본다. true면 조건을 아예 안 걸어 전부 본다

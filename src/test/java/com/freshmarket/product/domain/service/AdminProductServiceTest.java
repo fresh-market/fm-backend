@@ -7,7 +7,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.freshmarket.common.response.PageResponse;
+import com.freshmarket.common.response.CursorPageResponse;
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.domain.dto.AdminProductCreateRequest;
 import com.freshmarket.product.domain.dto.AdminProductListItem;
 import com.freshmarket.product.domain.dto.AdminProductListRow;
@@ -35,9 +37,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 
 // AdminProductService의 등록, 목록/단건 조회와 각 실패 케이스를 검증한다
@@ -309,39 +308,35 @@ class AdminProductServiceTest {
     }
 
     @Test
-    void 조건에_맞는_상품_목록을_페이지로_조회한다() {
+    void 조건에_맞는_상품_목록을_커서로_조회한다() {
         // given
         AdminProductSearchCondition condition = new AdminProductSearchCondition(
-                null, null, null, false, 0, 20);
-        Pageable pageable = PageRequest.of(0, 20);
+                null, null, null, false, null, 20);
         AdminProductListRow row = productListRowFixture(1L, "제주 감귤 1kg", 4L, false);
-        when(productQueryRepository.searchForAdmin(condition, pageable))
-                .thenReturn(new PageImpl<>(List.of(row), pageable, 1));
+        when(productQueryRepository.searchForAdmin(condition)).thenReturn(List.of(row));
         when(categoryRepository.findAllById(List.of(4L))).thenReturn(List.of(categoryFixture(4L, "과일")));
 
         // when
-        PageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
+        CursorPageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
 
         // then
         assertThat(result.items()).hasSize(1);
         assertThat(result.items().get(0).name()).isEqualTo("제주 감귤 1kg");
         assertThat(result.items().get(0).category().name()).isEqualTo("과일");
-        assertThat(result.totalElements()).isEqualTo(1);
+        assertThat(result.nextPageToken()).isNull();
     }
 
     @Test
     void 삭제된_상품도_deleted가_true로_내려간다() {
         // given
         AdminProductSearchCondition condition = new AdminProductSearchCondition(
-                null, null, null, true, 0, 20);
-        Pageable pageable = PageRequest.of(0, 20);
+                null, null, null, true, null, 20);
         AdminProductListRow deleted = productListRowFixture(1L, "제주 감귤 1kg", 4L, true);
-        when(productQueryRepository.searchForAdmin(condition, pageable))
-                .thenReturn(new PageImpl<>(List.of(deleted), pageable, 1));
+        when(productQueryRepository.searchForAdmin(condition)).thenReturn(List.of(deleted));
         when(categoryRepository.findAllById(List.of(4L))).thenReturn(List.of(categoryFixture(4L, "과일")));
 
         // when
-        PageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
+        CursorPageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
 
         // then
         assertThat(result.items().get(0).deleted()).isTrue();
@@ -351,17 +346,50 @@ class AdminProductServiceTest {
     void 목록_조회_결과가_없으면_빈_목록을_준다() {
         // given
         AdminProductSearchCondition condition = new AdminProductSearchCondition(
-                null, null, null, false, 0, 20);
-        Pageable pageable = PageRequest.of(0, 20);
-        when(productQueryRepository.searchForAdmin(condition, pageable))
-                .thenReturn(new PageImpl<>(List.of(), pageable, 0));
+                null, null, null, false, null, 20);
+        when(productQueryRepository.searchForAdmin(condition)).thenReturn(List.of());
 
         // when
-        PageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
+        CursorPageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
 
         // then
         assertThat(result.items()).isEmpty();
-        assertThat(result.totalElements()).isZero();
+        assertThat(result.nextPageToken()).isNull();
+    }
+
+    @Test
+    void 다음_페이지가_있으면_토큰을_채운다() {
+        // given — 리포지토리가 pageSize보다 하나 더 주면 다음 페이지가 있다는 뜻이다
+        AdminProductSearchCondition condition = new AdminProductSearchCondition(
+                null, null, null, false, null, 1);
+        AdminProductListRow first = productListRowFixture(2L, "제주 감귤 1kg", 4L, false);
+        AdminProductListRow extra = productListRowFixture(1L, "무농약 사과", 4L, false);
+        when(productQueryRepository.searchForAdmin(condition)).thenReturn(List.of(first, extra));
+        when(categoryRepository.findAllById(List.of(4L))).thenReturn(List.of(categoryFixture(4L, "과일")));
+
+        // when
+        CursorPageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
+
+        // then
+        assertThat(result.items()).hasSize(1);
+        assertThat(result.items().get(0).name()).isEqualTo("제주 감귤 1kg");
+        assertThat(result.nextPageToken()).isNotNull();
+    }
+
+    @Test
+    void 페이지_토큰으로_커서를_복원해_다음_페이지를_조회한다() {
+        // given
+        PageCursor cursor = new PageCursor(5L, LocalDateTime.of(2026, 8, 20, 0, 0).toString());
+        String pageToken = PageTokens.encode(cursor);
+        AdminProductSearchCondition condition = new AdminProductSearchCondition(
+                null, null, null, false, PageTokens.decode(pageToken), 20);
+        when(productQueryRepository.searchForAdmin(condition)).thenReturn(List.of());
+
+        // when
+        CursorPageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
+
+        // then
+        assertThat(result.items()).isEmpty();
     }
 
     @Test
@@ -414,7 +442,8 @@ class AdminProductServiceTest {
     }
 
     private AdminProductListRow productListRowFixture(Long id, String name, Long categoryId, boolean deleted) {
-        return new AdminProductListRow(id, "P-2026-ABC123", name, categoryId, SaleStatus.ON_SALE, deleted);
+        return new AdminProductListRow(id, "P-2026-ABC123", name, categoryId, SaleStatus.ON_SALE, deleted,
+                LocalDateTime.of(2026, 8, 24, 10, 0));
     }
 
     private Category categoryFixture(Long id, String name) {

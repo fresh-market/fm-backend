@@ -1,5 +1,6 @@
 package com.freshmarket.product.domain.dto;
 
+import com.freshmarket.common.response.PageCursor;
 import com.freshmarket.product.domain.entity.SaleStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 
@@ -9,23 +10,20 @@ public record AdminProductSearchCondition(
         @Schema(description = "카테고리 ID 필터", example = "4") Long categoryId,
         @Schema(description = "판매 상태 필터") SaleStatus saleStatus,
         @Schema(description = "삭제된 상품도 포함할지 여부", example = "false") boolean includeDeleted,
-        @Schema(description = "페이지 번호(0부터 시작)", example = "0") int page,
-        @Schema(description = "페이지 크기. 최대 100", example = "20") int size
+        @Schema(description = "다음 페이지 커서. 첫 페이지는 null") PageCursor cursor,
+        @Schema(description = "페이지 크기. 최대 100", example = "20") int pageSize
 ) {
 
-    public static final int DEFAULT_SIZE = 20;
-    private static final int MAX_SIZE = 100;
+    public static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 100;
     private static final int MAX_QUERY_LENGTH = 100;
 
     public AdminProductSearchCondition {
-        if (page < 0) {
-            page = 0;
+        if (pageSize <= 0) {
+            pageSize = DEFAULT_PAGE_SIZE;
         }
-        if (size <= 0) {
-            size = DEFAULT_SIZE;
-        }
-        if (size > MAX_SIZE) {
-            size = MAX_SIZE;
+        if (pageSize > MAX_PAGE_SIZE) {
+            pageSize = MAX_PAGE_SIZE;
         }
         if (query != null) {
             query = query.strip();

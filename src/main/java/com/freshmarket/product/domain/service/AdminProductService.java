@@ -1,6 +1,8 @@
 package com.freshmarket.product.domain.service;
 
-import com.freshmarket.common.response.PageResponse;
+import com.freshmarket.common.response.CursorPageResponse;
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.domain.dto.AdminProductCreateRequest;
 import com.freshmarket.product.domain.dto.AdminProductListItem;
 import com.freshmarket.product.domain.dto.AdminProductListRow;
@@ -27,9 +29,6 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -58,15 +57,32 @@ public class AdminProductService {
     }
 
     /*
-     * 조건에 맞는 상품 목록을 페이징 조회한다. 판매안함/품절/삭제까지 전부 포함한다
-     * (includeDeleted로 삭제 상품 포함 여부만 가른다). 재고 합계는 이 이슈 범위 밖이라 넣지 않는다.
-     * 카테고리 이름은 페이지 안 상품들의 categoryId를 모아 한 번에 배치 조회한다(N+1 방지).
+     * 조건에 맞는 상품 목록을 커서 기반으로 조회한다(API-3-04, API-5-01). 판매안함/품절/삭제까지
+     * 전부 포함한다(includeDeleted로 삭제 상품 포함 여부만 가른다). 재고 합계는 이 이슈 범위 밖이라
+     * 넣지 않는다. 카테고리 이름은 페이지 안 상품들의 categoryId를 모아 한 번에 배치 조회한다(N+1 방지).
+     * 리포지토리가 pageSize + 1건을 주므로 초과분을 잘라내고 다음 페이지 여부를 판단한다.
      */
-    public PageResponse<AdminProductListItem> findAll(AdminProductSearchCondition condition) {
-        Pageable pageable = PageRequest.of(condition.page(), condition.size());
-        Page<AdminProductListRow> page = productQueryRepository.searchForAdmin(condition, pageable);
-        Map<Long, String> categoryNames = categoryNamesOf(page.getContent());
-        return PageResponse.from(page.map(row -> toListItem(row, categoryNames)));
+    public CursorPageResponse<AdminProductListItem> findAll(AdminProductSearchCondition condition) {
+        List<AdminProductListRow> found = productQueryRepository.searchForAdmin(condition);
+
+        boolean hasNext = found.size() > condition.pageSize();
+        List<AdminProductListRow> page = hasNext ? found.subList(0, condition.pageSize()) : found;
+
+        Map<Long, String> categoryNames = categoryNamesOf(page);
+        List<AdminProductListItem> items = page.stream()
+                .map(row -> toListItem(row, categoryNames))
+                .toList();
+
+        return CursorPageResponse.of(items, nextTokenOf(page, hasNext));
+    }
+
+    // 다음 페이지 토큰. 마지막 행의 생성일과 id로 커서를 만든다(정렬이 createdAt desc, id desc 고정)
+    private static String nextTokenOf(List<AdminProductListRow> page, boolean hasNext) {
+        if (!hasNext || page.isEmpty()) {
+            return null;
+        }
+        AdminProductListRow last = page.get(page.size() - 1);
+        return PageTokens.encode(new PageCursor(last.productId(), last.createdAt().toString()));
     }
 
     // 상품 단건을 조회한다. 회원용 상세와 달리 삭제된 상품도 그대로 보여준다 — id 자체가 없을 때만 404

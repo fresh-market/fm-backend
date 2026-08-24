@@ -1,6 +1,8 @@
 package com.freshmarket.product.domain.controller;
 
-import com.freshmarket.common.response.PageResponse;
+import com.freshmarket.common.response.CursorPageResponse;
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.common.response.ResponseEnvelope;
 import com.freshmarket.product.domain.dto.AdminProductCreateRequest;
 import com.freshmarket.product.domain.dto.AdminProductListItem;
@@ -43,17 +45,20 @@ class AdminProductController {
     }
 
     @Operation(summary = "상품 목록 조회",
-            description = "판매안함, 품절, 삭제까지 전부 조회 대상이다. 재고 수량은 이 API 범위에 포함되지 않는다.")
+            description = "판매안함, 품절, 삭제까지 전부 조회 대상이다. 재고 수량은 이 API 범위에 포함되지 않는다. "
+                    + "커서 기반으로 페이지네이션한다.")
     @GetMapping
-    public ResponseEntity<ResponseEnvelope<PageResponse<AdminProductListItem>>> findAll(
+    public ResponseEntity<ResponseEnvelope<CursorPageResponse<AdminProductListItem>>> findAll(
             @RequestParam(required = false) String query,
             @RequestParam(required = false) @Positive Long categoryId,
             @RequestParam(required = false) SaleStatus saleStatus,
             @RequestParam(required = false, defaultValue = "false") boolean includeDeleted,
-            @RequestParam(required = false, defaultValue = "0") int page,
-            @RequestParam(required = false, defaultValue = "" + AdminProductSearchCondition.DEFAULT_SIZE) int size) {
+            @RequestParam(required = false) String pageToken,
+            @RequestParam(required = false, defaultValue = "" + AdminProductSearchCondition.DEFAULT_PAGE_SIZE)
+                    int pageSize) {
+        PageCursor cursor = PageTokens.decode(pageToken);
         AdminProductSearchCondition condition = new AdminProductSearchCondition(
-                query, categoryId, saleStatus, includeDeleted, page, size);
+                query, categoryId, saleStatus, includeDeleted, cursor, pageSize);
         return ResponseEntity.ok(ResponseEnvelope.success(adminProductService.findAll(condition)));
     }
 
