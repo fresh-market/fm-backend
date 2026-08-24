@@ -117,6 +117,13 @@ public class AdminLotService {
      * AVAILABLE→EXPIRED로 바뀌어 다음 조회 조건에서 자연히 빠지므로, 마지막 청크가
      * EXPIRE_CHUNK_SIZE보다 적게 돌아올 때까지 반복하면 전체를 다 처리한 것이다. 옵션별 품절
      * 이벤트 발행은 청크 단위로 이뤄진다(AdminLotExpireChunkService 참고, 정확성은 그대로 유지).
+     *
+     * (API-3-10) 이 작업은 요청 전체가 원자적이지 않다 — 명시적으로 부분 성공을 허용하는 계약이다.
+     * 뒤 청크가 실패해도 이미 커밋된 앞 청크의 EXPIRED 전환은 되돌리지 않는다. 대상 전체를 한
+     * 트랜잭션으로 묶으면 DI-4-03/PERF-4-03에서 피하려 한 대량 락·긴 트랜잭션이 되돌아오므로
+     * 이 설계를 유지한다. 실패해도 안전한 이유: 대상 조건이 status=AVAILABLE라(INF-1-01, 멱등
+     * 전이형) 이미 처리된 청크는 재실행 시 자연히 대상에서 빠져, 재호출만으로 나머지가 이어서
+     * 처리된다 — 클라이언트는 실패 시 그대로 재요청하면 된다.
      */
     public AdminLotExpireResponse expireLots() {
         List<StockLot> allExpired = new ArrayList<>();

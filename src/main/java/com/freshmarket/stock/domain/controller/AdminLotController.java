@@ -46,7 +46,9 @@ class AdminLotController {
     }
 
     @Operation(summary = "만료 로트 일괄 처리",
-            description = "소비기한이 지난 로트를 만료 처리하고 EXPIRE 이력을 남긴다. 하루 한 번 배치로 돌며, 이 경로는 수동 실행용이다.")
+            description = "소비기한이 지난 로트를 만료 처리하고 EXPIRE 이력을 남긴다. 하루 한 번 배치로 돌며, 이 경로는 수동 실행용이다. "
+                    + "요청 전체가 원자적이지 않은 부분 성공 작업이다(API-3-10) — 중간에 실패해도 이미 처리된 로트는 그대로 남고, "
+                    + "재요청하면 남은 대상만 이어서 처리된다(멱등).")
     @PostMapping("/v1/admin/lots:expire")
     public ResponseEntity<ResponseEnvelope<AdminLotExpireResponse>> expire() {
         AdminLotExpireResponse response = adminLotService.expireLots();
