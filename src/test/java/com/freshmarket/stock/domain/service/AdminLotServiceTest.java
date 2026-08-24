@@ -21,6 +21,7 @@ import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -48,6 +49,9 @@ class AdminLotServiceTest {
 
     @Mock
     private ApplicationEventPublisher eventPublisher;
+
+    @Mock
+    private AdminLotExpireChunkService adminLotExpireChunkService;
 
     @InjectMocks
     private AdminLotService adminLotService;
@@ -264,143 +268,58 @@ class AdminLotServiceTest {
         verify(stockLotRepository, never()).save(any());
     }
 
+    // (DI-4-03/PERF-4-03) 실제 만료 로직은 AdminLotExpireChunkService로 옮겨서 그쪽 테스트가 맡는다.
+    // 여기서는 청크를 몇 번 반복 호출하는지(오케스트레이션)만 검증한다.
+
     @Test
     void 만료_대상이_없으면_빈_응답을_돌려준다() {
         // given
-        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
-                .thenReturn(List.of());
+        when(adminLotExpireChunkService.expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE)).thenReturn(List.of());
 
         // when
         AdminLotExpireResponse result = adminLotService.expireLots();
 
         // then
         assertThat(result.lots()).isEmpty();
-        verify(stockMovementRepository, never()).save(any());
-        verify(eventPublisher, never()).publishEvent(any());
+        verify(adminLotExpireChunkService, times(1)).expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE);
     }
 
     @Test
-    void 소비기한이_지난_로트를_만료_처리하고_이력을_남긴다() {
-        // given
-        StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
-        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
-                .thenReturn(List.of(lot));
-        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
+    void 청크가_가득_차지_않으면_한_번만_호출하고_끝낸다() {
+        // given — 청크 크기보다 적게 돌아오면 다음 청크가 없다는 뜻이다
+        StockLot lot = lotFixture(77L, 31L);
+        when(adminLotExpireChunkService.expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE)).thenReturn(List.of(lot));
 
         // when
         AdminLotExpireResponse result = adminLotService.expireLots();
 
         // then
         assertThat(result.lots()).hasSize(1);
-        assertThat(result.lots().get(0).status()).isEqualTo("EXPIRED");
-        assertThat(lot.getAvailableQty()).isEqualTo(0);
-        verify(stockMovementRepository).save(any());
+        verify(adminLotExpireChunkService, times(1)).expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE);
     }
 
     @Test
-    void 만료_처리로_옵션에_가용_로트가_없으면_품절_이벤트를_발행한다() {
-        // given
-        StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
-        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
-                .thenReturn(List.of(lot));
-        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
-
-        // when
-        adminLotService.expireLots();
-
-        // then
-        verify(eventPublisher).publishEvent(new OptionAvailabilityChangedEvent(31L, true));
-    }
-
-    @Test
-    void 만료_처리_후에도_옵션에_다른_가용_로트가_남아있으면_이벤트를_발행하지_않는다() {
-        // given
-        StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
-        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
-                .thenReturn(List.of(lot));
-        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(true);
-
-        // when
-        adminLotService.expireLots();
-
-        // then
-        verify(eventPublisher, never()).publishEvent(any());
-    }
-
-    @Test
-    void 같은_옵션의_로트_여러_개가_만료되면_품절_이벤트는_한_번만_발행한다() {
-        // given — 옵션 31에 속한 로트 두 개가 같은 배치에서 함께 만료되는 상황
-        StockLot lotA = lotFixture(77L, 31L, LocalDate.now().minusDays(2), 10);
-        StockLot lotB = lotFixture(78L, 31L, LocalDate.now().minusDays(1), 20);
-        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
-                .thenReturn(List.of(lotA, lotB));
-        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
-
-        // when
-        adminLotService.expireLots();
-
-        // then
-        verify(stockLotRepository, times(1)).existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE);
-        verify(eventPublisher, times(1)).publishEvent(new OptionAvailabilityChangedEvent(31L, true));
-    }
-
-    @Test
-    void 이미_처리된_로트는_건너뛴다() {
-        // given — 조회 조건이 AVAILABLE이지만, 조회와 처리 사이 상태가 바뀐 경우를 방어적으로 대비한다
-        StockLot lot = nonAvailableLotFixture(77L, 31L, LocalDate.now().minusDays(1), LotStatus.DISPOSED);
-        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
-                .thenReturn(List.of(lot));
+    void 청크가_가득_차면_다음_청크를_이어서_처리한다() {
+        // given — 첫 청크가 EXPIRE_CHUNK_SIZE건 꽉 차면 뒤에 더 있을 수 있어 다음 청크를 마저 부른다
+        List<StockLot> fullChunk = Collections.nCopies(AdminLotService.EXPIRE_CHUNK_SIZE, lotFixture(1L, 31L));
+        List<StockLot> lastChunk = List.of(lotFixture(2000L, 31L));
+        when(adminLotExpireChunkService.expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE))
+                .thenReturn(fullChunk)
+                .thenReturn(lastChunk);
 
         // when
         AdminLotExpireResponse result = adminLotService.expireLots();
 
         // then
-        assertThat(result.lots()).isEmpty();
-        verify(stockMovementRepository, never()).save(any());
-        verify(eventPublisher, never()).publishEvent(any());
+        assertThat(result.lots()).hasSize(AdminLotService.EXPIRE_CHUNK_SIZE + 1);
+        verify(adminLotExpireChunkService, times(2)).expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE);
     }
 
-    @Test
-    void 가용_수량이_0인_로트는_이력_없이_상태만_전환한다() {
-        // given — 예약으로 이미 다 소진됐지만 SOLD_OUT 전환이 없어 status는 여전히 AVAILABLE인 로트.
-        // StockMovement가 quantity>0을 강제하므로, 여기서 이력을 남기려 하면 배치 전체가 예외로 롤백된다
-        StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
-        ReflectionTestUtils.setField(lot, "availableQty", 0);
-        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
-                .thenReturn(List.of(lot));
-        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
-
-        // when
-        AdminLotExpireResponse result = adminLotService.expireLots();
-
-        // then
-        assertThat(result.lots()).hasSize(1);
-        assertThat(result.lots().get(0).status()).isEqualTo("EXPIRED");
-        verify(stockMovementRepository, never()).save(any());
-    }
-
-    @Test
-    void 만료_대상_조회_중_락_경합이_나면_처리중_오류로_감싼다() {
-        // given — findByStatusAndExpiryDateBefore 자체가 쓰기 락 조회라 락 대기 타임아웃/교착이 날 수 있다
-        when(stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now()))
-                .thenThrow(new CannotAcquireLockException("Lock wait timeout exceeded"));
-
-        // when, then
-        assertThatThrownBy(() -> adminLotService.expireLots())
-                .isInstanceOf(StockException.class)
-                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.EXPIRE_IN_PROGRESS);
-    }
-
-    private StockLot lotFixture(Long id, Long productOptionId, LocalDate expiryDate, int availableQty) {
-        StockLot lot = StockLot.register("req-" + id, productOptionId, expiryDate.minusDays(14), expiryDate,
-                availableQty);
+    private StockLot lotFixture(Long id, Long productOptionId) {
+        StockLot lot = StockLot.register("req-" + id, productOptionId, LocalDate.now().minusDays(15),
+                LocalDate.now().minusDays(1), 40);
         ReflectionTestUtils.setField(lot, "id", id);
-        return lot;
-    }
-
-    private StockLot nonAvailableLotFixture(Long id, Long productOptionId, LocalDate expiryDate, LotStatus status) {
-        StockLot lot = lotFixture(id, productOptionId, expiryDate, 50);
-        ReflectionTestUtils.setField(lot, "status", status);
+        ReflectionTestUtils.setField(lot, "status", LotStatus.EXPIRED);
         return lot;
     }
 

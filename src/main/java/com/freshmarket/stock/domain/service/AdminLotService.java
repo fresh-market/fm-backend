@@ -31,18 +31,24 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class AdminLotService {
 
+    // (DI-4-03/PERF-4-03) expireLots()가 한 번에 적재·처리하는 최대 로트 수. 패키지 전용이라
+    // 같은 패키지의 AdminLotServiceTest가 오케스트레이션(청크 반복 횟수) 검증에 그대로 참조한다
+    static final int EXPIRE_CHUNK_SIZE = 1000;
+
     private final StockLotRepository stockLotRepository;
     private final StockMovementRepository stockMovementRepository;
     private final ProductApi productApi;
     private final ApplicationEventPublisher eventPublisher;
+    private final AdminLotExpireChunkService adminLotExpireChunkService;
 
     public AdminLotService(StockLotRepository stockLotRepository,
             StockMovementRepository stockMovementRepository, ProductApi productApi,
-            ApplicationEventPublisher eventPublisher) {
+            ApplicationEventPublisher eventPublisher, AdminLotExpireChunkService adminLotExpireChunkService) {
         this.stockLotRepository = stockLotRepository;
         this.stockMovementRepository = stockMovementRepository;
         this.productApi = productApi;
         this.eventPublisher = eventPublisher;
+        this.adminLotExpireChunkService = adminLotExpireChunkService;
     }
 
     /*
@@ -105,55 +111,22 @@ public class AdminLotService {
      * 소비기한이 지난 AVAILABLE 로트를 찾아 EXPIRED로 전환하고 EXPIRE 이력을 남긴다(stock.md "만료
      * 로트 처리"). 하루 한 번 배치로 돌거나 관리자가 수동 호출한다.
      *
-     * 품절 이벤트는 로트 하나하나가 아니라, 이번 호출로 영향받은 옵션 단위로 한 번씩만 발행한다.
-     * 루프 안에서 로트를 만료시킬 때마다 바로 확인하면, 같은 옵션의 로트 여러 개가 한 번에 만료될 때
-     * 마지막 로트가 아직 처리되지 않은 시점에도 "가용 로트 없음"으로 잘못 판단해 이벤트가 여러 번
-     * 발행될 수 있다. 전부 만료시킨 뒤 옵션별로 한 번만 확인해야 이 문제가 없다.
+     * (DI-4-03/PERF-4-03) 대상 전체를 한 트랜잭션·영속성 컨텍스트에 적재하지 않고, 청크(최대
+     * EXPIRE_CHUNK_SIZE건) 단위로 AdminLotExpireChunkService.expireChunk()를 반복 호출한다 —
+     * 청크마다 별도 트랜잭션이 커밋되어 영속성 컨텍스트가 그때그때 비워진다. 처리된 행은 상태가
+     * AVAILABLE→EXPIRED로 바뀌어 다음 조회 조건에서 자연히 빠지므로, 마지막 청크가
+     * EXPIRE_CHUNK_SIZE보다 적게 돌아올 때까지 반복하면 전체를 다 처리한 것이다. 옵션별 품절
+     * 이벤트 발행은 청크 단위로 이뤄진다(AdminLotExpireChunkService 참고, 정확성은 그대로 유지).
      */
-    @Transactional
     public AdminLotExpireResponse expireLots() {
-        List<StockLot> targets = findExpiredTargetsForUpdate();
+        List<StockLot> allExpired = new ArrayList<>();
+        List<StockLot> chunk;
+        do {
+            chunk = adminLotExpireChunkService.expireChunk(EXPIRE_CHUNK_SIZE);
+            allExpired.addAll(chunk);
+        } while (chunk.size() == EXPIRE_CHUNK_SIZE);
 
-        List<StockLot> expiredLots = new ArrayList<>();
-        for (StockLot lot : targets) {
-            int beforeQty = lot.getAvailableQty();
-            if (!lot.expire()) {
-                continue;
-            }
-            /*
-             * 예약으로 이미 다 소진된(availableQty=0) 로트도 status는 AVAILABLE로 남아있어(SOLD_OUT
-             * 전환이 아직 없다) 이 조회에 걸릴 수 있다. 그런 로트는 줄어들 수량이 없으므로 EXPIRE
-             * 이력을 남기지 않는다 — StockMovement가 quantity>0을 강제해서, 0을 넘기면 이 배치
-             * 전체가 예외로 롤백된다.
-             */
-            if (beforeQty > 0) {
-                stockMovementRepository.save(StockMovement.expire(lot.getId(), beforeQty));
-            }
-            expiredLots.add(lot);
-        }
-
-        expiredLots.stream()
-                .map(StockLot::getProductOptionId)
-                .distinct()
-                .filter(optionId -> !stockLotRepository.existsByProductOptionIdAndStatus(
-                        optionId, LotStatus.AVAILABLE))
-                .forEach(optionId -> eventPublisher.publishEvent(new OptionAvailabilityChangedEvent(optionId, true)));
-
-        return AdminLotExpireResponse.of(expiredLots);
-    }
-
-    /*
-     * 락 대기 타임아웃/교착은 도메인 밖으로 raw 타입을 새어나가게 두지 않고 재시도 가능한 오류로 감싼다.
-     * 조회 자체가 쓰기 락이라(StockLotRepository.findByStatusAndExpiryDateBefore 참고) 같은 로트를
-     * 건드리는 reserve()와 경합하면 여기서 실패할 수 있다 — 그 사이 beforeQty가 낡은 값이 되는 걸
-     * 막기 위한 것이라, 실패하면 이 배치 전체를 롤백하고 재시도를 안내한다.
-     */
-    private List<StockLot> findExpiredTargetsForUpdate() {
-        try {
-            return stockLotRepository.findByStatusAndExpiryDateBefore(LotStatus.AVAILABLE, LocalDate.now());
-        } catch (PessimisticLockingFailureException e) {
-            throw new StockException(StockErrorCode.EXPIRE_IN_PROGRESS, e);
-        }
+        return AdminLotExpireResponse.of(allExpired);
     }
 
     /*
