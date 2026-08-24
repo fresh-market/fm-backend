@@ -268,6 +268,15 @@ DELETE /v1/admin/auth/tokens
 **관리자 인증은 로그인뿐 아니라 토큰 재발급과 로그아웃도 지원한다.**
 재발급 시 Refresh Token Rotation을 적용하며, 로그아웃 시 Refresh Token을 폐기하고 Access Token도 즉시 사용할 수 없도록 처리한다.
 
+재발급 중 Redis 타임아웃처럼 Rotation 결과를 확정할 수 없거나, DB 폴백 뒤 Redis 동기화에 실패하면
+성공 토큰을 반환하지 않고 `503 ADMIN-009`로 응답한다. 이 오류는 재발급 처리 결과를 확정할 수 없는 일시적 장애를 의미한다.
+Rotation 결과가 미확정일 수 있으므로 동일 Refresh Token의 자동 재시도 여부는 별도 정책으로 다룬다.
+
+| 오류 | 코드 | 언제 |
+|---|---|---|
+| `401` | `AUTH-004` | 만료되었거나 이미 사용된 Refresh Token |
+| `503` | `ADMIN-009` | 재발급 결과를 확정할 수 없거나 토큰 저장소 동기화에 실패함 |
+
 ```
 Set-Cookie: refreshToken=...; HttpOnly; Secure; SameSite=Strict;
             Path=/v1/admin/auth/; Max-Age=86400

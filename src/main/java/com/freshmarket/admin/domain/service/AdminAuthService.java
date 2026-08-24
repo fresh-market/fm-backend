@@ -5,6 +5,7 @@ import com.freshmarket.admin.domain.dto.AdminLoginResponse;
 import com.freshmarket.admin.domain.dto.AdminLoginResult;
 import com.freshmarket.admin.domain.entity.Admin;
 import com.freshmarket.admin.domain.entity.AdminAuditLog;
+import com.freshmarket.admin.domain.exception.AdminAuthUnavailableException;
 import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
@@ -172,7 +173,7 @@ public class AdminAuthService {
             // 타임아웃은 Redis가 Rotation을 끝냈는지 알 수 없는 "결과 미확정" 상태다.
             // 이때 DB 폴백까지 수행하면 같은 토큰을 두 번 회전시킬 수 있으므로 재발급을 중단한다.
             log.error("event=ADMIN_REDIS_CAS_OUTCOME_UNKNOWN — 타임아웃으로 Rotation 결과를 확정할 수 없어 DB 폴백을 수행하지 않는다", e);
-            throw e;
+            throw new AdminAuthUnavailableException(AdminErrorCode.REFRESH_TOKEN_REISSUE_UNAVAILABLE, e);
         } catch (DataAccessException e) {
             log.warn("event=ADMIN_REDIS_CAS_FAILED — DB 백업으로 재발급 폴백 시도", e);
             return reissueViaDbFallback(oldRefreshToken, newRefreshToken, refreshTtl, expiresAt);
@@ -242,8 +243,18 @@ public class AdminAuthService {
         String role = admin.getRole().toAuthority();
         try {
             refreshTokenRepository.save(newRefreshToken, admin.getId(), role, TokenType.ADMIN, false, refreshTtl);
+        } catch (QueryTimeoutException e) {
+            // DB CAS는 같은 트랜잭션 안에 있으므로 이 예외가 밖으로 나가면 롤백된다.
+            // Redis 저장 결과는 미확정이므로 성공 토큰을 반환하지 않고 재시도를 유도한다.
+            log.error("event=ADMIN_REDIS_SAVE_OUTCOME_UNKNOWN_DURING_DB_FALLBACK adminId={} — 성공 응답을 반환하지 않는다",
+                    admin.getId(), e);
+            throw new AdminAuthUnavailableException(AdminErrorCode.REFRESH_TOKEN_REISSUE_UNAVAILABLE, e);
         } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REDIS_SAVE_FAILED_DURING_DB_FALLBACK adminId={} — DB만 반영됨", admin.getId(), e);
+            // Redis 저장이 실패한 상태에서 성공 응답을 반환하면 DB와 Redis가 갈린 토큰을 클라이언트에 넘기게 된다.
+            // AdminAuthUnavailableException은 noRollbackFor 대상이 아니므로 DB CAS도 함께 롤백된다.
+            log.error("event=ADMIN_REDIS_SAVE_FAILED_DURING_DB_FALLBACK adminId={} — DB CAS를 롤백하고 성공 응답을 반환하지 않는다",
+                    admin.getId(), e);
+            throw new AdminAuthUnavailableException(AdminErrorCode.REFRESH_TOKEN_REISSUE_UNAVAILABLE, e);
         }
 
         String newAccessToken = jwtTokenProvider.createAccessToken(admin.getId(), TokenType.ADMIN, role);

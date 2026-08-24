@@ -3,6 +3,7 @@ package com.freshmarket.admin.domain.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,6 +15,7 @@ import com.freshmarket.admin.domain.entity.Admin;
 import com.freshmarket.admin.domain.entity.AdminAuditLog;
 import com.freshmarket.admin.domain.entity.AdminFixture;
 import com.freshmarket.admin.domain.entity.AdminRole;
+import com.freshmarket.admin.domain.exception.AdminAuthUnavailableException;
 import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
@@ -279,12 +281,14 @@ class AdminAuthServiceTest {
     }
 
     @Test
-    void Redis_회전이_타임아웃되면_결과미확정으로_보고_DB_폴백을_수행하지_않는다() {
+    void Redis_회전이_타임아웃되면_도메인예외로_변환하고_DB_폴백을_수행하지_않는다() {
         when(refreshTokenRepository.compareAndRotate(eq("old-rt"), anyString(), any()))
                 .thenThrow(new QueryTimeoutException("redis timeout"));
 
         assertThatThrownBy(() -> adminAuthService.reissue("old-rt"))
-                .isInstanceOf(QueryTimeoutException.class);
+                .isInstanceOf(AdminAuthUnavailableException.class)
+                .extracting(e -> ((AdminAuthUnavailableException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.REFRESH_TOKEN_REISSUE_UNAVAILABLE);
 
         verify(adminRepository, never()).findByRefreshTokenHash(anyString());
         verify(adminRepository, never()).compareAndSetRefreshToken(anyLong(), anyString(), anyString(), any());
@@ -316,6 +320,31 @@ class AdminAuthServiceTest {
                 eq(false),
                 eq(Duration.ofSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS)));
         verify(adminAuditLogRepository).save(any(AdminAuditLog.class));
+    }
+
+    @Test
+    void DB_폴백후_Redis_저장에_실패하면_성공응답을_반환하지_않는다() {
+        when(refreshTokenRepository.compareAndRotate(eq("old-rt"), anyString(), any()))
+                .thenThrow(new DataAccessResourceFailureException("redis down"));
+
+        Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
+        ReflectionTestUtils.setField(admin, "id", 1L);
+        admin.issueRefreshToken(TokenHasher.sha256("old-rt"), LocalDateTime.now(clock).plusDays(1));
+
+        when(adminRepository.findByRefreshTokenHash(TokenHasher.sha256("old-rt")))
+                .thenReturn(Optional.of(admin));
+        when(adminRepository.compareAndSetRefreshToken(eq(1L), eq(TokenHasher.sha256("old-rt")), anyString(), any()))
+                .thenReturn(1);
+        doThrow(new DataAccessResourceFailureException("redis save failed"))
+                .when(refreshTokenRepository)
+                .save(anyString(), eq(1L), eq("ROLE_ADMIN"), eq(TokenType.ADMIN), eq(false), any());
+
+        assertThatThrownBy(() -> adminAuthService.reissue("old-rt"))
+                .isInstanceOf(AdminAuthUnavailableException.class)
+                .extracting(e -> ((AdminAuthUnavailableException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.REFRESH_TOKEN_REISSUE_UNAVAILABLE);
+
+        verify(adminAuditLogRepository, never()).save(any(AdminAuditLog.class));
     }
 
     @Test

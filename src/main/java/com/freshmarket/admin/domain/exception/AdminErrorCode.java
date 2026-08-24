@@ -23,7 +23,10 @@ public enum AdminErrorCode implements ErrorCode {
 
     SUPER_ADMIN_REQUIRED(HttpStatus.FORBIDDEN, "ADMIN-005", "최고관리자 권한이 필요합니다."),
 
-    LOGIN_ID_DUPLICATED(HttpStatus.CONFLICT, "ADMIN-006", "이미 사용 중인 관리자 아이디입니다.");
+    LOGIN_ID_DUPLICATED(HttpStatus.CONFLICT, "ADMIN-006", "이미 사용 중인 관리자 아이디입니다."),
+
+    // Redis 재발급 결과를 확정할 수 없거나 DB 폴백 후 Redis 동기화가 실패한 경우. 클라이언트는 잠시 후 재시도할 수 있다.
+    REFRESH_TOKEN_REISSUE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "ADMIN-009", "토큰 재발급 상태를 확인할 수 없습니다.");
 
     private final HttpStatus httpStatus;
     private final String code;
