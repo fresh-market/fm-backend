@@ -1,8 +1,10 @@
-package com.freshmarket.common.auth.jwt;
+package com.freshmarket.common.auth.opaque;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+
+import com.freshmarket.common.auth.jwt.TokenType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
