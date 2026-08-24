@@ -15,7 +15,10 @@ public interface KakaoUnlinkFailureRepository extends JpaRepository<KakaoUnlinkF
 
     List<KakaoUnlinkFailure> findByAttemptCountLessThanAndResolvedFalse(int threshold);
 
-    List<KakaoUnlinkFailure> findByAttemptCountGreaterThanEqualAndResolvedFalse(int threshold);
+    long countByAttemptCountGreaterThanEqualAndResolvedFalse(int threshold);
+
+    List<KakaoUnlinkFailure>
+    findTop50ByAttemptCountGreaterThanEqualAndResolvedFalseOrderByCreatedAtAscIdAsc(int threshold);
 
     Page<KakaoUnlinkFailure> findByAttemptCountGreaterThanEqualAndResolvedFalse(
             int threshold, Pageable pageable);

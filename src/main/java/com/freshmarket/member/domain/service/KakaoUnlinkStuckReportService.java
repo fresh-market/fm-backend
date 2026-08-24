@@ -30,24 +30,26 @@ public class KakaoUnlinkStuckReportService {
 
     private final KakaoUnlinkFailureRepository failureRepository;
 
-    /** 미해소 포기 건의 memberId 목록을 반환하고, 하나라도 있으면 요약을 ERROR로 남긴다. */
+    /** 미해소 포기 건의 memberId 최대 50개를 반환하고, 하나라도 있으면 요약을 ERROR로 남긴다. */
     public List<Long> reportStuck() {
-        List<KakaoUnlinkFailure> stuck = failureRepository
-                .findByAttemptCountGreaterThanEqualAndResolvedFalse(KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS);
-        if (stuck.isEmpty()) {
+        long stuckCount = failureRepository.countByAttemptCountGreaterThanEqualAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS);
+        if (stuckCount == 0) {
             return List.of();
         }
 
-        List<Long> memberIds = stuck.stream()
+        List<Long> memberIds = failureRepository
+                .findTop50ByAttemptCountGreaterThanEqualAndResolvedFalseOrderByCreatedAtAscIdAsc(
+                        KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)
+                .stream()
                 .map(KakaoUnlinkFailure::getMemberId)
                 .toList();
         // memberId는 우리 내부 식별자라 PII 마스킹 대상이 아니다(kakaoUserId와 다르다).
         String loggedMemberIds = memberIds.stream()
-                .limit(MEMBER_ID_LOG_LIMIT)
                 .map(String::valueOf)
                 .collect(Collectors.joining(","));
         log.error("event=KAKAO_UNLINK_OUTBOX_STUCK_SUMMARY count={} memberIds={} truncated={}",
-                stuck.size(), loggedMemberIds, memberIds.size() > MEMBER_ID_LOG_LIMIT);
+                stuckCount, loggedMemberIds, stuckCount > MEMBER_ID_LOG_LIMIT);
         return memberIds;
     }
 }

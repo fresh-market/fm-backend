@@ -47,8 +47,8 @@ class KakaoUnlinkStuckReportServiceTest {
 
     @Test
     void 쌓인_행이_없으면_빈_목록을_돌려준다() {
-        when(failureRepository.findByAttemptCountGreaterThanEqualAndResolvedFalse(
-                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(List.of());
+        when(failureRepository.countByAttemptCountGreaterThanEqualAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(0L);
 
         List<Long> result = sut.reportStuck();
 
@@ -59,7 +59,9 @@ class KakaoUnlinkStuckReportServiceTest {
     void 포기_문턱을_넘은_행의_memberId를_모아서_돌려준다() {
         KakaoUnlinkFailure givenUp1 = givenUpFailure(1L, 100L);
         KakaoUnlinkFailure givenUp2 = givenUpFailure(2L, 200L);
-        when(failureRepository.findByAttemptCountGreaterThanEqualAndResolvedFalse(
+        when(failureRepository.countByAttemptCountGreaterThanEqualAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(2L);
+        when(failureRepository.findTop50ByAttemptCountGreaterThanEqualAndResolvedFalseOrderByCreatedAtAscIdAsc(
                 KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(List.of(givenUp1, givenUp2));
 
         List<Long> result = sut.reportStuck();
@@ -68,14 +70,19 @@ class KakaoUnlinkStuckReportServiceTest {
     }
 
     @Test
-    void 포기_건만_조회하고_findAll은_호출하지_않는다() {
-        when(failureRepository.findByAttemptCountGreaterThanEqualAndResolvedFalse(
+    void 포기_건의_개수와_최대_50건만_조회하고_findAll은_호출하지_않는다() {
+        when(failureRepository.countByAttemptCountGreaterThanEqualAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(51L);
+        when(failureRepository.findTop50ByAttemptCountGreaterThanEqualAndResolvedFalseOrderByCreatedAtAscIdAsc(
                 KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(List.of());
 
         sut.reportStuck();
 
         org.mockito.Mockito.verify(failureRepository)
-                .findByAttemptCountGreaterThanEqualAndResolvedFalse(KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS);
+                .countByAttemptCountGreaterThanEqualAndResolvedFalse(KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS);
+        org.mockito.Mockito.verify(failureRepository)
+                .findTop50ByAttemptCountGreaterThanEqualAndResolvedFalseOrderByCreatedAtAscIdAsc(
+                        KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS);
         org.mockito.Mockito.verify(failureRepository, org.mockito.Mockito.never()).findAll();
     }
 }
