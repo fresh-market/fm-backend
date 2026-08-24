@@ -3,10 +3,9 @@ package com.freshmarket.stock.domain.service;
 import static com.freshmarket.stock.domain.ExpiringSoonPolicy.DEFAULT_PAGE_SIZE;
 import static com.freshmarket.stock.domain.ExpiringSoonPolicy.DEFAULT_WITHIN_DAYS;
 
-import static com.freshmarket.stock.domain.ExpiringSoonPolicy.DEFAULT_PAGE_SIZE;
-import static com.freshmarket.stock.domain.ExpiringSoonPolicy.DEFAULT_WITHIN_DAYS;
-
 import com.freshmarket.common.response.CursorPageResponse;
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.product.ProductOptionInfo;
 import com.freshmarket.stock.domain.ExpiringSoonJudge;
@@ -31,7 +30,8 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * 정렬은 productOptionId 오름차순 커서 페이지네이션이다. 임박한 순으로 보여주면
  * 첫 페이지만 계속 노출되어 특정 상품에 판매가 쏠린다 — 순환 노출을 위해 정렬 축을
- * 임박도가 아니라 안정적인 식별자로 둔다.
+ * 임박도가 아니라 안정적인 식별자로 둔다. 커서는 PageTokens 로 불투명화해 목록/검색
+ * 조회와 같은 방식을 쓴다 (API-5-02).
  *
  * purchasable/categoryId 필터링이 DB 조회 이후 자바에서 일어나, 정확히 pageSize
  * 만큼 응답하지 못할 수 있다. FETCH_MULTIPLIER 만큼 넉넉히 가져와 이 문제를 줄인다.
@@ -54,11 +54,14 @@ public class ExpiringSoonService {
     private final Clock clock;
 
     public CursorPageResponse<ExpiringSoonResponse> getExpiringSoonProducts(
-            int withinDays, Long categoryId, Long cursorProductOptionId, int pageSize) {
+            int withinDays, Long categoryId, String pageToken, int pageSize) {
 
         int effectiveWithinDays = withinDays > 0 ? withinDays : DEFAULT_WITHIN_DAYS;
         int effectivePageSize = pageSize > 0 ? pageSize : DEFAULT_PAGE_SIZE;
         LocalDate judgmentStart = LocalDate.now(clock).plusDays(effectiveWithinDays);
+
+        PageCursor cursor = PageTokens.decode(pageToken);
+        Long cursorProductOptionId = cursor != null ? cursor.id() : null;
 
         int fetchSize = effectivePageSize * FETCH_MULTIPLIER;
         List<StockLotView> lots = stockLotQueryRepository.findAvailableLots(
@@ -88,7 +91,6 @@ public class ExpiringSoonService {
                         e.getKey(), e.getValue().saleAvailableDaysFromExpiry(), judgmentStart))
                 .toList();
 
-        // 필터링 결과가 pageSize 보다 많으면 다음 페이지가 있다고 본다
         boolean hasNext = filtered.size() > effectivePageSize || hasMoreInBatch;
         List<Map.Entry<StockLotView, ProductOptionInfo>> page = filtered.size() > effectivePageSize
                 ? filtered.subList(0, effectivePageSize)
@@ -100,7 +102,8 @@ public class ExpiringSoonService {
                 .toList();
 
         String nextToken = hasNext && !page.isEmpty()
-                ? String.valueOf(page.get(page.size() - 1).getKey().productOptionId())
+                ? PageTokens.encode(new PageCursor(
+                        page.get(page.size() - 1).getKey().productOptionId(), null))
                 : null;
 
         return CursorPageResponse.of(items, nextToken);

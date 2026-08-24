@@ -1,5 +1,8 @@
 package com.freshmarket.stock.domain.service;
 
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -90,7 +93,9 @@ class ExpiringSoonServiceTest {
         // then — 필터링 후 2건 남았는데 pageSize=1 이라, 1건만 응답하고 다음 토큰을 준다
         assertThat(result.items()).hasSize(1);
         assertThat(result.items().get(0).productName()).isEqualTo("감귤");
-        assertThat(result.nextPageToken()).isEqualTo("31");
+        assertThat(result.nextPageToken()).isNotNull();
+        PageCursor decoded = PageTokens.decode(result.nextPageToken());
+        assertThat(decoded.id()).isEqualTo(31L);
     }
 
     @Test

@@ -170,7 +170,7 @@ class ExpiringSoonServiceIntegrationTest {
 
         // when — 2페이지, 1페이지와 겹치지 않아야 한다
         CursorPageResponse<ExpiringSoonResponse> secondPage = expiringSoonService
-                .getExpiringSoonProducts(3, null, Long.valueOf(firstPage.nextPageToken()), 1);
+                .getExpiringSoonProducts(3, null, firstPage.nextPageToken(), 1);
 
         // then
         assertThat(secondPage.items()).hasSize(1);

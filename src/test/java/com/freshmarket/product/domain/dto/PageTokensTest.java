@@ -1,5 +1,8 @@
 package com.freshmarket.product.domain.dto;
 
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
