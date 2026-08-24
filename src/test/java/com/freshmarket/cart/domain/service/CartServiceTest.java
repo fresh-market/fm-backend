@@ -37,7 +37,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 class CartServiceTest {
 
     private static final ProductOptionInfo PURCHASABLE_OPTION =
-            new ProductOptionInfo(11L, "감귤", "1kg", 12900, true);
+            new ProductOptionInfo(1L, 1L, 11L, "감귤", "1kg", 12900, true, 3);
 
     @Mock
     private CartRepository cartRepository;
@@ -71,7 +71,7 @@ class CartServiceTest {
         when(cartItemRepository.findAllByCartIdOrderByCreatedAtDesc(10L)).thenReturn(List.of(first, second));
         when(productApi.findOptionInfos(List.of(11L, 12L))).thenReturn(List.of(
                 PURCHASABLE_OPTION,
-                new ProductOptionInfo(12L, "사과", "2kg", 15000, true)));
+                new ProductOptionInfo(2L, 1L, 12L, "사과", "2kg", 15000, true, 3)));
 
         CartResponse result = sut.getCart(1L);
 
@@ -131,7 +131,7 @@ class CartServiceTest {
     void 구매할_수_없는_옵션은_담을_수_없다() {
         when(cartRepository.findByMemberIdForUpdate(1L)).thenReturn(Optional.of(cart(1L, 10L)));
         when(productApi.findOptionInfo(11L)).thenReturn(Optional.of(
-                new ProductOptionInfo(11L, "감귤", "1kg", 12900, false)));
+                new ProductOptionInfo(1L, 1L, 11L, "감귤", "1kg", 12900, false, 3)));
 
         assertThatThrownBy(() -> sut.addItem(1L, new CartItemCreateRequest(11L, 1)))
                 .isInstanceOf(CartException.class);
@@ -221,7 +221,7 @@ class CartServiceTest {
         when(cartItemRepository.findAllByCartIdAndIdInForUpdate(10L, List.of(100L)))
                 .thenReturn(List.of(item));
         when(productApi.findOptionInfos(List.of(11L))).thenReturn(List.of(
-                new ProductOptionInfo(11L, "감귤", "1kg", 12900, false)));
+                new ProductOptionInfo(1L, 1L, 11L, "감귤", "1kg", 12900, false, 3)));
 
         assertThatThrownBy(() -> sut.getCheckoutItems(1L, List.of(100L)))
                 .isInstanceOf(CartException.class)
