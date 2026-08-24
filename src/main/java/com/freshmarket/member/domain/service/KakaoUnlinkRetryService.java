@@ -32,8 +32,18 @@ public class KakaoUnlinkRetryService {
                 () -> failureRepository.save(KakaoUnlinkFailure.record(memberId, kakaoUserId)));
     }
 
+    /*
+     * (2026-08-24) shouldGiveUp()인 행(포기 문턱 이상 실패한 행)은 더 이상 카카오를 부르지 않는다
+     * — 그 지점까지 실패한 원인은 대부분 재시도로 해결되지 않는 구조적 문제(자격증명 문제, 이미
+     * 끊긴 연결 등)라 매 10분마다 다시 불러봐야 API 호출만 낭비된다. 그 행들이 여전히 쌓여있다는
+     * 걸 사람에게 알리는 건 이 메서드가 아니라 KakaoUnlinkStuckReportService가 하루 주기로
+     * 담당한다(주기를 분리한 이유는 그 클래스 주석 참고) — 여기서는 그냥 건너뛴다.
+     */
     public void retryAllPending() {
         for (KakaoUnlinkFailure failure : failureRepository.findAll()) {
+            if (failure.shouldGiveUp()) {
+                continue;
+            }
             retryOne(failure.getId(), failure.getKakaoUserId());
         }
     }
