@@ -11,8 +11,12 @@ import org.springframework.http.HttpStatus;
 public enum StockErrorCode implements ErrorCode {
 
     EXPIRY_BEFORE_RECEIVED(HttpStatus.UNPROCESSABLE_CONTENT, "STOCK-001", "소비기한이 입고일보다 이릅니다."),
-    // 메시지는 "삭제된 상품"까지 말하지만, 실제로는 존재 여부만 본다(상품 삭제 기능이 아직 없어 deleted_at이 채워질 방법이 없다).
-    // 상품 삭제 기능이 생기면 그때 이 판정에도 삭제 여부 확인을 추가해야 한다.
+    /*
+     * 두 군데서 쓴다: 입고 등록은 옵션이 그 상품 소속인지(existsOption)를, 로트별 조회는 상품
+     * 자체가 있는지(옵션 ID 목록이 비어있는지)를 본다. 메시지는 "삭제된 상품"까지 말하지만, 실제로는
+     * 존재 여부만 본다(상품 삭제 기능이 아직 없어 deleted_at이 채워질 방법이 없다).
+     * 상품 삭제 기능이 생기면 그때 이 판정들도 손봐야 한다.
+     */
     OPTION_NOT_FOUND(HttpStatus.NOT_FOUND, "STOCK-002", "없거나 삭제된 상품입니다."),
     // STOCK-003~005는 재고 조정·폐기 이슈에서 쓰기로 stock.md에 이미 예약돼 있어 건너뛴다
     REGISTRATION_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-006", "동일한 요청이 아직 처리 중입니다. 잠시 후 다시 시도해주세요."),
@@ -23,7 +27,16 @@ public enum StockErrorCode implements ErrorCode {
      * 재시도로도 안 잡히고 DB 유니크 위반도 나는 진짜 충돌 상황이 생기는데, 그걸 여기로 구분한다.
      */
     REQUEST_ID_ALREADY_USED(HttpStatus.CONFLICT, "STOCK-007", "이미 다른 옵션에 사용된 요청 식별자입니다."),
-    // STOCK-008/009는 feat/stock-reservation-api가 확정 전이라(INSUFFICIENT_STOCK/RESERVATION_IN_PROGRESS) 비워두고 010부터 쓴다
+    // FEFO로 가용 로트를 모두 훑어도 요청 수량을 채우지 못한 경우
+    INSUFFICIENT_STOCK(HttpStatus.UNPROCESSABLE_CONTENT, "STOCK-008", "재고가 부족합니다."),
+    /*
+     * 같은 로트를 동시에 건드리는 reserve/confirm/release끼리 경합한 경우 — 같은 주문상품을 동시에
+     * 예약하는 요청끼리 uk_alloc_orderitem_lot에서 부딪히거나(호출부가 재시도하면 먼저 커밋된 쪽의
+     * 할당을 findByOrderItemId로 찾아내 멱등하게 스킵한다), findByIdForUpdate가 락 대기 타임아웃이나
+     * 교착으로 실패한 경우 모두 여기로 묶는다.
+     */
+    RESERVATION_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-009", "동일한 재고 요청이 아직 처리 중입니다. 잠시 후 다시 시도해주세요."),
+    // 만료 배치의 조회 자체가 쓰기 락이라(StockLotRepository.findByStatusAndExpiryDateBefore) reserve()와 경합하면 여기로 묶는다
     EXPIRE_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-010", "만료 처리 중 다른 요청과 경합했습니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus httpStatus;

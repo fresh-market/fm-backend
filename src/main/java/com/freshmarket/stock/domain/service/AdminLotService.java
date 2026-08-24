@@ -6,6 +6,7 @@ import com.freshmarket.product.OptionAvailabilityChangedEvent;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
 import com.freshmarket.stock.domain.dto.AdminLotExpireResponse;
+import com.freshmarket.stock.domain.dto.AdminLotListResponse;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
 import com.freshmarket.stock.domain.entity.LotStatus;
 import com.freshmarket.stock.domain.entity.StockLot;
@@ -22,9 +23,10 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
-// 관리자 화면에서 로트를 입고 등록하고 만료 처리하는 기능을 담당한다
+// 관리자 화면에서 로트를 입고 등록하고, 조회하고, 만료 처리하는 기능을 담당한다
 @Service
 @Transactional(readOnly = true)
 public class AdminLotService {
@@ -177,6 +179,31 @@ public class AdminLotService {
         return stockLotRepository.findByRequestIdAndProductOptionId(requestId, optionId)
                 .map(AdminLotResponse::of)
                 .orElseThrow(() -> new StockException(StockErrorCode.REGISTRATION_IN_PROGRESS, cause));
+    }
+
+    /*
+     * 상품의 로트 전체를 소비기한 오름차순(FEFO)으로 조회한다.
+     * productId 존재 여부는 옵션 ID 목록이 비어있는지로 판정한다 — 상품 등록 시 옵션이 최소 1개
+     * 필수이고(AdminProductCreateRequest.options가 @NotEmpty) 옵션 삭제 기능이 아직 없어서,
+     * 지금은 "상품이 있으면 옵션도 항상 1개 이상 있다"는 불변식이 성립한다. 옵션 삭제 기능이
+     * 생기면 이 판정도 다시 봐야 한다(그때는 상품 자체의 존재 여부를 별도로 확인해야 함).
+     *
+     * 옵션 목록 조회와 로트 조회가 별개의 쿼리 두 번이라, 격리수준을 REPEATABLE_READ로 명시해서
+     * 두 쿼리가 같은 트랜잭션 안에서 일관된 스냅샷을 보게 강제한다 — DB 기본값에 기대지 않는다.
+     */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public AdminLotListResponse findAllByProduct(Long productId, boolean availableOnly) {
+        List<Long> optionIds = productApi.findOptionIds(productId);
+        if (optionIds.isEmpty()) {
+            throw new StockException(StockErrorCode.OPTION_NOT_FOUND);
+        }
+
+        List<StockLot> lots = availableOnly
+                ? stockLotRepository.findByProductOptionIdInAndStatusOrderByExpiryDateAsc(optionIds,
+                        LotStatus.AVAILABLE)
+                : stockLotRepository.findByProductOptionIdInOrderByExpiryDateAsc(optionIds);
+
+        return AdminLotListResponse.of(lots);
     }
 
     // optionId가 productId 소속으로 실제 존재하는지 확인한다

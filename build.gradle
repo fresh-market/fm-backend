@@ -177,15 +177,23 @@ dependencies {
     integrationTestImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     integrationTestImplementation 'org.testcontainers:testcontainers-mysql'
 
-    /*
-     * 검증용 엔티티가 이 소스셋에 있으므로 APT 를 여기에도 건다.
-     * 걸지 않으면 Q클래스가 생성되지 않아 컴파일이 깨진다.
-     */
+    /* 검증용 엔티티가 이 소스셋에 있으므로 APT 를 여기에도 건다.
+       걸지 않으면 Q클래스가 생성되지 않아 컴파일이 깨진다. */
     integrationTestCompileOnly 'org.projectlombok:lombok'
     integrationTestAnnotationProcessor 'org.projectlombok:lombok'
     integrationTestAnnotationProcessor 'com.querydsl:querydsl-apt::jakarta'
     integrationTestAnnotationProcessor 'jakarta.annotation:jakarta.annotation-api'
     integrationTestAnnotationProcessor 'jakarta.persistence:jakarta.persistence-api'
+
+}
+
+/*
+ * bootJar 만 만든다.
+ * 의존성이 빠진 plain jar 가 함께 있으면 Dockerfile 의 COPY *.jar 가 무엇을 담을지 글롭 순서에 좌우된다.
+ * 잘못 담기면 기동 시점에야 드러난다.
+ */
+tasks.named('jar') {
+    enabled = false
 }
 
 /*

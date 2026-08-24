@@ -36,16 +36,16 @@ refresh_token_expires_at  DATETIME(6)
 세션 테이블은 없다. `DELETE /v1/auth/tokens` 는 위 두 컬럼을 비우는 일과 그대로 대응한다.
 **세션을 리소스로 세웠다면 실재하지 않는 것에 이름을 붙이는 셈이 된다.**
 
-**Access 토큰은 무상태라 폐기할 수단이 없다.** 로그아웃해도 이미 나간 Access 토큰은
-남은 수명(최대 30분) 동안 유효하다. 즉시 끊어야 하면 블랙리스트가 따로 필요하고, 지금은 없다.
+**Access 토큰은 JWT 자체를 서버에 저장하지 않지만**, 로그아웃 시 발급 시각 기준의 무효화 정보를
+별도로 기록해 기존 Access 토큰을 사용할 수 없게 할 수 있다.
 
 `:refresh` 만 커스텀 메서드다. 갱신은 클라이언트가 필드를 고치는 것이 아니라
 **서버가 규칙에 따라 수행하는 동작**이라 `PATCH` 로 표현되지 않는다 (`API-3-08`).
 
 ## 토큰을 어떻게 전달하나
 
-**이 절은 회원 기준이다.** 관리자는 아직 발급은 본문, 사용은 헤더 방식 그대로다(변경 범위 밖 —
-관리자 인증은 다른 팀원이 별도 진행 중, [관리자](#관리자) 절 참고).
+**회원과 관리자 모두 Access/Refresh 토큰을 HttpOnly 쿠키로 전달한다.**
+응답 본문에는 토큰 원문을 담지 않는다.
 
 **회원은 둘 다 쿠키로 준다.**
 
@@ -58,7 +58,7 @@ refresh_token_expires_at  DATETIME(6)
 Set-Cookie: accessToken=...; HttpOnly; Secure; SameSite=Strict;
             Path=/; Max-Age=1800
 Set-Cookie: refreshToken=...; HttpOnly; Secure; SameSite=Strict;
-            Path=/v1/auth/tokens; Max-Age=1209600
+            Path=/v1/auth/; Max-Age=1209600
 ```
 
 **(2026-08-18) 원래는 Access 를 응답 본문으로 주고 클라이언트가 `Authorization: Bearer` 헤더에
@@ -71,8 +71,8 @@ Set-Cookie: refreshToken=...; HttpOnly; Secure; SameSite=Strict;
 막을 수 있다.**
 
 `Path` 가 다른 이유는 쓰임이 갈려서다. Access 는 인증이 필요한 모든 API 요청에 실려야 하니
-`Path=/`. Refresh 는 `:refresh` 와 `DELETE` 에서만 필요해서 그 경로로 좁힌다 —
-**다른 API 요청에는 실려 가지 않는다.**
+`Path=/`. 회원 Refresh 는 로그인/재발급/로그아웃 경로를 포함하도록 `Path=/v1/auth/` 를 사용한다.
+관리자 Refresh 는 `Path=/v1/admin/auth/` 를 사용한다.
 
 **수명도 갈려서 `Max-Age` 가 다르다.** Access 는 30분이라 탈취돼도 구간이 짧지만, Refresh 는
 14일이라 새면 2주 동안 재발급이 가능하다. 둘 다 `HttpOnly` 라 스크립트는 애초에 못 읽는다.
@@ -80,8 +80,8 @@ Set-Cookie: refreshToken=...; HttpOnly; Secure; SameSite=Strict;
 **대신 CSRF 노출 범위가 넓어졌다.** 브라우저가 쿠키를 자동으로 붙이기 때문이다. Access 가
 `Path=/` 라 인증이 필요한 모든 API 가 이 노출을 받는다 — 헤더 방식이었을 땐 이 노출 자체가
 없었다. `SameSite=Strict` 가 대부분을 막아 주지만 완전한 방어는 아니다. CSRF 토큰(더블서밋
-쿠키 등) 도입 여부는 아직 정하지 못했다 — [정하지 못한 것](#정하지-못한-것) 참고. 지금은
-`csrf(disable)` 로 두고 `SameSite=Strict` 하나로 버틴다. **이것이 XSS 위험과 맞바꾼 대가다.**
+쿠키 등) 도입 여부는 아직 정하지 못했다 — [정하지 못한 것](#정하지-못한-것) 참고. 회원 인증 체인은 현재 `SameSite=Strict` 를 사용하며 CSRF 토큰 방식은 아직 정하지 않았다.
+관리자 인증 체인은 CSRF를 사용하되 로그인 요청은 CSRF 검사에서 제외한다. **이것이 XSS 위험과 맞바꾼 대가다.**
 
 ## 회원
 
@@ -244,19 +244,16 @@ POST /v1/admin/auth/tokens
 {
   "code": "SUCCESS",
   "data": {
-    "accessToken": "eyJ...",
-    "tokenType": "Bearer",
     "expiresInSeconds": 1800,
     "admin": { "loginId": "admin.kim", "name": "김관리", "role": "ADMIN" }
   }
 }
 ```
 
-| 응답 | 코드 | 언제 |
-|---|---|---|
-| `201` | | 발급 성공 |
-| `401` | `ADMIN-001` | 아이디 또는 비밀번호 불일치. **사유를 구분해 알리지 않는다** |
-| `403` | `ADMIN-002` | 비활성 계정 |
+| 응답 | 코드 | 언제                                             |
+|---|---|------------------------------------------------|
+| `201` | | 발급 성공                                          |
+| `401` | `ADMIN-001` | 아이디 또는 비밀번호 불일치 또는 비활성 계정. **사유를 구분해 알리지 않는다** |
 
 **실패 응답이 계정 존재 여부를 구분해 주지 않는다** (`SEC-6-04`). 메시지뿐 아니라 **응답 시간도 맞춘다.**
 계정이 없을 때도 더미 해시로 BCrypt 를 돌려, 시간 차이로 아이디 존재가 드러나지 않게 한다.
@@ -268,11 +265,11 @@ POST   /v1/admin/auth/tokens:refresh
 DELETE /v1/admin/auth/tokens
 ```
 
-회원과 같다. 수명과 쿠키 경로만 다르다.
+**관리자 토큰 재발급과 로그아웃은 현재 관리자 로그인 구현 범위에 포함하지 않는다.**
 
 ```
 Set-Cookie: refreshToken=...; HttpOnly; Secure; SameSite=Strict;
-            Path=/v1/admin/auth/tokens; Max-Age=86400
+            Path=/v1/admin/auth/; Max-Age=86400
 ```
 
 Refresh 가 1일인 것은 **자동 로그인을 제공하지 않기 때문이다.** 관리자 콘솔은 회원 서비스보다
@@ -302,6 +299,8 @@ Refresh 가 1일인 것은 **자동 로그인을 제공하지 않기 때문이�
 PUT /v1/admin/auth/password
 ```
 
+**관리자 비밀번호 변경은 현재 관리자 로그인 구현 범위에 포함하지 않는다.**
+
 ```json
 { "currentPassword": "...", "newPassword": "..." }
 ```
@@ -321,11 +320,10 @@ PUT /v1/admin/auth/password
 
 ## 정하지 못한 것
 
-**5회 실패 시 30분 잠금이 빠져 있다.** 요구사항에는 있으나 `admin` 테이블에 실패 횟수와 잠금 시각
-컬럼이 없다. 넣으려면 컬럼 두 개를 더하는 마이그레이션이 필요하고, 그때 이 문서에
-`423 Locked` 응답을 더한다.
+**5회 실패 시 30분 잠금은 현재 프로젝트 구현 범위에서 제외한다.**
+요구사항에는 있으나 `admin` 테이블에 실패 횟수와 잠금 시각 컬럼이 없으며, 현재 구현에서는 관련 컬럼과 잠금 응답을 추가하지 않는다.
 
-**레이트 리밋도 정해지지 않았다.** 계정 단위 잠금과 별개로 IP 단위 제한이 필요한데,
+**관리자 전용 Rate Limit도 현재 프로젝트 구현 범위에서 제외한다.** 계정 단위 잠금과 별개로 IP 단위 제한이 필요한데,
 애플리케이션과 앞단(ALB, WAF) 중 어디서 할지 결정되지 않았다.
 
 **회원 Access 토큰의 CSRF 토큰 방어도 정해지지 않았다.** (2026-08-18) Access 를 헤더에서

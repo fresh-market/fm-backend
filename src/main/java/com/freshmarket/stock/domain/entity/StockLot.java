@@ -82,6 +82,14 @@ public class StockLot extends BaseMutableTimeEntity {
         return true;
     }
 
+    // 예약 해제로 가용 수량을 복원한다. 상한(initial_qty 이하)은 chk_lot_qty가 DB에서 최종 방어한다
+    public void restore(int qty) {
+        if (qty < 1) {
+            throw new IllegalArgumentException("qty 는 1 이상이어야 한다: " + qty);
+        }
+        this.availableQty += qty;
+    }
+
     // 요청 식별자가 비어있지 않고 길이 제한을 넘지 않는지 검사한다
     private static void validateRequestId(String requestId) {
         if (requestId == null || requestId.isBlank()) {
