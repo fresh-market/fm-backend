@@ -143,10 +143,10 @@ cdn:
 
 jwt:
   secret: "${JWT_SECRET}"
-  access-token-validity-ms: 1800000
+  access-token-validity-ms: "${JWT_ACCESS_VALIDITY_MS:1800000}"
   refresh-token-validity-ms: "${JWT_REFRESH_VALIDITY_MS:1209600000}"
   cookie:
-    secure: false
+    secure: "${JWT_COOKIE_SECURE:false}"
 
 kakao:
   app-id: "${KAKAO_APP_ID}"
