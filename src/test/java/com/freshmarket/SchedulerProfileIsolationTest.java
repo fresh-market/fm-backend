@@ -6,6 +6,8 @@ import static org.mockito.Mockito.mock;
 import com.freshmarket.config.SchedulingConfig;
 import com.freshmarket.member.domain.KakaoUnlinkRetryScheduler;
 import com.freshmarket.member.domain.service.KakaoUnlinkRetryService;
+import com.freshmarket.stock.domain.AdminLotExpireScheduler;
+import com.freshmarket.stock.domain.service.AdminLotService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
@@ -24,6 +26,10 @@ class SchedulerProfileIsolationTest {
             .withBean(KakaoUnlinkRetryService.class, () -> mock(KakaoUnlinkRetryService.class))
             .withUserConfiguration(SchedulingConfig.class, KakaoUnlinkRetryScheduler.class);
 
+    private final ApplicationContextRunner lotExpireRunner = new ApplicationContextRunner()
+            .withBean(AdminLotService.class, () -> mock(AdminLotService.class))
+            .withUserConfiguration(SchedulingConfig.class, AdminLotExpireScheduler.class);
+
     @Test
     void batch_프로필이_없으면_스케줄러가_꺼진다() {
         runner.run(context -> {
@@ -39,6 +45,24 @@ class SchedulerProfileIsolationTest {
             assertThat(context).hasSingleBean(SchedulingConfig.class);
             assertThat(context).hasSingleBean(ScheduledAnnotationBeanPostProcessor.class);
             assertThat(context).hasSingleBean(KakaoUnlinkRetryScheduler.class);
+        });
+    }
+
+    @Test
+    void batch_프로필이_없으면_만료_로트_스케줄러가_꺼진다() {
+        lotExpireRunner.run(context -> {
+            assertThat(context).doesNotHaveBean(SchedulingConfig.class);
+            assertThat(context).doesNotHaveBean(ScheduledAnnotationBeanPostProcessor.class);
+            assertThat(context).doesNotHaveBean(AdminLotExpireScheduler.class);
+        });
+    }
+
+    @Test
+    void batch_프로필이면_만료_로트_스케줄러가_켜진다() {
+        lotExpireRunner.withPropertyValues("spring.profiles.active=batch").run(context -> {
+            assertThat(context).hasSingleBean(SchedulingConfig.class);
+            assertThat(context).hasSingleBean(ScheduledAnnotationBeanPostProcessor.class);
+            assertThat(context).hasSingleBean(AdminLotExpireScheduler.class);
         });
     }
 }
