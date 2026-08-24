@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 /**
  * (2026-08-20, DI-6-02) KakaoUnlinkRetryService.retryAllPending()이 카카오를 호출한 "결과"만
@@ -31,17 +32,34 @@ public class KakaoUnlinkRetryOutcomeService {
     public void markFailed(Long failureId, Exception cause) {
         failureRepository.findById(failureId).ifPresent(failure -> {
             failure.markRetryFailed();
+            String causeType = rootCauseType(cause);
             if (failure.shouldGiveUp()) {
                 // (DI-6-02) 이 지점부턴 "조용히"가 아니다 — 우리 DB는 WITHDRAWN인데 카카오는
                 // 연결이 살아있는 상태로 굳을 수 있는 컴플라이언스 문제라 사람이 봐야 한다.
-                log.error("event=KAKAO_UNLINK_OUTBOX_GAVE_UP memberId={} kakaoUserId={} attempts={}",
+                log.error("event=KAKAO_UNLINK_OUTBOX_GAVE_UP memberId={} kakaoUserId={} attempts={} causeType={}",
                         failure.getMemberId(), PiiMasker.maskProviderId(failure.getKakaoUserId()),
-                        failure.getAttemptCount(), cause);
+                        failure.getAttemptCount(), causeType, cause);
             } else {
-                log.warn("event=KAKAO_UNLINK_OUTBOX_RETRY_FAILED memberId={} kakaoUserId={} attempts={}",
+                log.warn("event=KAKAO_UNLINK_OUTBOX_RETRY_FAILED memberId={} kakaoUserId={} attempts={} causeType={}",
                         failure.getMemberId(), PiiMasker.maskProviderId(failure.getKakaoUserId()),
-                        failure.getAttemptCount(), cause);
+                        failure.getAttemptCount(), causeType, cause);
             }
         });
+    }
+
+    /*
+     * (2026-08-24) cause는 항상 KakaoUnlinkClient.unlink()가 던진 MemberException(KAKAO_UNLINK_FAILED)
+     * 이라 메시지가 고정 문구("카카오 연결 해제 요청에 실패했습니다.")로 똑같다 — 실제 원인은
+     * getCause()로 감싸진 원래 예외(WebClientResponseException 등) 안에 있는데, 그건 스택트레이스를
+     * 펼쳐야만 보인다. 여기서 그 원인의 타입(+ HTTP 상태가 있으면 상태코드)만 요약해서 로그 줄
+     * 자체에 필드로 얹는다 — 스택트레이스 첨부는 그대로 유지한 채(cause를 마지막 인자로 그대로
+     * 넘기므로) 자세히 봐야 할 땐 여전히 전체 트레이스를 볼 수 있다.
+     */
+    private static String rootCauseType(Throwable cause) {
+        Throwable root = cause.getCause() != null ? cause.getCause() : cause;
+        if (root instanceof WebClientResponseException webClientException) {
+            return webClientException.getStatusCode().value() + "_" + root.getClass().getSimpleName();
+        }
+        return root.getClass().getSimpleName();
     }
 }
