@@ -8,6 +8,7 @@ import com.freshmarket.product.ProductApi;
 import com.freshmarket.product.ProductOptionInfo;
 import com.freshmarket.product.domain.dto.ProductOptionProjection;
 import com.freshmarket.product.domain.dto.QProductOptionProjection;
+import com.freshmarket.product.domain.entity.ProductOption;
 import com.freshmarket.product.domain.entity.SaleStatus;
 import com.freshmarket.product.domain.repository.ProductOptionRepository;
 import com.querydsl.jpa.impl.JPAQueryFactory;
@@ -30,6 +31,14 @@ class ProductApiImpl implements ProductApi {
     @Override
     public boolean existsOption(Long productId, Long optionId) {
         return productOptionRepository.existsByIdAndProductId(optionId, productId);
+    }
+
+    // 재시도 응답 재구성용으로 이미 있는 findAllByProductId를 그대로 재사용해 ID만 뽑는다
+    @Override
+    public List<Long> findOptionIds(Long productId) {
+        return productOptionRepository.findAllByProductId(productId).stream()
+                .map(ProductOption::getId)
+                .toList();
     }
 
     @Override

@@ -76,6 +76,10 @@ GET /v1/admin/products/{productId}/lots?availableOnly=true
 **`AVAILABLE` 이 아니면 `availableQty` 가 0이어야 한다.** DB 가 CHECK 로 강제한다.
 그렇지 않으면 FEFO 조회가 없는 재고를 집는다.
 
+| 오류 | 코드 | 언제 |
+|---|---|---|
+| `404` | `STOCK-002` | 없거나 삭제된 상품 |
+
 ## 변동 이력
 
 ```
