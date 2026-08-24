@@ -18,14 +18,17 @@ import org.springframework.security.web.SecurityFilterChain;
 @Configuration
 class StockSecurityConfig {
 
-    private static final String ADMIN = "TYPE_ADMIN";
+    // hasRole()이 role 클레임으로 판정한다(README.md "권한은 role로 판정한다, RBAC"). MEMBER
+    // 토큰의 role(ROLE_USER)은 ADMIN을 만족 못 하므로 회원 차단도 이걸로 자연히 함께 된다.
+    private static final String ADMIN_ROLE = "ADMIN";
 
     @Bean
     @Order(ApiSecurityDefaults.DOMAIN_CHAIN_ORDER)
     SecurityFilterChain stockSecurityFilterChain(HttpSecurity http, ApiSecurityDefaults defaults) throws Exception {
         return defaults.apply(http)
                 .securityMatcher("/v1/admin/products/*/options/*/lots", "/v1/admin/products/*/lots")
-                .authorizeHttpRequests(auth -> auth.anyRequest().hasAuthority(ADMIN))
+                // SUPER_ADMIN도 RoleHierarchy(AdminSecurityConfig)로 ADMIN에 포함되어 통과한다
+                .authorizeHttpRequests(auth -> auth.anyRequest().hasRole(ADMIN_ROLE))
                 .build();
     }
 }
