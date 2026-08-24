@@ -1,5 +1,11 @@
 package com.freshmarket.stock.domain.service;
 
+import static com.freshmarket.stock.domain.ExpiringSoonPolicy.DEFAULT_PAGE_SIZE;
+import static com.freshmarket.stock.domain.ExpiringSoonPolicy.DEFAULT_WITHIN_DAYS;
+
+import static com.freshmarket.stock.domain.ExpiringSoonPolicy.DEFAULT_PAGE_SIZE;
+import static com.freshmarket.stock.domain.ExpiringSoonPolicy.DEFAULT_WITHIN_DAYS;
+
 import com.freshmarket.common.response.CursorPageResponse;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.product.ProductOptionInfo;
@@ -40,8 +46,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class ExpiringSoonService {
 
-    private static final int DEFAULT_WITHIN_DAYS = 3;
-    private static final int DEFAULT_PAGE_SIZE = 20;
     // purchasable/categoryId 필터링으로 걸러질 것을 감안해 여유 있게 가져온다
     private static final int FETCH_MULTIPLIER = 2;
 
