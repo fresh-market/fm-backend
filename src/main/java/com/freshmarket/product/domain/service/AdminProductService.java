@@ -3,6 +3,7 @@ package com.freshmarket.product.domain.service;
 import com.freshmarket.common.response.PageResponse;
 import com.freshmarket.product.domain.dto.AdminProductCreateRequest;
 import com.freshmarket.product.domain.dto.AdminProductListItem;
+import com.freshmarket.product.domain.dto.AdminProductListRow;
 import com.freshmarket.product.domain.dto.AdminProductOptionCreateRequest;
 import com.freshmarket.product.domain.dto.AdminProductOptionResponse;
 import com.freshmarket.product.domain.dto.AdminProductResponse;
@@ -63,9 +64,9 @@ public class AdminProductService {
      */
     public PageResponse<AdminProductListItem> findAll(AdminProductSearchCondition condition) {
         Pageable pageable = PageRequest.of(condition.page(), condition.size());
-        Page<Product> page = productQueryRepository.searchForAdmin(condition, pageable);
+        Page<AdminProductListRow> page = productQueryRepository.searchForAdmin(condition, pageable);
         Map<Long, String> categoryNames = categoryNamesOf(page.getContent());
-        return PageResponse.from(page.map(product -> toListItem(product, categoryNames)));
+        return PageResponse.from(page.map(row -> toListItem(row, categoryNames)));
     }
 
     // 상품 단건을 조회한다. 회원용 상세와 달리 삭제된 상품도 그대로 보여준다 — id 자체가 없을 때만 404
@@ -75,21 +76,20 @@ public class AdminProductService {
         return responseOf(product);
     }
 
-    private Map<Long, String> categoryNamesOf(List<Product> products) {
-        if (products.isEmpty()) {
+    private Map<Long, String> categoryNamesOf(List<AdminProductListRow> rows) {
+        if (rows.isEmpty()) {
             return Map.of();
         }
-        List<Long> categoryIds = products.stream().map(Product::getCategoryId).distinct().toList();
+        List<Long> categoryIds = rows.stream().map(AdminProductListRow::categoryId).distinct().toList();
         return categoryRepository.findAllById(categoryIds).stream()
                 .collect(Collectors.toMap(Category::getId, Category::getName));
     }
 
-    private static AdminProductListItem toListItem(Product product, Map<Long, String> categoryNames) {
-        CategorySummary category = new CategorySummary(
-                product.getCategoryId(), categoryNames.get(product.getCategoryId()));
+    private static AdminProductListItem toListItem(AdminProductListRow row, Map<Long, String> categoryNames) {
+        CategorySummary category = new CategorySummary(row.categoryId(), categoryNames.get(row.categoryId()));
         return new AdminProductListItem(
-                product.getId(), product.getProductCode(), product.getName(), category,
-                product.getSaleStatus(), product.isDeleted());
+                row.productId(), row.productCode(), row.name(), category,
+                row.saleStatus(), row.deleted());
     }
 
     /*

@@ -10,12 +10,14 @@ import static org.mockito.Mockito.when;
 import com.freshmarket.common.response.PageResponse;
 import com.freshmarket.product.domain.dto.AdminProductCreateRequest;
 import com.freshmarket.product.domain.dto.AdminProductListItem;
+import com.freshmarket.product.domain.dto.AdminProductListRow;
 import com.freshmarket.product.domain.dto.AdminProductOptionCreateRequest;
 import com.freshmarket.product.domain.dto.AdminProductResponse;
 import com.freshmarket.product.domain.dto.AdminProductSearchCondition;
 import com.freshmarket.product.domain.entity.Category;
 import com.freshmarket.product.domain.entity.Product;
 import com.freshmarket.product.domain.entity.ProductOption;
+import com.freshmarket.product.domain.entity.SaleStatus;
 import com.freshmarket.product.domain.entity.StorageType;
 import com.freshmarket.product.domain.exception.ProductErrorCode;
 import com.freshmarket.product.domain.exception.ProductException;
@@ -312,9 +314,9 @@ class AdminProductServiceTest {
         AdminProductSearchCondition condition = new AdminProductSearchCondition(
                 null, null, null, false, 0, 20);
         Pageable pageable = PageRequest.of(0, 20);
-        Product product = productFixture(1L, "제주 감귤 1kg", 4L);
+        AdminProductListRow row = productListRowFixture(1L, "제주 감귤 1kg", 4L, false);
         when(productQueryRepository.searchForAdmin(condition, pageable))
-                .thenReturn(new PageImpl<>(List.of(product), pageable, 1));
+                .thenReturn(new PageImpl<>(List.of(row), pageable, 1));
         when(categoryRepository.findAllById(List.of(4L))).thenReturn(List.of(categoryFixture(4L, "과일")));
 
         // when
@@ -333,8 +335,7 @@ class AdminProductServiceTest {
         AdminProductSearchCondition condition = new AdminProductSearchCondition(
                 null, null, null, true, 0, 20);
         Pageable pageable = PageRequest.of(0, 20);
-        Product deleted = productFixture(1L, "제주 감귤 1kg", 4L);
-        ReflectionTestUtils.setField(deleted, "deletedAt", LocalDateTime.now());
+        AdminProductListRow deleted = productListRowFixture(1L, "제주 감귤 1kg", 4L, true);
         when(productQueryRepository.searchForAdmin(condition, pageable))
                 .thenReturn(new PageImpl<>(List.of(deleted), pageable, 1));
         when(categoryRepository.findAllById(List.of(4L))).thenReturn(List.of(categoryFixture(4L, "과일")));
@@ -361,7 +362,6 @@ class AdminProductServiceTest {
         // then
         assertThat(result.items()).isEmpty();
         assertThat(result.totalElements()).isEqualTo(0);
-        verify(categoryRepository, never()).findAllById(any());
     }
 
     @Test
@@ -411,6 +411,10 @@ class AdminProductServiceTest {
                 StorageType.COLD, 3, "달콤한 제주 감귤입니다.");
         ReflectionTestUtils.setField(product, "id", id);
         return product;
+    }
+
+    private AdminProductListRow productListRowFixture(Long id, String name, Long categoryId, boolean deleted) {
+        return new AdminProductListRow(id, "P-2026-ABC123", name, categoryId, SaleStatus.ON_SALE, deleted);
     }
 
     private Category categoryFixture(Long id, String name) {

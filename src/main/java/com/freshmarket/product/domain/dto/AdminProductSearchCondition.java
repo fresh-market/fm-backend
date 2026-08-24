@@ -13,7 +13,7 @@ public record AdminProductSearchCondition(
         @Schema(description = "페이지 크기. 최대 100", example = "20") int size
 ) {
 
-    private static final int DEFAULT_SIZE = 20;
+    public static final int DEFAULT_SIZE = 20;
     private static final int MAX_SIZE = 100;
     private static final int MAX_QUERY_LENGTH = 100;
 

@@ -4,12 +4,13 @@ import static com.freshmarket.product.domain.entity.QCategory.category;
 import static com.freshmarket.product.domain.entity.QProduct.product;
 import static com.freshmarket.product.domain.entity.QProductOption.productOption;
 
+import com.freshmarket.product.domain.dto.AdminProductListRow;
 import com.freshmarket.product.domain.dto.AdminProductSearchCondition;
 import com.freshmarket.product.domain.dto.ProductSearchCondition;
 import com.freshmarket.product.domain.dto.ProductSortType;
 import com.freshmarket.product.domain.dto.ProductWithMinPrice;
+import com.freshmarket.product.domain.dto.QAdminProductListRow;
 import com.freshmarket.product.domain.dto.QProductWithMinPrice;
-import com.freshmarket.product.domain.entity.Product;
 import com.freshmarket.product.domain.entity.SaleStatus;
 import com.querydsl.core.types.OrderSpecifier;
 import com.querydsl.core.types.dsl.BooleanExpression;
@@ -79,10 +80,18 @@ public class ProductQueryRepository {
      * 관리자 상품 목록. 회원용과 달리 옵션과 조인하지 않는다(최저가 집계가 필요 없다) —
      * 판매안함/품절/삭제까지 전부 보여주고, 재고 합계는 이 이슈 범위 밖이라 넣지 않는다.
      * 카테고리 이름은 여기서 조인하지 않고, 호출부가 categoryId를 모아 한 번에 배치 조회한다.
+     * 엔티티 전체가 아니라 목록에 필요한 컬럼만 프로젝션한다(JPA-4-03).
      */
-    public Page<Product> searchForAdmin(AdminProductSearchCondition condition, Pageable pageable) {
-        List<Product> content = queryFactory
-                .selectFrom(product)
+    public Page<AdminProductListRow> searchForAdmin(AdminProductSearchCondition condition, Pageable pageable) {
+        List<AdminProductListRow> content = queryFactory
+                .select(new QAdminProductListRow(
+                        product.id,
+                        product.productCode,
+                        product.name,
+                        product.categoryId,
+                        product.saleStatus,
+                        product.deletedAt.isNotNull()))
+                .from(product)
                 .where(
                         deletedFilter(condition.includeDeleted()),
                         categoryIdEq(condition.categoryId()),

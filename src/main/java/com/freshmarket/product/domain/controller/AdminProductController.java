@@ -51,7 +51,7 @@ class AdminProductController {
             @RequestParam(required = false) SaleStatus saleStatus,
             @RequestParam(required = false, defaultValue = "false") boolean includeDeleted,
             @RequestParam(required = false, defaultValue = "0") int page,
-            @RequestParam(required = false, defaultValue = "20") int size) {
+            @RequestParam(required = false, defaultValue = "" + AdminProductSearchCondition.DEFAULT_SIZE) int size) {
         AdminProductSearchCondition condition = new AdminProductSearchCondition(
                 query, categoryId, saleStatus, includeDeleted, page, size);
         return ResponseEntity.ok(ResponseEnvelope.success(adminProductService.findAll(condition)));
