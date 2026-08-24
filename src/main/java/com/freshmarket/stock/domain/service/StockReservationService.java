@@ -15,6 +15,7 @@ import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockAllocationRepository;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -52,12 +53,20 @@ public class StockReservationService {
      * 아이템이 이미 예약한 것까지 함께 되돌아간다(전체 성공 또는 전체 실패).
      * 재시도는 orderItemId 기준으로 먼저 조회해 걸러낸다 — 커밋된 적 없는 부분 예약은
      * 호출부 트랜잭션이 롤백되며 함께 사라지므로 남아있을 수 없다.
+     *
+     * productOptionId 오름차순으로 처리한다(DI-2-03) — 두 주문이 같은 옵션들을 서로 다른 순서로
+     * 예약하면 조건부 UPDATE가 로트를 잠그는 순서가 갈려 교착이 날 수 있다. 같은 옵션이면 항상
+     * 같은 FEFO 순서로 로트에 도달하므로, 옵션 단위로만 정렬해도 교차 잠금 시나리오가 없어진다
+     * (confirm/release의 lockLots가 로트 id로 정렬하는 것과 같은 이유).
      */
     public void reserve(StockReservationRequest request) {
         if (request.items() == null) {
             return;
         }
-        for (StockReservationItemRequest item : request.items()) {
+        List<StockReservationItemRequest> sortedItems = request.items().stream()
+                .sorted(Comparator.comparing(StockReservationItemRequest::productOptionId))
+                .toList();
+        for (StockReservationItemRequest item : sortedItems) {
             reserveItem(request.orderId(), item);
         }
     }

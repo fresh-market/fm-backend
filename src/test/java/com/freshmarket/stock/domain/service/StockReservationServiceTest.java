@@ -3,6 +3,7 @@ package com.freshmarket.stock.domain.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -25,6 +26,7 @@ import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -89,6 +91,34 @@ class StockReservationServiceTest {
         verify(stockLotRepository).decreaseAvailableQty(78L, 10);
         verify(stockAllocationRepository, times(2)).save(any());
         verify(stockMovementRepository, times(2)).save(any());
+    }
+
+    @Test
+    void 여러_옵션을_예약할_때_옵션_id_오름차순으로_처리한다() {
+        // given — 요청은 옵션 90, 30 순서(내림차순)로 왔지만, 처리는 오름차순(30, 90)으로 해야
+        // 옵션을 반대 순서로 예약하는 다른 요청과 로트 잠금 순서가 엇갈려 교착이 나는 걸 막는다(DI-2-03)
+        StockLot lot30 = lotWithAvailableQty(1L, 30L, 50);
+        StockLot lot90 = lotWithAvailableQty(2L, 90L, 50);
+        when(stockAllocationRepository.findByOrderItemId(any())).thenReturn(List.of());
+        when(stockLotRepository.findByProductOptionIdAndStatusOrderByExpiryDateAsc(30L, LotStatus.AVAILABLE))
+                .thenReturn(List.of(lot30));
+        when(stockLotRepository.findByProductOptionIdAndStatusOrderByExpiryDateAsc(90L, LotStatus.AVAILABLE))
+                .thenReturn(List.of(lot90));
+        when(stockLotRepository.decreaseAvailableQty(1L, 5)).thenReturn(1);
+        when(stockLotRepository.decreaseAvailableQty(2L, 5)).thenReturn(1);
+        StockReservationRequest request = new StockReservationRequest(9001L, List.of(
+                new StockReservationItemRequest(501L, 90L, 5),
+                new StockReservationItemRequest(502L, 30L, 5)));
+
+        // when
+        stockReservationService.reserve(request);
+
+        // then — 요청 순서(90, 30)와 무관하게 옵션 30을 먼저 조회했는지 확인
+        InOrder order = inOrder(stockLotRepository);
+        order.verify(stockLotRepository)
+                .findByProductOptionIdAndStatusOrderByExpiryDateAsc(30L, LotStatus.AVAILABLE);
+        order.verify(stockLotRepository)
+                .findByProductOptionIdAndStatusOrderByExpiryDateAsc(90L, LotStatus.AVAILABLE);
     }
 
     @Test
