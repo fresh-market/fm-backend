@@ -26,13 +26,14 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class KakaoUnlinkStuckReportService {
 
+    private static final int MEMBER_ID_LOG_LIMIT = 50;
+
     private final KakaoUnlinkFailureRepository failureRepository;
 
-    /** 포기 문턱을 넘은 채 쌓여 있는 memberId 목록을 반환하고, 하나라도 있으면 요약을 ERROR로 남긴다. */
+    /** 미해소 포기 건의 memberId 목록을 반환하고, 하나라도 있으면 요약을 ERROR로 남긴다. */
     public List<Long> reportStuck() {
-        List<KakaoUnlinkFailure> stuck = failureRepository.findAll().stream()
-                .filter(KakaoUnlinkFailure::shouldGiveUp)
-                .toList();
+        List<KakaoUnlinkFailure> stuck = failureRepository
+                .findByAttemptCountGreaterThanEqualAndResolvedFalse(KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS);
         if (stuck.isEmpty()) {
             return List.of();
         }
@@ -41,8 +42,12 @@ public class KakaoUnlinkStuckReportService {
                 .map(KakaoUnlinkFailure::getMemberId)
                 .toList();
         // memberId는 우리 내부 식별자라 PII 마스킹 대상이 아니다(kakaoUserId와 다르다).
-        log.error("event=KAKAO_UNLINK_OUTBOX_STUCK_SUMMARY count={} memberIds={}",
-                stuck.size(), memberIds.stream().map(String::valueOf).collect(Collectors.joining(",")));
+        String loggedMemberIds = memberIds.stream()
+                .limit(MEMBER_ID_LOG_LIMIT)
+                .map(String::valueOf)
+                .collect(Collectors.joining(","));
+        log.error("event=KAKAO_UNLINK_OUTBOX_STUCK_SUMMARY count={} memberIds={} truncated={}",
+                stuck.size(), loggedMemberIds, memberIds.size() > MEMBER_ID_LOG_LIMIT);
         return memberIds;
     }
 }
