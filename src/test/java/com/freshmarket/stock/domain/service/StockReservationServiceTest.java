@@ -299,9 +299,17 @@ class StockReservationServiceTest {
     }
 
     @Test
-    void 확정_대상_id_목록이_비어있으면_조회조차_하지_않는다() {
+    void 확정_대상_id_목록이_null이면_조회조차_하지_않는다() {
         // when
         stockReservationService.confirm(new StockOrderItemsRequest(9001L, null));
+
+        // then
+        verify(stockAllocationRepository, never()).findByOrderItemIdInAndStatus(any(), any());
+    }
+
+    @Test
+    void 확정_대상_id_목록이_빈_목록이면_조회조차_하지_않는다() {
+        // when
         stockReservationService.confirm(new StockOrderItemsRequest(9001L, List.of()));
 
         // then
