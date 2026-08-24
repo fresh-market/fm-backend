@@ -361,7 +361,7 @@ class AdminProductServiceTest {
 
         // then
         assertThat(result.items()).isEmpty();
-        assertThat(result.totalElements()).isEqualTo(0);
+        assertThat(result.totalElements()).isZero();
     }
 
     @Test

@@ -15,5 +15,6 @@ public record AdminProductListRow(
 
     @QueryProjection
     public AdminProductListRow {
+        // QueryDSL이 @QueryProjection 생성자를 찾을 수 있게 record의 canonical 생성자에 어노테이션만 붙인다
     }
 }
