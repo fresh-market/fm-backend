@@ -13,6 +13,7 @@ import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Optional;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -90,7 +91,7 @@ public class AdminLotService {
         stockMovementRepository.save(movement);
 
         // 입고는 항상 가용 수량을 늘리기만 하므로, 별도 조회 없이도 이 옵션은 이제 품절이 아니라고 확정할 수 있다
-        eventPublisher.publishEvent(new OptionAvailabilityChangedEvent(optionId, false));
+        eventPublisher.publishEvent(new OptionAvailabilityChangedEvent(optionId, false, LocalDateTime.now()));
 
         return AdminLotResponse.of(stockLot);
     }
