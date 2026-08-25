@@ -83,6 +83,7 @@ class AdminAuthServiceTest {
         );
 
         when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
+        when(adminRepository.findByIdForUpdate(admin.getId())).thenReturn(Optional.of(admin));
 
         AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
@@ -359,6 +360,7 @@ class AdminAuthServiceTest {
         // given
         Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
         when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
+        when(adminRepository.findByIdForUpdate(admin.getId())).thenReturn(Optional.of(admin));
         AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
         // when

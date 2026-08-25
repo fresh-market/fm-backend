@@ -11,8 +11,7 @@ import org.springframework.data.repository.query.Param;
 
 public interface AdminRepository extends JpaRepository<Admin, Long> {
 
-    /** 로그인과 로그아웃이 같은 관리자 토큰 상태를 동시에 덮어쓰지 않도록 행 잠금을 건다. */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    /** 로그인 자격 증명 검증용 조회. BCrypt 비교 중에는 DB 쓰기 잠금을 잡지 않는다. */
     Optional<Admin> findByLoginId(String loginId);
 
     /** 로그아웃의 Refresh Token 폐기를 같은 관리자 행의 다른 갱신과 직렬화한다. */

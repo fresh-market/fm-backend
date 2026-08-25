@@ -114,15 +114,28 @@ public class AdminAuthService {
             throw new AdminException(AdminErrorCode.LOGIN_FAILED);
         }
 
+        /*
+         * 비밀번호 검증이 끝난 성공 후보에 대해서만 관리자 행을 잠근다.
+         * findByLoginId 자체에 PESSIMISTIC_WRITE를 걸면 존재하는 계정에 대한 비밀번호 실패 요청도
+         * 느린 BCrypt 비교 동안 쓰기 잠금을 점유하므로, 실제 Refresh Token 상태를 갱신하기 직전에만 잠근다.
+         * 잠금을 얻는 사이 계정 상태가 바뀔 수 있으므로 잠금 조회 뒤 활성 상태도 다시 확인한다.
+         */
+        Admin lockedAdmin = adminRepository.findByIdForUpdate(admin.getId())
+                .orElseThrow(() -> new AdminException(AdminErrorCode.LOGIN_FAILED));
+        if (!lockedAdmin.isActive()) {
+            log.warn("event=ADMIN_LOGIN success=false loginId={}", maskLoginId(request.loginId()));
+            throw new AdminException(AdminErrorCode.LOGIN_FAILED);
+        }
+
         String accessToken = jwtTokenProvider.createAccessToken(
-                admin.getId(), TokenType.ADMIN, admin.getRole().toAuthority());
+                lockedAdmin.getId(), TokenType.ADMIN, lockedAdmin.getRole().toAuthority());
 
         String rawRefreshToken = OpaqueTokenGenerator.generate();
         Duration refreshTtl = Duration.ofSeconds(refreshTokenValiditySeconds);
         refreshTokenRepository.save(
                 rawRefreshToken,
-                admin.getId(),
-                admin.getRole().toAuthority(),
+                lockedAdmin.getId(),
+                lockedAdmin.getRole().toAuthority(),
                 TokenType.ADMIN,
                 false,
                 refreshTtl);
@@ -130,17 +143,17 @@ public class AdminAuthService {
         /* Redis의 active key가 유실돼도 로그아웃 시 실제 Refresh Token 레코드를 찾을 수 있도록 DB에도 해시와 만료시각을 백업한다.
          * 평문 토큰은 DB에 저장하지 않는다.
          */
-        admin.issueRefreshToken(
+        lockedAdmin.issueRefreshToken(
                 TokenHasher.sha256(rawRefreshToken),
                 LocalDateTime.now(clock).plus(refreshTtl));
 
         AdminLoginResponse response = new AdminLoginResponse(
                 jwtTokenProvider.getAccessTokenValidityMs() / 1000,
                 new AdminLoginResponse.AdminSummary(
-                        admin.getLoginId(), admin.getName(), admin.getRole()));
+                        lockedAdmin.getLoginId(), lockedAdmin.getName(), lockedAdmin.getRole()));
 
         log.info("event=ADMIN_LOGIN success=true adminId={} loginId={}",
-                admin.getId(), maskLoginId(admin.getLoginId()));
+                lockedAdmin.getId(), maskLoginId(lockedAdmin.getLoginId()));
 
         // 두 토큰 원문은 응답 본문이 아니라 컨트롤러가 만드는 HttpOnly 쿠키로만 나간다
         return new AdminLoginResult(response, accessToken, rawRefreshToken, refreshTokenValiditySeconds);
