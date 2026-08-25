@@ -8,6 +8,9 @@ import com.freshmarket.order.domain.dto.OrderListItemResponse;
 import com.freshmarket.order.domain.dto.OrderSearchCondition;
 import com.freshmarket.order.domain.entity.OrderStatus;
 import com.freshmarket.order.domain.service.OrderService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import java.time.LocalDate;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -26,6 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/v1/orders")
 @RequiredArgsConstructor
+@Tag(name = "주문", description = "내 주문 목록과 상세 조회")
 class OrderController {
 
     private static final int DEFAULT_PAGE_SIZE = 20;
@@ -34,6 +38,8 @@ class OrderController {
     private final OrderService orderService;
 
     @GetMapping
+    @Operation(summary = "내 주문 목록 조회", description = "주문 상태와 주문 일자로 필터링해 페이지 단위로 조회한다. 페이지 크기는 최대 100이다.")
+    @ApiResponse(responseCode = "200", description = "조회 성공")
     public ResponseEntity<ResponseEnvelope<PageResponse<OrderListItemResponse>>> getOrders(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam(required = false) OrderStatus status,
@@ -50,6 +56,9 @@ class OrderController {
     }
 
     @GetMapping("/{orderId}")
+    @Operation(summary = "주문 상세 조회", description = "현재 회원이 소유한 주문의 상세와 주문 상품을 조회한다.")
+    @ApiResponse(responseCode = "200", description = "조회 성공")
+    @ApiResponse(responseCode = "404", description = "주문이 없거나 현재 회원의 주문이 아님")
     public ResponseEntity<ResponseEnvelope<OrderDetailResponse>> getOrder(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long orderId
