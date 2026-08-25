@@ -453,6 +453,38 @@ class AdminLotServiceTest {
     }
 
     @Test
+    void 저장_중_요청_식별자가_동시에_중복됐는데_재조회에도_없으면_상태_오류를_던진다() {
+        // given — uk_movement_request_id 위반 직후 재조회했는데도 없는, 있을 수 없는 상황을 방어한다
+        StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 70);
+        ReflectionTestUtils.setField(lot, "id", 77L);
+        when(stockMovementRepository.findByRequestId("dispose-1")).thenReturn(Optional.empty(), Optional.empty());
+        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
+        when(stockMovementRepository.save(any())).thenThrow(new DataIntegrityViolationException(
+                "Duplicate entry 'dispose-1' for key 'stock_movement.uk_movement_request_id'"));
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 30, DisposalReason.DAMAGED, null);
+
+        // when, then
+        assertThatThrownBy(() -> adminLotService.dispose(77L, 5L, request))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("dispose-1");
+    }
+
+    @Test
+    void 폐기_이력이_가리키는_로트를_찾을_수_없으면_상태_오류를_던진다() {
+        // given — 폐기 이력은 있는데 그 이력이 가리키는 로트가 사라진, 있을 수 없는 상황을 방어한다
+        StockMovement existing = StockMovement.dispose("dispose-1", 77L, 30, 100, 70, 5L, DisposalReason.DAMAGED,
+                null);
+        when(stockMovementRepository.findByRequestId("dispose-1")).thenReturn(Optional.of(existing));
+        when(stockLotRepository.findById(77L)).thenReturn(Optional.empty());
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 30, DisposalReason.DAMAGED, null);
+
+        // when, then
+        assertThatThrownBy(() -> adminLotService.dispose(77L, 5L, request))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("77");
+    }
+
+    @Test
     void 존재하지_않는_로트를_폐기하면_실패한다() {
         // given
         when(stockLotRepository.findByIdForUpdate(999L)).thenReturn(Optional.empty());
