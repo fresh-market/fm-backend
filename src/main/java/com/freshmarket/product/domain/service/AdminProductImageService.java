@@ -23,7 +23,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.awscore.exception.AwsServiceException;
+import software.amazon.awssdk.core.exception.SdkException;
 
 /*
  * 관리자 화면에서 상품 이미지를 업로드·확정·삭제하는 기능을 담당한다 (#21).
@@ -201,28 +202,38 @@ public class AdminProductImageService {
                 .orElseThrow(() -> new ProductException(ProductErrorCode.IMAGE_NOT_FOUND));
         try {
             imageStorageClient.deleteObjectOrThrow(image.getObjectKey());
-        } catch (S3Exception e) {
-            // (INF-11-08) 객체 삭제가 실패하면 행을 지우지 않는다 — 그래야 다시 지워서 해소할 수 있다
-            log.error("event=IMAGE_DELETE_OBJECT_FAILED productId={} imageId={} objectKey={}",
-                    productId, imageId, image.getObjectKey(), e);
+        } catch (SdkException e) {
+            // (INF-11-08, FUN-2-01) 객체 삭제가 실패하면 행을 지우지 않는다 — 그래야 다시 지워서
+            // 해소할 수 있다. S3Exception(4xx/5xx)만이 아니라 SdkException을 잡는다 — 연결 실패·
+            // apiCallTimeout은 SdkClientException으로, S3Exception과 형제 타입이라 좁게 잡으면 새어나가
+            // GlobalExceptionHandler의 catch-all(500)로 떨어진다.
+            log.error("event=IMAGE_DELETE_OBJECT_FAILED productId={} imageId={} objectKey={} statusCode={}",
+                    productId, imageId, image.getObjectKey(), statusCodeOf(e), e);
             throw new ProductException(ProductErrorCode.IMAGE_DELETE_FAILED, e);
         }
         productImageRepository.deleteByIdAndProductId(imageId, productId);
     }
 
     /*
-     * (EJ-9-05/FUN-2-04) HeadObject가 404가 아닌 이유(타임아웃, 5xx 등)로 실패하면, 그건 "업로드
-     * 안 됨"이 아니라 결과를 모르는 상태다 — 그대로 두면 원인 불명의 S3Exception이 서비스 경계를
-     * 넘어가 GlobalExceptionHandler의 catch-all(500)로 떨어진다. 재시도 가능한 오류로 변환하고,
-     * statusCode는 구조화 로그 필드로 남겨 원문 그대로 확인할 수 있게 한다(OBS-7-02).
+     * (EJ-9-05/FUN-2-04) HeadObject가 404가 아닌 이유(타임아웃, 5xx, 연결 실패 등)로 실패하면, 그건
+     * "업로드 안 됨"이 아니라 결과를 모르는 상태다 — 그대로 두면 원인 불명의 예외가 서비스 경계를
+     * 넘어가 GlobalExceptionHandler의 catch-all(500)로 떨어진다. S3Exception만이 아니라 SdkException을
+     * 잡는다(FUN-2-01) — apiCallTimeout·연결 실패로 던져지는 SdkClientException은 S3Exception의
+     * 형제 타입이라 좁게 잡으면 여기서 못 잡는다. 재시도 가능한 오류로 변환하고, statusCode는
+     * 구조화 로그 필드로 남겨 원문 그대로 확인할 수 있게 한다(OBS-7-02) — AwsServiceException이
+     * 아니면(연결 실패 등) statusCode 자체가 없으므로 null로 남긴다.
      */
     private Optional<S3ObjectMetadata> headObject(String objectKey) {
         try {
             return imageStorageClient.headObject(objectKey);
-        } catch (S3Exception e) {
-            log.error("event=IMAGE_HEAD_OBJECT_FAILED objectKey={} statusCode={}", objectKey, e.statusCode(), e);
+        } catch (SdkException e) {
+            log.error("event=IMAGE_HEAD_OBJECT_FAILED objectKey={} statusCode={}", objectKey, statusCodeOf(e), e);
             throw new ProductException(ProductErrorCode.IMAGE_VERIFICATION_UNAVAILABLE, e);
         }
+    }
+
+    private static Integer statusCodeOf(SdkException e) {
+        return (e instanceof AwsServiceException ase) ? ase.statusCode() : null;
     }
 
     private void validateContentType(String contentType) {

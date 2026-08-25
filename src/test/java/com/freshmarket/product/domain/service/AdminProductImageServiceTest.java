@@ -30,6 +30,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
+import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
 /*
@@ -223,6 +224,23 @@ class AdminProductImageServiceTest {
     }
 
     @Test
+    void 확정_중_S3_연결이_실패해도_재시도_가능한_오류를_던진다() {
+        // given — (FUN-2-01, FUN-2-04) 연결 실패·apiCallTimeout은 S3Exception이 아니라
+        // SdkClientException(SdkException의 다른 자식)이다. S3Exception만 잡으면 이 경로가 새어나간다
+        UUID uploadId = UUID.randomUUID();
+        ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
+        when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
+        when(imageStorageClient.headObject("products/ab/key.jpg"))
+                .thenThrow(SdkClientException.create("Unable to execute HTTP request"));
+        AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
+
+        // when, then
+        assertThatThrownBy(() -> adminProductImageService.confirm(1L, 88L, request))
+                .isInstanceOf(ProductException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_VERIFICATION_UNAVAILABLE);
+    }
+
+    @Test
     void uploadId로_못_찾으면_실패한다() {
         // given
         UUID uploadId = UUID.randomUUID();
@@ -384,6 +402,23 @@ class AdminProductImageServiceTest {
                 .isInstanceOf(ProductException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_DELETE_FAILED)
                 .hasCause(s3Exception);
+        verify(productImageRepository, never()).deleteByIdAndProductId(any(), any());
+    }
+
+    @Test
+    void S3_연결이_실패해도_DB_행을_지우지_않는다() {
+        // given — (FUN-2-01, FUN-2-04) S3Exception이 아닌 SdkClientException(연결 실패 등)도
+        // 같은 방식으로 재시도 가능한 오류로 변환되어야 한다
+        ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", UUID.randomUUID());
+        when(productImageRepository.findByIdAndProductId(88L, 1L)).thenReturn(Optional.of(image));
+        SdkClientException sdkClientException = SdkClientException.create("Unable to execute HTTP request");
+        doThrow(sdkClientException).when(imageStorageClient).deleteObjectOrThrow("products/ab/key.jpg");
+
+        // when, then
+        assertThatThrownBy(() -> adminProductImageService.delete(1L, 88L))
+                .isInstanceOf(ProductException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_DELETE_FAILED)
+                .hasCause(sdkClientException);
         verify(productImageRepository, never()).deleteByIdAndProductId(any(), any());
     }
 
