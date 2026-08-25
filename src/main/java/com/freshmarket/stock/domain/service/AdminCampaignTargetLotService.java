@@ -2,8 +2,8 @@ package com.freshmarket.stock.domain.service;
 
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.product.ProductOptionInfo;
-import com.freshmarket.stock.domain.dto.CampaignTargetLotListResponse;
-import com.freshmarket.stock.domain.dto.CampaignTargetLotResponse;
+import com.freshmarket.stock.domain.dto.AdminCampaignTargetLotListResponse;
+import com.freshmarket.stock.domain.dto.AdminCampaignTargetLotResponse;
 import com.freshmarket.stock.domain.entity.CampaignTargetLot;
 import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.repository.CampaignTargetLotRepository;
@@ -50,13 +50,13 @@ public class AdminCampaignTargetLotService {
      * StockLot 을 한 번 더 조회해 productOptionId 를 얻고, 그걸로 ProductApi 를 불러야 한다.
      * 두 단계 조회가 되지만, 대상 로트가 최대 3건뿐이라 성능 부담은 없다.
      */
-    public CampaignTargetLotListResponse findToday() {
+    public AdminCampaignTargetLotListResponse findToday() {
         LocalDate today = LocalDate.now(clock);
         List<CampaignTargetLot> targetLots =
                 campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(today);
 
         if (targetLots.isEmpty()) {
-            return new CampaignTargetLotListResponse(today, List.of());
+            return new AdminCampaignTargetLotListResponse(today, List.of());
         }
 
         List<Long> stockLotIds = targetLots.stream().map(CampaignTargetLot::getStockLotId).toList();
@@ -69,14 +69,14 @@ public class AdminCampaignTargetLotService {
         Map<Long, ProductOptionInfo> infoByOptionId = productApi.findOptionInfos(productOptionIds).stream()
                 .collect(Collectors.toMap(ProductOptionInfo::productOptionId, Function.identity()));
 
-        List<CampaignTargetLotResponse> targets = targetLots.stream()
+        List<AdminCampaignTargetLotResponse> targets = targetLots.stream()
                 .map(lot -> {
                     StockLot stockLot = stockLotById.get(lot.getStockLotId());
                     ProductOptionInfo info = infoByOptionId.get(stockLot.getProductOptionId());
-                    return CampaignTargetLotResponse.of(lot, info);
+                    return AdminCampaignTargetLotResponse.of(lot, info);
                 })
                 .toList();
 
-        return new CampaignTargetLotListResponse(today, targets);
+        return new AdminCampaignTargetLotListResponse(today, targets);
     }
 }

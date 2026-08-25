@@ -32,7 +32,9 @@ public class CampaignTargetLotBatch {
 
     private static final int WITHIN_DAYS = 10;
     private static final int MIN_AVAILABLE_QTY = 30;
-    private static final double LOW_TURNOVER_PERCENTILE = 0.2;
+    // 하위 20% = 1/5. double 0.2 곱셈은 부동소수점 오차로 ceil() 결과가 하나 더 잘릴 수 있어
+    // 정수 나눗셈으로 대신한다 (EJ-8-04)
+    private static final int LOW_TURNOVER_PERCENTILE_DIVISOR = 5;
     private static final int TARGET_COUNT = 3;
 
     private final StockLotQueryRepository stockLotQueryRepository;
@@ -58,7 +60,8 @@ public class CampaignTargetLotBatch {
                 .sorted(Comparator.comparing(TurnoverRatedCandidate::turnoverRate))
                 .toList();
 
-        int lowTurnoverCutoff = (int) Math.ceil(rated.size() * LOW_TURNOVER_PERCENTILE);
+        // ceil(n / 5) 를 정수 나눗셈으로 계산한다: (n + divisor - 1) / divisor
+        int lowTurnoverCutoff = (rated.size() + LOW_TURNOVER_PERCENTILE_DIVISOR - 1) / LOW_TURNOVER_PERCENTILE_DIVISOR;
         List<TurnoverRatedCandidate> lowTurnoverGroup = rated.subList(
                 0, Math.min(lowTurnoverCutoff, rated.size()));
 

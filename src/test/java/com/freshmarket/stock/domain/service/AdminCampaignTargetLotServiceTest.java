@@ -5,7 +5,7 @@ import static org.mockito.Mockito.when;
 
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.product.ProductOptionInfo;
-import com.freshmarket.stock.domain.dto.CampaignTargetLotListResponse;
+import com.freshmarket.stock.domain.dto.AdminCampaignTargetLotListResponse;
 import com.freshmarket.stock.domain.entity.CampaignTargetLot;
 import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.repository.CampaignTargetLotRepository;
@@ -51,7 +51,7 @@ class AdminCampaignTargetLotServiceTest {
         when(campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(TODAY))
                 .thenReturn(List.of());
 
-        CampaignTargetLotListResponse result = service.findToday();
+        AdminCampaignTargetLotListResponse result = service.findToday();
 
         assertThat(result.targetDate()).isEqualTo(TODAY);
         assertThat(result.targets()).isEmpty();
@@ -76,7 +76,7 @@ class AdminCampaignTargetLotServiceTest {
         when(productApi.findOptionInfos(List.of(31L))).thenReturn(List.of(info));
 
         // when
-        CampaignTargetLotListResponse result = service.findToday();
+        AdminCampaignTargetLotListResponse result = service.findToday();
 
         // then
         assertThat(result.targets()).hasSize(1);

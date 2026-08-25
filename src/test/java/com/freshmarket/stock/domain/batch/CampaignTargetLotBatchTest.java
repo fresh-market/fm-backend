@@ -49,14 +49,9 @@ class CampaignTargetLotBatchTest {
         return new CampaignTargetLotCandidate(lotId, 100L, TODAY.plusDays(5), initialQty, availableQty);
     }
 
-    @Test
-    void 실행하면_먼저_당일_기존_대상을_지운다() {
-        when(stockLotQueryRepository.findCandidatesExpiringBy(any())).thenReturn(List.of());
-
-        batch.run();
-
-        verify(campaignTargetLotRepository).deleteByTargetDate(TODAY);
-    }
+    // 재실행 시 당일 기존 대상을 지우고 다시 확정하는 것은 관찰 가능한 결과(저장된 행)로
+    // CampaignTargetLotBatchIntegrationTest 가 검증한다. 여기서 deleteByTargetDate 호출
+    // 여부만 verify 하는 것은 구현 세부 결합이라 UT-1-02/UT-2-02 에 따라 지운다.
 
     @Test
     void 잔여재고가_30_미만이면_대상에서_제외된다() {
