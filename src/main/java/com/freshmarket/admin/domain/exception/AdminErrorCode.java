@@ -18,8 +18,9 @@ public enum AdminErrorCode implements ErrorCode {
     // 관리자 삭제(비활성화) 처리된 계정. 잠금(5회 실패)은 이번 범위에서 제외했다
     ACCOUNT_INACTIVE(HttpStatus.FORBIDDEN, "ADMIN-002", "비활성화된 계정입니다."),
 
-    // 로그아웃 필수 무효화 저장에 실패한 일시적 오류. 클라이언트는 잠시 후 재시도할 수 있다.
-    LOGOUT_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "ADMIN-003", "로그아웃 처리에 실패했습니다. 잠시 후 다시 시도해주세요.");
+    // ADMIN-003~008은 auth/admin 문서의 비밀번호 변경·계정 관리 오류에 예약되어 있다.
+    // Access Token 차단 상태를 확정하지 못한 경우 성공으로 응답하지 않는다.
+    LOGOUT_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "ADMIN-010", "로그아웃 처리 상태를 확인할 수 없습니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus httpStatus;
     private final String code;

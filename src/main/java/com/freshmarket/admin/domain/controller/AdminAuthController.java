@@ -69,6 +69,7 @@ class AdminAuthController {
     )
     @ApiResponse(responseCode = "204", description = "로그아웃 성공")
     @ApiResponse(responseCode = "401", description = "로그인 상태가 아님")
+    @ApiResponse(responseCode = "503", description = "Access Token 차단 상태를 확정할 수 없음 (ADMIN-010)")
     @DeleteMapping
     ResponseEntity<Void> logout(
             @AuthenticationPrincipal CustomUserDetails userDetails,

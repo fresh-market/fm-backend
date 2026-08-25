@@ -4,10 +4,8 @@ import com.freshmarket.admin.domain.dto.AdminLoginRequest;
 import com.freshmarket.admin.domain.dto.AdminLoginResponse;
 import com.freshmarket.admin.domain.dto.AdminLoginResult;
 import com.freshmarket.admin.domain.entity.Admin;
-import com.freshmarket.admin.domain.entity.AdminAuditLog;
 import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
-import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
 import com.freshmarket.admin.domain.repository.AdminRepository;
 import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
 import com.freshmarket.common.auth.jwt.JwtTokenProvider;
@@ -26,6 +24,8 @@ import com.freshmarket.common.logging.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,7 +53,7 @@ public class AdminAuthService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final long refreshTokenValiditySeconds;
     private final AccessTokenValidAfterRepository accessTokenValidAfterRepository;
-    private final AdminAuditLogRepository adminAuditLogRepository;
+    private final AdminLogoutTransactionService adminLogoutTransactionService;
     private final Clock clock;
     private final String dummyPasswordHash;
 
@@ -63,7 +63,7 @@ public class AdminAuthService {
             JwtTokenProvider jwtTokenProvider,
             RefreshTokenRepository refreshTokenRepository,
             AccessTokenValidAfterRepository accessTokenValidAfterRepository,
-            AdminAuditLogRepository adminAuditLogRepository,
+            AdminLogoutTransactionService adminLogoutTransactionService,
             Clock clock,
             @Value("${ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS:86400}") long refreshTokenValiditySeconds) {
         this.adminRepository = adminRepository;
@@ -71,7 +71,7 @@ public class AdminAuthService {
         this.jwtTokenProvider = jwtTokenProvider;
         this.refreshTokenRepository = refreshTokenRepository;
         this.accessTokenValidAfterRepository = accessTokenValidAfterRepository;
-        this.adminAuditLogRepository = adminAuditLogRepository;
+        this.adminLogoutTransactionService = adminLogoutTransactionService;
         this.clock = clock;
         this.refreshTokenValiditySeconds = refreshTokenValiditySeconds;
         // 같은 인코더로 미리 만들어 둬야 진짜 비밀번호 검증과 연산 비용(코스트 팩터)이 완전히 같다
@@ -143,62 +143,196 @@ public class AdminAuthService {
     }
 
     /*
-     * 관리자 로그아웃. Refresh Token은 Redis와 DB 백업에서 폐기하고, Access Token은
-     * 계정 단위 valid-after 커트라인을 기록해 이미 발급된 토큰까지 즉시 무효화한다.
+     * 관리자 로그아웃. DB의 Refresh Token 백업을 먼저 짧은 트랜잭션에서 폐기한 뒤
+     * Redis 정리와 Access Token 차단은 트랜잭션 밖에서 수행한다.
+     *
+     * Refresh Token은 DB를 최종 판정 기준으로 사용한다. Redis 삭제가 실패하거나 결과가
+     * 미확정이어도 DB에서 이미 폐기된 토큰은 후속 재발급에서 거부되어야 한다.
+     * Access Token은 기존 공용 JwtAuthenticationFilter의 Redis fail-open 정책을 유지하되,
+     * 이 로그아웃 요청 자체는 차단 커트라인 저장 결과를 확정하지 못하면 성공으로 응답하지 않는다.
      */
-    @Transactional(timeout = 5)
     public void logout(Long adminId, String role) {
         Objects.requireNonNull(adminId, "adminId");
         Objects.requireNonNull(role, "role");
 
-        Admin admin = adminRepository.findById(adminId)
-                .orElseThrow(() -> new AdminException(AdminErrorCode.LOGIN_FAILED));
+        AdminLogoutTransactionService.LogoutDbState dbState =
+                adminLogoutTransactionService.revokeRefreshToken(adminId);
 
-        Optional<String> tokenHash;
-        try {
-            tokenHash = refreshTokenRepository.findActiveHash(role, adminId);
-            if (tokenHash.isEmpty()) {
-                tokenHash = Optional.ofNullable(admin.getRefreshTokenHash());
-                if (tokenHash.isPresent()) {
-                    log.warn("event=ADMIN_ACTIVE_KEY_MISSING_DB_FALLBACK_USED role={} adminId={}", role, adminId);
-                }
-            }
-        } catch (DataAccessException e) {
-            log.warn(
-                    "event=ADMIN_REDIS_LOOKUP_FAILED role={} adminId={}",
-                    role,
-                    adminId,
-                    e);
+        cleanupRefreshToken(role, adminId, dbState.refreshTokenHash());
 
-            tokenHash = Optional.empty();
-        }
+        LocalDateTime cutoff = LocalDateTime.now(clock);
+        invalidateAccessTokenOrThrow(role, adminId, cutoff);
 
-        // DB 백업은 Redis 삭제 성공 여부와 무관하게 먼저 폐기한다.
-        admin.revokeRefreshToken();
-
-        try {
-            tokenHash.ifPresent(refreshTokenRepository::deleteByHash);
-            refreshTokenRepository.deleteActiveKey(role, adminId);
-        } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REDIS_DELETE_FAILED role={} adminId={} — DB 백업 삭제만 반영", role, adminId, e);
-        }
-
-        // Access Token 무효화는 로그아웃의 필수 보안 처리다.
-        // 저장소 구현 예외를 서비스 경계 밖으로 노출하지 않고 관리자 인증 예외로 변환한다.
-        try {
-            accessTokenValidAfterRepository.invalidateBefore(
-                    role,
-                    adminId,
-                    LocalDateTime.now(clock),
-                    Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs()));
-        } catch (DataAccessException e) {
-            log.error("event=ADMIN_ACCESS_TOKEN_INVALIDATION_FAILED role={} adminId={}", role, adminId, e);
-            throw new AdminException(AdminErrorCode.LOGOUT_FAILED, e);
-        }
-
-        adminAuditLogRepository.save(
-                AdminAuditLog.of(adminId, "ADMIN_LOGOUT", String.valueOf(adminId), null));
+        adminLogoutTransactionService.recordSuccess(adminId);
         log.info("event=ADMIN_LOGOUT success=true adminId={}", adminId);
+    }
+
+    private void cleanupRefreshToken(String role, Long adminId, String tokenHash) {
+        if (tokenHash != null) {
+            RedisMutationOutcome primaryOutcome = deleteRefreshTokenRecord(tokenHash);
+            if (primaryOutcome != RedisMutationOutcome.CONFIRMED) {
+                log.warn(
+                        "event=ADMIN_REFRESH_TOKEN_RECORD_CLEANUP_{} role={} adminId={}",
+                        primaryOutcome,
+                        role,
+                        adminId);
+            }
+        }
+
+        RedisMutationOutcome activeKeyOutcome = deleteRefreshTokenActiveKey(role, adminId);
+        if (activeKeyOutcome != RedisMutationOutcome.CONFIRMED) {
+            log.warn(
+                    "event=ADMIN_REFRESH_TOKEN_ACTIVE_KEY_CLEANUP_{} role={} adminId={}",
+                    activeKeyOutcome,
+                    role,
+                    adminId);
+        }
+    }
+
+    private RedisMutationOutcome deleteRefreshTokenRecord(String tokenHash) {
+        try {
+            refreshTokenRepository.deleteByHash(tokenHash);
+            return RedisMutationOutcome.CONFIRMED;
+        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_UNKNOWN target=record", e);
+            return confirmOrRetryRefreshTokenRecordDeletion(tokenHash);
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_FAILED target=record", e);
+            return RedisMutationOutcome.FAILED;
+        }
+    }
+
+    private RedisMutationOutcome confirmOrRetryRefreshTokenRecordDeletion(String tokenHash) {
+        Boolean deleted = isRefreshTokenRecordDeleted(tokenHash);
+        if (Boolean.TRUE.equals(deleted)) {
+            return RedisMutationOutcome.CONFIRMED;
+        }
+
+        try {
+            refreshTokenRepository.deleteByHash(tokenHash);
+        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_UNKNOWN target=record", e);
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_FAILED target=record", e);
+            return RedisMutationOutcome.FAILED;
+        }
+
+        deleted = isRefreshTokenRecordDeleted(tokenHash);
+        return Boolean.TRUE.equals(deleted)
+                ? RedisMutationOutcome.CONFIRMED
+                : RedisMutationOutcome.UNKNOWN;
+    }
+
+    private Boolean isRefreshTokenRecordDeleted(String tokenHash) {
+        try {
+            return !refreshTokenRepository.existsByHash(tokenHash);
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED target=record", e);
+            return null;
+        }
+    }
+
+    private RedisMutationOutcome deleteRefreshTokenActiveKey(String role, Long adminId) {
+        try {
+            refreshTokenRepository.deleteActiveKey(role, adminId);
+            return RedisMutationOutcome.CONFIRMED;
+        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_UNKNOWN target=activeKey role={} adminId={}",
+                    role, adminId, e);
+            return confirmOrRetryRefreshTokenActiveKeyDeletion(role, adminId);
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_FAILED target=activeKey role={} adminId={}",
+                    role, adminId, e);
+            return RedisMutationOutcome.FAILED;
+        }
+    }
+
+    private RedisMutationOutcome confirmOrRetryRefreshTokenActiveKeyDeletion(String role, Long adminId) {
+        Boolean deleted = isRefreshTokenActiveKeyDeleted(role, adminId);
+        if (Boolean.TRUE.equals(deleted)) {
+            return RedisMutationOutcome.CONFIRMED;
+        }
+
+        try {
+            refreshTokenRepository.deleteActiveKey(role, adminId);
+        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_UNKNOWN target=activeKey role={} adminId={}",
+                    role, adminId, e);
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_FAILED target=activeKey role={} adminId={}",
+                    role, adminId, e);
+            return RedisMutationOutcome.FAILED;
+        }
+
+        deleted = isRefreshTokenActiveKeyDeleted(role, adminId);
+        return Boolean.TRUE.equals(deleted)
+                ? RedisMutationOutcome.CONFIRMED
+                : RedisMutationOutcome.UNKNOWN;
+    }
+
+    private Boolean isRefreshTokenActiveKeyDeleted(String role, Long adminId) {
+        try {
+            return refreshTokenRepository.findActiveHash(role, adminId).isEmpty();
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED target=activeKey role={} adminId={}",
+                    role, adminId, e);
+            return null;
+        }
+    }
+
+    private void invalidateAccessTokenOrThrow(String role, Long adminId, LocalDateTime cutoff) {
+        Duration ttl = Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs());
+
+        try {
+            accessTokenValidAfterRepository.invalidateBefore(role, adminId, cutoff, ttl);
+            return;
+        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
+            log.warn("event=ADMIN_ACCESS_TOKEN_INVALIDATION_UNKNOWN role={} adminId={}", role, adminId, e);
+        } catch (DataAccessException e) {
+            throw logoutFailed(role, adminId, e);
+        }
+
+        if (isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
+            return;
+        }
+
+        try {
+            accessTokenValidAfterRepository.invalidateBefore(role, adminId, cutoff, ttl);
+            return;
+        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
+            log.warn("event=ADMIN_ACCESS_TOKEN_INVALIDATION_RETRY_UNKNOWN role={} adminId={}", role, adminId, e);
+        } catch (DataAccessException e) {
+            throw logoutFailed(role, adminId, e);
+        }
+
+        if (!isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
+            throw logoutFailed(role, adminId, null);
+        }
+    }
+
+    private boolean isAccessTokenInvalidationConfirmed(String role, Long adminId, LocalDateTime cutoff) {
+        try {
+            // 저장된 커트라인이 cutoff 이상이면 cutoff 직전 토큰은 반드시 무효다.
+            return !accessTokenValidAfterRepository.isValidAfter(
+                    role, adminId, cutoff.minusNanos(1));
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_ACCESS_TOKEN_INVALIDATION_CONFIRM_FAILED role={} adminId={}",
+                    role, adminId, e);
+            return false;
+        }
+    }
+
+    private AdminException logoutFailed(String role, Long adminId, DataAccessException cause) {
+        log.error("event=ADMIN_ACCESS_TOKEN_INVALIDATION_FAILED role={} adminId={}", role, adminId, cause);
+        return cause == null
+                ? new AdminException(AdminErrorCode.LOGOUT_FAILED)
+                : new AdminException(AdminErrorCode.LOGOUT_FAILED, cause);
+    }
+
+    private enum RedisMutationOutcome {
+        CONFIRMED,
+        FAILED,
+        UNKNOWN
     }
 
     private String maskLoginId(String loginId) {

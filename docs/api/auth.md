@@ -271,10 +271,26 @@ DELETE /v1/admin/auth/tokens
 
 로그아웃 대상은 별도의 관리자 ID를 요청받지 않고 현재 인증된 Access Token의 주체를 기준으로 결정한다.
 
+DB와 Redis는 하나의 트랜잭션으로 묶지 않는다.
+DB의 Refresh Token 해시/만료 시각 폐기는 짧은 DB 트랜잭션에서 먼저 확정하고,
+Redis의 Refresh Token 정리와 Access Token 차단은 그 트랜잭션 밖에서 수행한다.
+
+Refresh Token의 최종 유효성 기준은 DB다.
+Redis 삭제가 실패하거나 타임아웃으로 결과가 미확정이어도 DB에서 폐기된 Refresh Token은 재발급에서 거부해야 한다.
+Redis 삭제 타임아웃·연결 단절은 일반 실패와 구분하고 후속 조회와 멱등적인 재시도로 삭제 여부를 확인한다.
+
+Access Token 차단은 기존 공용 `JwtAuthenticationFilter`의 Redis 장애 시 fail-open 정책을 변경하지 않는다.
+다만 로그아웃 요청 중 커트라인 저장이 타임아웃·연결 단절로 미확정이면 후속 조회와 재시도로 반영 여부를 확인하고,
+끝까지 확정할 수 없으면 성공으로 응답하지 않는다.
+
 로그아웃 시 `accessToken`, `refreshToken` 쿠키를 모두 `Max-Age=0`으로 만료한다.
 관리자 Refresh Token 쿠키는 발급 시와 동일한 `Path=/v1/admin/auth/`를 사용한다.
 
-정상 처리 시 `204 No Content`를 반환한다.
+| 응답 | 코드 | 언제 |
+|---|---|---|
+| `204` | | 로그아웃 성공 |
+| `401` | `ADMIN-001` | 인증 주체에 해당하는 관리자 계정을 찾을 수 없음 |
+| `503` | `ADMIN-010` | Access Token 차단 상태를 끝까지 확정할 수 없음 |
 
 ```
 Set-Cookie: refreshToken=...; HttpOnly; Secure; SameSite=Strict;

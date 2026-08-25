@@ -119,6 +119,11 @@ public class RefreshTokenRepository {
         redisTemplate.delete(primaryKey(tokenHash));
     }
 
+    /** 삭제 타임아웃 뒤 실제 기본 레코드가 남았는지 후속 확인할 때 사용한다. */
+    public boolean existsByHash(String tokenHash) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(primaryKey(tokenHash)));
+    }
+
     /** 보조 인덱스 자체를 지운다. */
     public void deleteActiveKey(String role, Long id) {
         redisTemplate.delete(activeKey(role, id));
