@@ -19,7 +19,6 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.function.Supplier;
 
 import com.freshmarket.common.logging.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +39,10 @@ import org.springframework.transaction.annotation.Transactional;
  * 액세스 토큰 유효기간도 JwtTokenProvider가 관리한다.
  * 리프레시 토큰은 member와 같은 공통 RefreshTokenRepository(Redis)에 저장한다.
  * 로그인은 최초 발급만 담당하고, Rotation은 별도 재발급 API에서 처리한다.
+ *
+ * Refresh Token의 Redis 정리와 DB 폐기(재시도 포함)는 AdminRefreshTokenCleanupService에 있다.
+ * logout()에서 그 즉시 재시도(각 3회)까지 실패하면 AdminLogoutFailureService에 기록해두고,
+ * AdminLogoutFailureScheduler가 매일 00:00에 재시도한다.
  */
 @Slf4j
 @Service
@@ -54,9 +57,8 @@ public class AdminAuthService {
     // 로그인 실패 로그 포맷
     private static final String LOG_ADMIN_LOGIN_FAILED = "event=ADMIN_LOGIN success=false loginId={}";
 
-    // Redis 정리/차단 로그에서 반복되는 필드 포맷
+    // Access Token 차단 로그에서 반복되는 필드 포맷
     private static final String LOG_FIELDS_ROLE_ADMIN_ID = "role={} adminId={}";
-    private static final String LOG_FIELDS_TARGET_ROLE_ADMIN_ID = "target={} role={} adminId={}";
 
     private final AdminRepository adminRepository;
     private final PasswordEncoder passwordEncoder;
@@ -65,6 +67,8 @@ public class AdminAuthService {
     private final long refreshTokenValiditySeconds;
     private final AccessTokenValidAfterRepository accessTokenValidAfterRepository;
     private final AdminLogoutTransactionService adminLogoutTransactionService;
+    private final AdminRefreshTokenCleanupService adminRefreshTokenCleanupService;
+    private final AdminLogoutFailureService adminLogoutFailureService;
     private final Clock clock;
     private final String dummyPasswordHash;
 
@@ -75,6 +79,8 @@ public class AdminAuthService {
             RefreshTokenRepository refreshTokenRepository,
             AccessTokenValidAfterRepository accessTokenValidAfterRepository,
             AdminLogoutTransactionService adminLogoutTransactionService,
+            AdminRefreshTokenCleanupService adminRefreshTokenCleanupService,
+            AdminLogoutFailureService adminLogoutFailureService,
             Clock clock,
             @Value("${ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS:86400}") long refreshTokenValiditySeconds) {
         this.adminRepository = adminRepository;
@@ -83,6 +89,8 @@ public class AdminAuthService {
         this.refreshTokenRepository = refreshTokenRepository;
         this.accessTokenValidAfterRepository = accessTokenValidAfterRepository;
         this.adminLogoutTransactionService = adminLogoutTransactionService;
+        this.adminRefreshTokenCleanupService = adminRefreshTokenCleanupService;
+        this.adminLogoutFailureService = adminLogoutFailureService;
         this.clock = clock;
         this.refreshTokenValiditySeconds = refreshTokenValiditySeconds;
         // 같은 인코더로 미리 만들어 둬야 진짜 비밀번호 검증과 연산 비용(코스트 팩터)이 완전히 같다
@@ -167,11 +175,14 @@ public class AdminAuthService {
     }
 
     /*
-     * 관리자 로그아웃. DB의 Refresh Token 백업을 먼저 짧은 트랜잭션에서 폐기한 뒤
-     * Redis 정리와 Access Token 차단은 트랜잭션 밖에서 수행한다.
+     * 관리자 로그아웃. DB의 Refresh Token 백업을 먼저 폐기한 뒤 Redis 정리와 Access Token 차단을
+     * 수행한다 — 각각 AdminRefreshTokenCleanupService가 즉시 재시도(3회씩)까지 담당한다.
      *
-     * Refresh Token은 DB를 최종 판정 기준으로 사용한다. Redis 삭제가 실패하거나 결과가
-     * 미확정이어도 DB에서 이미 폐기된 토큰은 후속 재발급에서 거부되어야 한다.
+     * Refresh Token은 DB를 최종 판정 기준으로 사용한다. 즉시 재시도(3회)까지 다 실패하면
+     * AdminLogoutFailureService에 기록해두고, 로그아웃 자체는 계속 진행한다 — 아웃박스에 남았으니
+     * 스케줄러가 다시 시도할 것이고, 여기서 실패로 응답을 막을 이유는 없다(Access Token 차단은
+     * 별개로 확정되고, DB는 이미 최종 판정 기준으로 재발급을 거부할 근거를 갖고 있다).
+     *
      * Access Token은 기존 공용 JwtAuthenticationFilter의 Redis fail-open 정책을 유지하되,
      * 이 로그아웃 요청 자체는 차단 커트라인 저장 결과를 확정하지 못하면 성공으로 응답하지 않는다.
      */
@@ -180,17 +191,26 @@ public class AdminAuthService {
         Objects.requireNonNull(role, "role");
 
         AdminLogoutTransactionService.LogoutDbState dbState =
-                adminLogoutTransactionService.revokeRefreshToken(adminId);
+                adminRefreshTokenCleanupService.revokeDbWithRetry(adminId);
 
-        cleanupRefreshToken(role, adminId, dbState.refreshTokenHash());
+        boolean dbFailed = dbState == null;
+        String tokenHash = dbFailed ? null : dbState.refreshTokenHash();
+
+        boolean redisOk = adminRefreshTokenCleanupService.cleanupRedisWithRetry(role, adminId, tokenHash);
+        boolean redisFailed = !redisOk;
+
+        if (dbFailed || redisFailed) {
+            adminLogoutFailureService.recordFailure(adminId, tokenHash, redisFailed, dbFailed);
+        }
 
         LocalDateTime cutoff = LocalDateTime.now(clock);
         invalidateAccessTokenOrThrow(role, adminId, cutoff);
 
         /*
-         * 이 시점이면 Refresh Token 폐기와 Access Token 차단은 이미 확정된 뒤다.
-         * 감사 로그는 그 결과를 기록만 하는 부가 작업이라, 저장이 실패해도 이미 끝난 로그아웃 자체를 실패로 되돌리지 않는다(fail-open).
-         * 그러지 않으면 보안적으로 완전히 끝난 로그아웃이 감사 로그 하나 때문에 스펙에 없는 500으로 응답되고, 쿠키도 안 지워져
+         * 이 시점이면 Access Token 차단은 이미 확정된 뒤다(Refresh Token 정리는 확정 못 했더라도
+         * 아웃박스에 남아 있다). 감사 로그는 그 결과를 기록만 하는 부가 작업이라, 저장이 실패해도
+         * 이미 끝난 로그아웃 자체를 실패로 되돌리지 않는다(fail-open). 그러지 않으면 보안적으로
+         * 완전히 끝난 로그아웃이 감사 로그 하나 때문에 스펙에 없는 500으로 응답되고, 쿠키도 안 지워져
          * 클라이언트가 이미 무의미해진 재시도를 하게 된다.
          */
         try {
@@ -200,220 +220,6 @@ public class AdminAuthService {
         }
 
         log.info("event=ADMIN_LOGOUT success=true adminId={}", adminId);
-    }
-
-    /*
-     * Refresh Token의 Redis 기본 레코드와 active key를 정리한다.
-     *
-     * 두 대상은 삭제 방법만 다르고 "삭제 → 결과 확인 → 필요 시 재시도 → 최종 확인" 흐름은 동일하므로
-     * deleteRedisEntryWithConfirmation()을 공통으로 사용한다.
-     */
-    private void cleanupRefreshToken(
-            String role,
-            Long adminId,
-            String tokenHash) {
-
-        if (tokenHash != null) {
-            RedisMutationOutcome primaryOutcome =
-                    deleteRedisEntryWithConfirmation(
-                            "record",
-                            role,
-                            adminId,
-                            () ->
-                                    refreshTokenRepository
-                                            .deleteByHash(tokenHash),
-                            () ->
-                                    checkRefreshTokenRecordDeleted(
-                                            tokenHash));
-
-            logCleanupOutcome(
-                    "RECORD",
-                    primaryOutcome,
-                    role,
-                    adminId);
-        }
-
-        RedisMutationOutcome activeKeyOutcome =
-                deleteRedisEntryWithConfirmation(
-                        "activeKey",
-                        role,
-                        adminId,
-                        () ->
-                                refreshTokenRepository
-                                        .deleteActiveKey(
-                                                role,
-                                                adminId),
-                        () ->
-                                checkRefreshTokenActiveKeyDeleted(
-                                        role,
-                                        adminId));
-
-        logCleanupOutcome(
-                "ACTIVE_KEY",
-                activeKeyOutcome,
-                role,
-                adminId);
-    }
-
-    /*
-     * Refresh Token 기본 레코드와 active key의 삭제/확인/재시도 흐름을 공통으로 처리한다.
-     * timeout이나 연결 단절이 발생하면 Redis가 실제 작업을 수행했는지 알 수 없으므로 즉시 실패라고 판단하지 않고 후속 조회로 확인한다.
-     */
-    private RedisMutationOutcome deleteRedisEntryWithConfirmation(
-            String target,
-            String role,
-            Long adminId,
-            Runnable deleteAction,
-            Supplier<RedisDeletionState> checkAction) {
-
-        // 1. 최초 삭제 시도
-        try {
-            deleteAction.run();
-
-            return RedisMutationOutcome.CONFIRMED;
-
-        } catch (
-                QueryTimeoutException
-                | DataAccessResourceFailureException e) {
-
-            log.warn(
-                    "event=ADMIN_REFRESH_TOKEN_DELETE_UNKNOWN "
-                            + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
-                    target,
-                    role,
-                    adminId,
-                    e);
-
-        } catch (DataAccessException e) {
-
-            log.warn(
-                    "event=ADMIN_REFRESH_TOKEN_DELETE_FAILED "
-                            + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
-                    target,
-                    role,
-                    adminId,
-                    e);
-
-            return RedisMutationOutcome.FAILED;
-        }
-
-        // 2. timeout/연결 단절로 결과를 알 수 없다면 실제 Redis 상태를 다시 조회한다.
-        RedisDeletionState state = checkAction.get();
-
-        if (state == RedisDeletionState.DELETED) { return RedisMutationOutcome.CONFIRMED; }
-
-        // 3. 아직 키가 남아 있거나, 조회 결과 자체를 확인할 수 없으면 한 번 더 삭제한다.
-        // Redis DELETE는 멱등적이므로 이미 삭제된 상태에서 다시 호출돼도 최종 결과는 같다.
-        try {
-            deleteAction.run();
-
-        } catch (
-                QueryTimeoutException
-                | DataAccessResourceFailureException e) {
-
-            log.warn(
-                    "event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_UNKNOWN "
-                            + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
-                    target,
-                    role,
-                    adminId,
-                    e);
-
-        } catch (DataAccessException e) {
-
-            log.warn(
-                    "event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_FAILED "
-                            + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
-                    target,
-                    role,
-                    adminId,
-                    e);
-
-            return RedisMutationOutcome.FAILED;
-        }
-
-        // 4. 재시도 후 최종 상태를 확인한다.
-        state = checkAction.get();
-
-        return switch (state) {
-            case DELETED ->
-                    RedisMutationOutcome.CONFIRMED;
-
-            case PRESENT ->
-                    RedisMutationOutcome.FAILED;
-
-            case UNKNOWN ->
-                    RedisMutationOutcome.UNKNOWN;
-        };
-    }
-
-    /*
-     * Refresh Token 기본 레코드의 삭제 여부를 확인한다.
-     * Boolean의 true/false/null 대신 DELETED/PRESENT/UNKNOWN으로 상태를 명확하게 표현한다.
-     */
-    private RedisDeletionState checkRefreshTokenRecordDeleted(
-            String tokenHash) {
-
-        try {
-            return refreshTokenRepository
-                    .existsByHash(tokenHash)
-                    ? RedisDeletionState.PRESENT
-                    : RedisDeletionState.DELETED;
-
-        } catch (DataAccessException e) {
-
-            log.warn(
-                    "event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED "
-                            + "target=record",
-                    e);
-
-            return RedisDeletionState.UNKNOWN;
-        }
-    }
-
-    // Refresh Token active key의 삭제 여부를 확인한다.
-    private RedisDeletionState checkRefreshTokenActiveKeyDeleted(
-            String role,
-            Long adminId) {
-
-        try {
-            return refreshTokenRepository
-                    .findActiveHash(
-                            role,
-                            adminId)
-                    .isEmpty()
-                    ? RedisDeletionState.DELETED
-                    : RedisDeletionState.PRESENT;
-
-        } catch (DataAccessException e) {
-
-            log.warn(
-                    "event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED "
-                            + "target=activeKey role={} adminId={}",
-                    role,
-                    adminId,
-                    e);
-
-            return RedisDeletionState.UNKNOWN;
-        }
-    }
-
-    // 기본 레코드와 active key에서 반복되던 cleanup 결과 로그를 한 곳에서 처리한다.
-    private void logCleanupOutcome(
-            String target,
-            RedisMutationOutcome outcome,
-            String role,
-            Long adminId) {
-
-        if (outcome != RedisMutationOutcome.CONFIRMED) {
-            log.warn(
-                    "event=ADMIN_REFRESH_TOKEN_{}_CLEANUP_{} "
-                            + LOG_FIELDS_ROLE_ADMIN_ID,
-                    target,
-                    outcome,
-                    role,
-                    adminId);
-        }
     }
 
     /*
@@ -562,23 +368,6 @@ public class AdminAuthService {
                 : new AdminException(
                 AdminErrorCode.LOGOUT_FAILED,
                 cause);
-    }
-
-    // Redis 변경 작업 자체의 최종 결과.
-    private enum RedisMutationOutcome {
-        CONFIRMED,
-        FAILED,
-        UNKNOWN
-    }
-
-    /*
-     * Redis에서 삭제 대상의 현재 상태.
-     * 기존 Boolean의 true / false / null을 대신해 각 상태의 의미를 명확하게 나타낸다.
-     */
-    private enum RedisDeletionState {
-        DELETED,
-        PRESENT,
-        UNKNOWN
     }
 
     private String maskLoginId(String loginId) { return PiiMasker.maskGeneric(loginId, 2, 1); }

@@ -2,8 +2,13 @@ package com.freshmarket.admin.domain.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -18,7 +23,11 @@ import com.freshmarket.admin.domain.repository.AdminRepository;
 import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
 import com.freshmarket.common.auth.jwt.JwtTokenProvider;
 
-import java.time.*;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Optional;
 
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
@@ -34,6 +43,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
  * PasswordEncoder 와 JwtTokenProvider 는 순수 로직이라 실제 구현을 그대로 쓴다.
  * mock 으로 대체하면 "비밀번호가 실제로 검증되는가", "토큰이 실제로 만들어지는가" 를
  * 이 테스트가 더 이상 보장하지 못한다 (UT-1-01 회귀 방어).
+ *
+ * Refresh Token의 Redis/DB 정리(재시도 포함)는 AdminRefreshTokenCleanupService로 옮겨져
+ * 그쪽 테스트(AdminRefreshTokenCleanupServiceTest)가 담당한다. 여기서는 logout()이 그
+ * 서비스와 AdminLogoutFailureService를 올바른 순서/인자로 호출하는지만 mock으로 검증한다.
  */
 class AdminAuthServiceTest {
 
@@ -53,6 +66,10 @@ class AdminAuthServiceTest {
             mock(AccessTokenValidAfterRepository.class);
     private final AdminLogoutTransactionService adminLogoutTransactionService =
             mock(AdminLogoutTransactionService.class);
+    private final AdminRefreshTokenCleanupService adminRefreshTokenCleanupService =
+            mock(AdminRefreshTokenCleanupService.class);
+    private final AdminLogoutFailureService adminLogoutFailureService =
+            mock(AdminLogoutFailureService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-08-23T06:00:00Z"), ZoneId.of("Asia/Seoul"));
 
     private final AdminAuthService adminAuthService = new AdminAuthService(
@@ -62,6 +79,8 @@ class AdminAuthServiceTest {
             refreshTokenRepository,
             accessTokenValidAfterRepository,
             adminLogoutTransactionService,
+            adminRefreshTokenCleanupService,
+            adminLogoutFailureService,
             clock,
             ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS
     );
@@ -208,11 +227,14 @@ class AdminAuthServiceTest {
      * ==========================
      * 관리자 로그아웃 테스트
      * ==========================
+     * Redis/DB 재시도 자체의 세부 동작(타임아웃 시 후속 조회, 3회 재시도 등)은
+     * AdminRefreshTokenCleanupServiceTest가 검증한다. 여기서는 logout()이 그 결과에 따라
+     * 아웃박스 기록/Access Token 차단/감사 로그를 올바르게 오케스트레이션하는지만 본다.
      */
 
     @Test
     void 존재하지_않는_관리자로_로그아웃하면_로그인_실패_예외가_발생한다() {
-        when(adminLogoutTransactionService.revokeRefreshToken(999L))
+        when(adminRefreshTokenCleanupService.revokeDbWithRetry(999L))
                 .thenThrow(new AdminException(AdminErrorCode.LOGIN_FAILED));
 
         assertThatThrownBy(() -> adminAuthService.logout(999L, "ROLE_ADMIN"))
@@ -224,14 +246,16 @@ class AdminAuthServiceTest {
     @Test
     void 로그아웃하면_DB_폐기후_Redis와_액세스토큰을_정리하고_감사로그를_기록한다() {
         String tokenHash = "a".repeat(64);
-        when(adminLogoutTransactionService.revokeRefreshToken(1L))
+        when(adminRefreshTokenCleanupService.revokeDbWithRetry(1L))
                 .thenReturn(new AdminLogoutTransactionService.LogoutDbState(tokenHash));
+        when(adminRefreshTokenCleanupService.cleanupRedisWithRetry("ROLE_ADMIN", 1L, tokenHash))
+                .thenReturn(true);
 
         adminAuthService.logout(1L, "ROLE_ADMIN");
 
-        verify(adminLogoutTransactionService).revokeRefreshToken(1L);
-        verify(refreshTokenRepository).deleteByHash(tokenHash);
-        verify(refreshTokenRepository).deleteActiveKey("ROLE_ADMIN", 1L);
+        verify(adminRefreshTokenCleanupService).revokeDbWithRetry(1L);
+        verify(adminRefreshTokenCleanupService).cleanupRedisWithRetry("ROLE_ADMIN", 1L, tokenHash);
+        verify(adminLogoutFailureService, never()).recordFailure(anyLong(), any(), anyBoolean(), anyBoolean());
         verify(accessTokenValidAfterRepository).invalidateBefore(
                 "ROLE_ADMIN",
                 1L,
@@ -241,20 +265,21 @@ class AdminAuthServiceTest {
     }
 
     /*
-     * 이 시점이면 DB Refresh Token 폐기와 Access Token 차단은 이미 확정된 뒤다.
-     * 감사 로그 저장은 그 결과를 기록만 하는 부가 작업이므로, 저장에 실패해도 이미 끝난 로그아웃 자체가 예외로 전파되어서는 안 된다(fail-open).
+     * 이 시점이면 Access Token 차단은 이미 확정된 뒤다. 감사 로그 저장은 그 결과를 기록만 하는
+     * 부가 작업이므로, 저장에 실패해도 이미 끝난 로그아웃 자체가 예외로 전파되어서는 안 된다(fail-open).
      */
     @Test
     void 감사로그_저장이_실패해도_로그아웃은_예외없이_끝난다() {
         String tokenHash = "a".repeat(64);
-        when(adminLogoutTransactionService.revokeRefreshToken(1L))
+        when(adminRefreshTokenCleanupService.revokeDbWithRetry(1L))
                 .thenReturn(new AdminLogoutTransactionService.LogoutDbState(tokenHash));
+        when(adminRefreshTokenCleanupService.cleanupRedisWithRetry("ROLE_ADMIN", 1L, tokenHash))
+                .thenReturn(true);
         doThrow(new DataAccessResourceFailureException("db down"))
                 .when(adminLogoutTransactionService).recordSuccess(1L);
 
         adminAuthService.logout(1L, "ROLE_ADMIN");
 
-        verify(refreshTokenRepository).deleteByHash(tokenHash);
         verify(accessTokenValidAfterRepository).invalidateBefore(
                 "ROLE_ADMIN",
                 1L,
@@ -264,76 +289,56 @@ class AdminAuthServiceTest {
     }
 
     @Test
-    void DB에_리프레시토큰_해시가_없어도_Redis_active_key는_정리한다() {
-        when(adminLogoutTransactionService.revokeRefreshToken(1L))
-                .thenReturn(new AdminLogoutTransactionService.LogoutDbState(null));
+    void DB_폐기가_즉시_재시도까지_실패하면_아웃박스에_기록하고_로그아웃은_계속된다() {
+        when(adminRefreshTokenCleanupService.revokeDbWithRetry(1L)).thenReturn(null);
+        when(adminRefreshTokenCleanupService.cleanupRedisWithRetry("ROLE_ADMIN", 1L, null))
+                .thenReturn(true);
 
         adminAuthService.logout(1L, "ROLE_ADMIN");
 
-        verify(refreshTokenRepository).deleteActiveKey("ROLE_ADMIN", 1L);
+        verify(adminLogoutFailureService).recordFailure(1L, null, false, true);
+        verify(accessTokenValidAfterRepository).invalidateBefore(
+                "ROLE_ADMIN",
+                1L,
+                LocalDateTime.now(clock),
+                Duration.ofMillis(ACCESS_TOKEN_VALIDITY_MS));
         verify(adminLogoutTransactionService).recordSuccess(1L);
     }
 
     @Test
-    void RefreshToken_레코드_삭제가_타임아웃이면_후속조회로_삭제를_확정한다() {
+    void Redis_정리가_즉시_재시도까지_실패하면_아웃박스에_기록하고_로그아웃은_계속된다() {
         String tokenHash = "a".repeat(64);
-        when(adminLogoutTransactionService.revokeRefreshToken(1L))
+        when(adminRefreshTokenCleanupService.revokeDbWithRetry(1L))
                 .thenReturn(new AdminLogoutTransactionService.LogoutDbState(tokenHash));
-        doThrow(new QueryTimeoutException("redis timeout"))
-                .when(refreshTokenRepository).deleteByHash(tokenHash);
-        when(refreshTokenRepository.existsByHash(tokenHash)).thenReturn(false);
+        when(adminRefreshTokenCleanupService.cleanupRedisWithRetry("ROLE_ADMIN", 1L, tokenHash))
+                .thenReturn(false);
 
         adminAuthService.logout(1L, "ROLE_ADMIN");
 
-        verify(refreshTokenRepository).existsByHash(tokenHash);
-        verify(accessTokenValidAfterRepository).invalidateBefore(
-                "ROLE_ADMIN",
-                1L,
-                LocalDateTime.now(clock),
-                Duration.ofMillis(ACCESS_TOKEN_VALIDITY_MS));
+        verify(adminLogoutFailureService).recordFailure(1L, tokenHash, true, false);
         verify(adminLogoutTransactionService).recordSuccess(1L);
     }
 
     @Test
-    void RefreshToken_active_key_삭제가_연결실패면_후속조회로_삭제를_확정한다() {
-        when(adminLogoutTransactionService.revokeRefreshToken(1L))
+    void DB에_리프레시토큰_해시가_없어도_Redis_정리는_시도한다() {
+        when(adminRefreshTokenCleanupService.revokeDbWithRetry(1L))
                 .thenReturn(new AdminLogoutTransactionService.LogoutDbState(null));
-        doThrow(new DataAccessResourceFailureException("redis disconnected"))
-                .when(refreshTokenRepository).deleteActiveKey("ROLE_ADMIN", 1L);
-        when(refreshTokenRepository.findActiveHash("ROLE_ADMIN", 1L))
-                .thenReturn(Optional.empty());
+        when(adminRefreshTokenCleanupService.cleanupRedisWithRetry("ROLE_ADMIN", 1L, null))
+                .thenReturn(true);
 
         adminAuthService.logout(1L, "ROLE_ADMIN");
 
-        verify(refreshTokenRepository).findActiveHash("ROLE_ADMIN", 1L);
-        verify(adminLogoutTransactionService).recordSuccess(1L);
-    }
-
-    @Test
-    void RefreshToken_Redis_정리가_일반실패여도_DB가_최종기준이므로_액세스토큰_차단은_계속한다() {
-        String tokenHash = "a".repeat(64);
-        when(adminLogoutTransactionService.revokeRefreshToken(1L))
-                .thenReturn(new AdminLogoutTransactionService.LogoutDbState(tokenHash));
-        doThrow(new DataAccessResourceFailureException("redis down"))
-                .when(refreshTokenRepository).deleteByHash(tokenHash);
-        when(refreshTokenRepository.existsByHash(tokenHash))
-                .thenThrow(new DataAccessResourceFailureException("redis still down"));
-
-        adminAuthService.logout(1L, "ROLE_ADMIN");
-
-        verify(accessTokenValidAfterRepository).invalidateBefore(
-                "ROLE_ADMIN",
-                1L,
-                LocalDateTime.now(clock),
-                Duration.ofMillis(ACCESS_TOKEN_VALIDITY_MS));
+        verify(adminRefreshTokenCleanupService).cleanupRedisWithRetry("ROLE_ADMIN", 1L, null);
         verify(adminLogoutTransactionService).recordSuccess(1L);
     }
 
     @Test
     void AccessToken_차단_타임아웃이어도_후속조회에서_반영이_확인되면_로그아웃에_성공한다() {
         LocalDateTime cutoff = LocalDateTime.now(clock);
-        when(adminLogoutTransactionService.revokeRefreshToken(1L))
+        when(adminRefreshTokenCleanupService.revokeDbWithRetry(1L))
                 .thenReturn(new AdminLogoutTransactionService.LogoutDbState(null));
+        when(adminRefreshTokenCleanupService.cleanupRedisWithRetry(eq("ROLE_ADMIN"), eq(1L), any()))
+                .thenReturn(true);
         doThrow(new QueryTimeoutException("redis timeout"))
                 .when(accessTokenValidAfterRepository).invalidateBefore(
                         "ROLE_ADMIN",
@@ -354,8 +359,10 @@ class AdminAuthServiceTest {
     @Test
     void AccessToken_차단_결과를_끝까지_확정하지_못하면_로그아웃_성공으로_처리하지_않는다() {
         LocalDateTime cutoff = LocalDateTime.now(clock);
-        when(adminLogoutTransactionService.revokeRefreshToken(1L))
+        when(adminRefreshTokenCleanupService.revokeDbWithRetry(1L))
                 .thenReturn(new AdminLogoutTransactionService.LogoutDbState(null));
+        when(adminRefreshTokenCleanupService.cleanupRedisWithRetry(eq("ROLE_ADMIN"), eq(1L), any()))
+                .thenReturn(true);
         doThrow(new QueryTimeoutException("redis timeout"))
                 .when(accessTokenValidAfterRepository).invalidateBefore(
                         "ROLE_ADMIN",
