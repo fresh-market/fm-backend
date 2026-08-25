@@ -205,6 +205,22 @@ class AdminProductImageServiceTest {
     }
 
     @Test
+    void 확정_중_S3_조회가_실패하면_재시도_가능한_오류를_던진다() {
+        // given — HeadObject가 404가 아닌 다른 이유(타임아웃, 5xx 등)로 실패한 상황
+        UUID uploadId = UUID.randomUUID();
+        ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
+        when(productImageRepository.findByUploadIdForUpdate(uploadId)).thenReturn(Optional.of(image));
+        when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
+                .thenThrow((S3Exception) S3Exception.builder().statusCode(500).message("Internal Error").build());
+        AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
+
+        // when, then — 업로드 미확인(404)과 구분해서 별도 오류 코드로 변환한다
+        assertThatThrownBy(() -> adminProductImageService.confirm(1L, 88L, request))
+                .isInstanceOf(ProductException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_VERIFICATION_UNAVAILABLE);
+    }
+
+    @Test
     void uploadId로_못_찾으면_실패한다() {
         // given
         UUID uploadId = UUID.randomUUID();

@@ -148,7 +148,7 @@ public class AdminProductImageService {
             throw new ProductException(ProductErrorCode.IMAGE_ALREADY_CONFIRMED);
         }
 
-        S3ObjectMetadata metadata = s3ImageStorageClient.headObject(image.getObjectKey())
+        S3ObjectMetadata metadata = headObject(image.getObjectKey())
                 .orElseThrow(() -> new ProductException(ProductErrorCode.IMAGE_UPLOAD_NOT_FOUND));
 
         // 발급 시 신고한 조건과 실제 업로드가 다르면(서명되지 않은 조건이라 S3가 막지 못한다) 지우고 거절한다
@@ -203,6 +203,21 @@ public class AdminProductImageService {
             return productImageRepository.findByIdAndProductIdForUpdate(imageId, productId);
         } catch (PessimisticLockingFailureException e) {
             throw new ProductException(ProductErrorCode.IMAGE_PROCESSING_IN_PROGRESS, e);
+        }
+    }
+
+    /*
+     * (EJ-9-05/FUN-2-04) HeadObject가 404가 아닌 이유(타임아웃, 5xx 등)로 실패하면, 그건 "업로드
+     * 안 됨"이 아니라 결과를 모르는 상태다 — 그대로 두면 원인 불명의 S3Exception이 서비스 경계를
+     * 넘어가 GlobalExceptionHandler의 catch-all(500)로 떨어진다. 재시도 가능한 오류로 변환하고,
+     * statusCode는 구조화 로그 필드로 남겨 원문 그대로 확인할 수 있게 한다(OBS-7-02).
+     */
+    private Optional<S3ObjectMetadata> headObject(String objectKey) {
+        try {
+            return s3ImageStorageClient.headObject(objectKey);
+        } catch (S3Exception e) {
+            log.error("event=IMAGE_HEAD_OBJECT_FAILED objectKey={} statusCode={}", objectKey, e.statusCode(), e);
+            throw new ProductException(ProductErrorCode.IMAGE_VERIFICATION_UNAVAILABLE, e);
         }
     }
 

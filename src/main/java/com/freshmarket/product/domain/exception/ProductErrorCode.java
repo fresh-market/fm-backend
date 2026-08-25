@@ -44,7 +44,13 @@ public enum ProductErrorCode implements ErrorCode {
      * 뜻이다 — 클라이언트가 같은 requestId를 서로 다른 상품에 재사용한 것(StockErrorCode.
      * REQUEST_ID_ALREADY_USED와 같은 상황).
      */
-    IMAGE_REQUEST_ID_ALREADY_USED(HttpStatus.CONFLICT, "PRODUCT-016", "이미 다른 상품에 사용된 요청 식별자입니다.");
+    IMAGE_REQUEST_ID_ALREADY_USED(HttpStatus.CONFLICT, "PRODUCT-016", "이미 다른 상품에 사용된 요청 식별자입니다."),
+    /*
+     * (EJ-9-05/FUN-2-04) HeadObject가 404가 아닌 다른 이유(타임아웃, 5xx 등)로 실패하면 "업로드가
+     * 안 됐다"와 결과를 알 수 없는 상태를 구분해야 한다 — 확정하지 않되 실패로 단정하지도 않는다.
+     */
+    IMAGE_VERIFICATION_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "PRODUCT-017",
+            "이미지 업로드 확인에 실패했습니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus httpStatus;
     private final String code;
