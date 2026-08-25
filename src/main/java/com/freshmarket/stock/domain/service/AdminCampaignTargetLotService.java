@@ -15,7 +15,6 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /*
  * 관리자 화면에서 오늘의 캠페인 대상 로트를 조회한다.
@@ -23,9 +22,14 @@ import org.springframework.transaction.annotation.Transactional;
  * 계산은 하지 않는다 — CampaignTargetLotBatch 가 자정에 이미 확정해 둔 값을
  * 그대로 읽기만 한다. "동일 기준일로 재조회 시 항상 동일 결과 반환" 요구사항이
  * 여기가 아니라 배치의 확정 시점에 이미 보장돼 있기 때문이다.
+ *
+ * 클래스에 @Transactional 을 걸지 않는다 — findToday() 중간에 productApi 호출이
+ * 끼어 있어, 감싸면 그 호출이 읽기 트랜잭션 안에 들어간다(DI-4-02, domain-package-
+ * boundary-guideline.md 7장과 같은 문제). 여기서 쓰는 조회 메서드들은 전부 Spring
+ * Data JPA 리포지토리가 기본으로 제공하는 것이라, 감싸지 않아도 각자 자기 트랜잭션
+ * 안에서 실행된다 — 이 서비스가 DB 에 쓰기를 전혀 하지 않으므로 그걸로 충분하다.
  */
 @Service
-@Transactional(readOnly = true)
 public class AdminCampaignTargetLotService {
 
     private final CampaignTargetLotRepository campaignTargetLotRepository;

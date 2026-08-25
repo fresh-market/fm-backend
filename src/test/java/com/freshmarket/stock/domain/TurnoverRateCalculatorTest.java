@@ -40,4 +40,16 @@ class TurnoverRateCalculatorTest {
         assertThatThrownBy(() -> TurnoverRateCalculator.calculate(-1, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void 잔여_수량이_음수면_예외를_던진다() {
+        assertThatThrownBy(() -> TurnoverRateCalculator.calculate(100, -1))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void 잔여_수량이_입고_수량을_넘으면_예외를_던진다() {
+        assertThatThrownBy(() -> TurnoverRateCalculator.calculate(100, 101))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }
