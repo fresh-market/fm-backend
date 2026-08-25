@@ -30,6 +30,9 @@ public class AuthCookieFactory {
     // 늘어나고 XSS는 애초에 Path 스코프로 막던 게 아니었다(같은 오리진 스크립트는 좁은 Path였어도
     // 정확한 URL로 직접 호출 가능) — 남는 비용은 앞으로 /v1/auth/ 아래 추가되는 엔드포인트가
     // 의식하지 않아도 이 쿠키를 자동으로 받게 된다는 것뿐이다.
+    private static final String ACCESS_TOKEN_COOKIE_NAME = "accessToken";
+    private static final String REFRESH_TOKEN_COOKIE_NAME = "refreshToken";
+    private static final String SAME_SITE_STRICT = "Strict";
     private static final String MEMBER_REFRESH_TOKEN_COOKIE_PATH = "/v1/auth/";
     private static final String ADMIN_REFRESH_TOKEN_COOKIE_PATH = "/v1/admin/auth/";
     // accessToken은 재발급/로그아웃 경로만이 아니라 인증이 필요한 모든 API 요청에 실려야 한다.
@@ -41,31 +44,31 @@ public class AuthCookieFactory {
     private boolean secure; // TODO: 운영(https)에서는 반드시 true
 
     public ResponseCookie accessTokenCookie(String accessToken) {
-        return ResponseCookie.from("accessToken", accessToken)
+        return ResponseCookie.from(ACCESS_TOKEN_COOKIE_NAME, accessToken)
                 .httpOnly(true)
                 .secure(secure)
                 .path(ACCESS_TOKEN_COOKIE_PATH)
-                .sameSite("Strict")
+                .sameSite(SAME_SITE_STRICT)
                 .maxAge(Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs()))
                 .build();
     }
 
     public ResponseCookie expiredAccessTokenCookie() {
-        return ResponseCookie.from("accessToken", "")
+        return ResponseCookie.from(ACCESS_TOKEN_COOKIE_NAME, "")
                 .httpOnly(true)
                 .secure(secure)
                 .path(ACCESS_TOKEN_COOKIE_PATH)
                 .maxAge(Duration.ZERO)
-                .sameSite("Strict")
+                .sameSite(SAME_SITE_STRICT)
                 .build();
     }
 
     public ResponseCookie refreshTokenCookie(String refreshToken, boolean persistent) {
-        ResponseCookie.ResponseCookieBuilder builder = ResponseCookie.from("refreshToken", refreshToken)
+        ResponseCookie.ResponseCookieBuilder builder = ResponseCookie.from(REFRESH_TOKEN_COOKIE_NAME, refreshToken)
                 .httpOnly(true)
                 .secure(secure)
                 .path(MEMBER_REFRESH_TOKEN_COOKIE_PATH)
-                .sameSite("Strict");
+                .sameSite(SAME_SITE_STRICT);
         if (persistent) {
             builder.maxAge(Duration.ofMillis(jwtTokenProvider.getRefreshTokenValidityMs()));
         }
@@ -73,32 +76,32 @@ public class AuthCookieFactory {
     }
 
     public ResponseCookie adminRefreshTokenCookie(String refreshToken, long validitySeconds) {
-        return ResponseCookie.from("refreshToken", refreshToken)
+        return ResponseCookie.from(REFRESH_TOKEN_COOKIE_NAME, refreshToken)
                 .httpOnly(true)
                 .secure(secure)
                 .path(ADMIN_REFRESH_TOKEN_COOKIE_PATH)
-                .sameSite("Strict")
+                .sameSite(SAME_SITE_STRICT)
                 .maxAge(Duration.ofSeconds(validitySeconds))
                 .build();
     }
 
     public ResponseCookie expiredRefreshTokenCookie() {
-        return ResponseCookie.from("refreshToken", "")
+        return ResponseCookie.from(REFRESH_TOKEN_COOKIE_NAME, "")
                 .httpOnly(true)
                 .secure(secure)
                 .path(MEMBER_REFRESH_TOKEN_COOKIE_PATH)
                 .maxAge(Duration.ZERO)
-                .sameSite("Strict")
+                .sameSite(SAME_SITE_STRICT)
                 .build();
     }
 
     public ResponseCookie expiredAdminRefreshTokenCookie() {
-        return ResponseCookie.from("refreshToken", "")
+        return ResponseCookie.from(REFRESH_TOKEN_COOKIE_NAME, "")
                 .httpOnly(true)
                 .secure(secure)
                 .path(ADMIN_REFRESH_TOKEN_COOKIE_PATH)
                 .maxAge(Duration.ZERO)
-                .sameSite("Strict")
+                .sameSite(SAME_SITE_STRICT)
                 .build();
     }
 }

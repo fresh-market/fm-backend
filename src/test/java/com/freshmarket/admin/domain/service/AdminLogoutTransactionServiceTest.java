@@ -32,7 +32,7 @@ class AdminLogoutTransactionServiceTest {
         Admin admin = AdminFixture.active("admin.kim", "hash", AdminRole.ADMIN);
         ReflectionTestUtils.setField(admin, "id", 1L);
         admin.issueRefreshToken("a".repeat(64), LocalDateTime.now().plusDays(1));
-        when(adminRepository.findById(1L)).thenReturn(Optional.of(admin));
+        when(adminRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(admin));
 
         AdminLogoutTransactionService.LogoutDbState state = service.revokeRefreshToken(1L);
 
@@ -44,7 +44,7 @@ class AdminLogoutTransactionServiceTest {
 
     @Test
     void 존재하지_않는_관리자의_DB_토큰_폐기는_로그인_실패로_처리한다() {
-        when(adminRepository.findById(999L)).thenReturn(Optional.empty());
+        when(adminRepository.findByIdForUpdate(999L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.revokeRefreshToken(999L))
                 .isInstanceOf(AdminException.class)

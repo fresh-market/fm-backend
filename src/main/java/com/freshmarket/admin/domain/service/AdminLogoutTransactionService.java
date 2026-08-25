@@ -23,11 +23,12 @@ public class AdminLogoutTransactionService {
 
     /**
      * DB를 관리자 Refresh Token의 최종 판정 기준으로 사용하기 위해 먼저 DB 백업을 폐기한다.
+     * 같은 관리자에 대한 로그인/로그아웃 갱신이 겹쳐 토큰 상태를 덮어쓰지 않도록 관리자 행을 잠근다.
      * Redis 정리에 사용할 기존 해시는 트랜잭션이 끝난 뒤 호출자가 사용할 수 있도록 반환한다.
      */
     @Transactional(timeout = 5)
     public LogoutDbState revokeRefreshToken(Long adminId) {
-        Admin admin = adminRepository.findById(adminId)
+        Admin admin = adminRepository.findByIdForUpdate(adminId)
                 .orElseThrow(() -> new AdminException(AdminErrorCode.LOGIN_FAILED));
 
         String refreshTokenHash = admin.getRefreshTokenHash();

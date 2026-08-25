@@ -19,6 +19,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import com.freshmarket.common.logging.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
@@ -46,6 +47,9 @@ public class AdminAuthService {
 
     // 실제 계정과 무관한 값이다. 계정이 없을 때도 이 해시로 BCrypt 를 돌려 응답 시간을 맞춘다 (SEC-6-04)
     private static final String DUMMY_PASSWORD_SOURCE = "dummy-password-for-constant-time-comparison";
+
+    // Access Token 차단 커트라인 반영 여부를 확인할 때 사용하는 최소 시간 오프셋
+    private static final long CUTOFF_CONFIRMATION_OFFSET_NANOS = 1L;
 
     private final AdminRepository adminRepository;
     private final PasswordEncoder passwordEncoder;
@@ -167,175 +171,387 @@ public class AdminAuthService {
         log.info("event=ADMIN_LOGOUT success=true adminId={}", adminId);
     }
 
-    private void cleanupRefreshToken(String role, Long adminId, String tokenHash) {
+    /*
+     * Refresh Token의 Redis 기본 레코드와 active key를 정리한다.
+     *
+     * 두 대상은 삭제 방법만 다르고 "삭제 → 결과 확인 → 필요 시 재시도 → 최종 확인" 흐름은 동일하므로
+     * deleteRedisEntryWithConfirmation()을 공통으로 사용한다.
+     */
+    private void cleanupRefreshToken(
+            String role,
+            Long adminId,
+            String tokenHash) {
+
         if (tokenHash != null) {
-            RedisMutationOutcome primaryOutcome = deleteRefreshTokenRecord(tokenHash);
-            if (primaryOutcome != RedisMutationOutcome.CONFIRMED) {
-                log.warn(
-                        "event=ADMIN_REFRESH_TOKEN_RECORD_CLEANUP_{} role={} adminId={}",
-                        primaryOutcome,
-                        role,
-                        adminId);
-            }
+            RedisMutationOutcome primaryOutcome =
+                    deleteRedisEntryWithConfirmation(
+                            "record",
+                            role,
+                            adminId,
+                            () ->
+                                    refreshTokenRepository
+                                            .deleteByHash(tokenHash),
+                            () ->
+                                    checkRefreshTokenRecordDeleted(
+                                            tokenHash));
+
+            logCleanupOutcome(
+                    "RECORD",
+                    primaryOutcome,
+                    role,
+                    adminId);
         }
 
-        RedisMutationOutcome activeKeyOutcome = deleteRefreshTokenActiveKey(role, adminId);
-        if (activeKeyOutcome != RedisMutationOutcome.CONFIRMED) {
+        RedisMutationOutcome activeKeyOutcome =
+                deleteRedisEntryWithConfirmation(
+                        "activeKey",
+                        role,
+                        adminId,
+                        () ->
+                                refreshTokenRepository
+                                        .deleteActiveKey(
+                                                role,
+                                                adminId),
+                        () ->
+                                checkRefreshTokenActiveKeyDeleted(
+                                        role,
+                                        adminId));
+
+        logCleanupOutcome(
+                "ACTIVE_KEY",
+                activeKeyOutcome,
+                role,
+                adminId);
+    }
+
+    /*
+     * Refresh Token 기본 레코드와 active key의 삭제/확인/재시도 흐름을 공통으로 처리한다.
+     * timeout이나 연결 단절이 발생하면 Redis가 실제 작업을 수행했는지 알 수 없으므로 즉시 실패라고 판단하지 않고 후속 조회로 확인한다.
+     */
+    private RedisMutationOutcome deleteRedisEntryWithConfirmation(
+            String target,
+            String role,
+            Long adminId,
+            Runnable deleteAction,
+            Supplier<RedisDeletionState> checkAction) {
+
+        // 1. 최초 삭제 시도
+        try {
+            deleteAction.run();
+
+            return RedisMutationOutcome.CONFIRMED;
+
+        } catch (
+                QueryTimeoutException
+                | DataAccessResourceFailureException e) {
+
             log.warn(
-                    "event=ADMIN_REFRESH_TOKEN_ACTIVE_KEY_CLEANUP_{} role={} adminId={}",
-                    activeKeyOutcome,
+                    "event=ADMIN_REFRESH_TOKEN_DELETE_UNKNOWN "
+                            + "target={} role={} adminId={}",
+                    target,
+                    role,
+                    adminId,
+                    e);
+
+        } catch (DataAccessException e) {
+
+            log.warn(
+                    "event=ADMIN_REFRESH_TOKEN_DELETE_FAILED "
+                            + "target={} role={} adminId={}",
+                    target,
+                    role,
+                    adminId,
+                    e);
+
+            return RedisMutationOutcome.FAILED;
+        }
+
+        // 2. timeout/연결 단절로 결과를 알 수 없다면 실제 Redis 상태를 다시 조회한다.
+        RedisDeletionState state =
+                checkAction.get();
+
+        if (state == RedisDeletionState.DELETED) {
+            return RedisMutationOutcome.CONFIRMED;
+        }
+
+        // 3. 아직 키가 남아 있거나, 조회 결과 자체를 확인할 수 없으면 한 번 더 삭제한다.
+        // Redis DELETE는 멱등적이므로 이미 삭제된 상태에서 다시 호출돼도 최종 결과는 같다.
+        try {
+            deleteAction.run();
+
+        } catch (
+                QueryTimeoutException
+                | DataAccessResourceFailureException e) {
+
+            log.warn(
+                    "event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_UNKNOWN "
+                            + "target={} role={} adminId={}",
+                    target,
+                    role,
+                    adminId,
+                    e);
+
+        } catch (DataAccessException e) {
+
+            log.warn(
+                    "event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_FAILED "
+                            + "target={} role={} adminId={}",
+                    target,
+                    role,
+                    adminId,
+                    e);
+
+            return RedisMutationOutcome.FAILED;
+        }
+
+        // 4. 재시도 후 최종 상태를 확인한다.
+        state = checkAction.get();
+
+        return switch (state) {
+            case DELETED ->
+                    RedisMutationOutcome.CONFIRMED;
+
+            case PRESENT ->
+                    RedisMutationOutcome.FAILED;
+
+            case UNKNOWN ->
+                    RedisMutationOutcome.UNKNOWN;
+        };
+    }
+
+    /*
+     * Refresh Token 기본 레코드의 삭제 여부를 확인한다.
+     * Boolean의 true/false/null 대신 DELETED/PRESENT/UNKNOWN으로 상태를 명확하게 표현한다.
+     */
+    private RedisDeletionState checkRefreshTokenRecordDeleted(
+            String tokenHash) {
+
+        try {
+            return refreshTokenRepository
+                    .existsByHash(tokenHash)
+                    ? RedisDeletionState.PRESENT
+                    : RedisDeletionState.DELETED;
+
+        } catch (DataAccessException e) {
+
+            log.warn(
+                    "event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED "
+                            + "target=record",
+                    e);
+
+            return RedisDeletionState.UNKNOWN;
+        }
+    }
+
+    // Refresh Token active key의 삭제 여부를 확인한다.
+    private RedisDeletionState checkRefreshTokenActiveKeyDeleted(
+            String role,
+            Long adminId) {
+
+        try {
+            return refreshTokenRepository
+                    .findActiveHash(
+                            role,
+                            adminId)
+                    .isEmpty()
+                    ? RedisDeletionState.DELETED
+                    : RedisDeletionState.PRESENT;
+
+        } catch (DataAccessException e) {
+
+            log.warn(
+                    "event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED "
+                            + "target=activeKey role={} adminId={}",
+                    role,
+                    adminId,
+                    e);
+
+            return RedisDeletionState.UNKNOWN;
+        }
+    }
+
+    // 기본 레코드와 active key에서 반복되던 cleanup 결과 로그를 한 곳에서 처리한다.
+    private void logCleanupOutcome(
+            String target,
+            RedisMutationOutcome outcome,
+            String role,
+            Long adminId) {
+
+        if (outcome != RedisMutationOutcome.CONFIRMED) {
+            log.warn(
+                    "event=ADMIN_REFRESH_TOKEN_{}_CLEANUP_{} "
+                            + "role={} adminId={}",
+                    target,
+                    outcome,
                     role,
                     adminId);
         }
     }
 
-    private RedisMutationOutcome deleteRefreshTokenRecord(String tokenHash) {
+    /*
+     * 로그아웃 이전에 발급된 Access Token을 사용할 수 없도록 Redis에 valid-after 커트라인을 저장한다.
+     * timeout/연결 실패의 경우 Redis가 실제로 반영했을 가능성이 있으므로 후속 조회로 확인하고 필요한 경우 한 번 더 저장한다.
+     */
+    private void invalidateAccessTokenOrThrow(
+            String role,
+            Long adminId,
+            LocalDateTime cutoff) {
+
+        Duration ttl =
+                Duration.ofMillis(
+                        jwtTokenProvider
+                                .getAccessTokenValidityMs());
+
+        // 1. 최초 커트라인 저장
         try {
-            refreshTokenRepository.deleteByHash(tokenHash);
-            return RedisMutationOutcome.CONFIRMED;
-        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_UNKNOWN target=record", e);
-            return confirmOrRetryRefreshTokenRecordDeletion(tokenHash);
-        } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_FAILED target=record", e);
-            return RedisMutationOutcome.FAILED;
-        }
-    }
+            accessTokenValidAfterRepository
+                    .invalidateBefore(
+                            role,
+                            adminId,
+                            cutoff,
+                            ttl);
 
-    private RedisMutationOutcome confirmOrRetryRefreshTokenRecordDeletion(String tokenHash) {
-        Boolean deleted = isRefreshTokenRecordDeleted(tokenHash);
-        if (Boolean.TRUE.equals(deleted)) {
-            return RedisMutationOutcome.CONFIRMED;
-        }
-
-        try {
-            refreshTokenRepository.deleteByHash(tokenHash);
-        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_UNKNOWN target=record", e);
-        } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_FAILED target=record", e);
-            return RedisMutationOutcome.FAILED;
-        }
-
-        deleted = isRefreshTokenRecordDeleted(tokenHash);
-        return Boolean.TRUE.equals(deleted)
-                ? RedisMutationOutcome.CONFIRMED
-                : RedisMutationOutcome.UNKNOWN;
-    }
-
-    private Boolean isRefreshTokenRecordDeleted(String tokenHash) {
-        try {
-            return !refreshTokenRepository.existsByHash(tokenHash);
-        } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED target=record", e);
-            return null;
-        }
-    }
-
-    private RedisMutationOutcome deleteRefreshTokenActiveKey(String role, Long adminId) {
-        try {
-            refreshTokenRepository.deleteActiveKey(role, adminId);
-            return RedisMutationOutcome.CONFIRMED;
-        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_UNKNOWN target=activeKey role={} adminId={}",
-                    role, adminId, e);
-            return confirmOrRetryRefreshTokenActiveKeyDeletion(role, adminId);
-        } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_FAILED target=activeKey role={} adminId={}",
-                    role, adminId, e);
-            return RedisMutationOutcome.FAILED;
-        }
-    }
-
-    private RedisMutationOutcome confirmOrRetryRefreshTokenActiveKeyDeletion(String role, Long adminId) {
-        Boolean deleted = isRefreshTokenActiveKeyDeleted(role, adminId);
-        if (Boolean.TRUE.equals(deleted)) {
-            return RedisMutationOutcome.CONFIRMED;
-        }
-
-        try {
-            refreshTokenRepository.deleteActiveKey(role, adminId);
-        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_UNKNOWN target=activeKey role={} adminId={}",
-                    role, adminId, e);
-        } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_FAILED target=activeKey role={} adminId={}",
-                    role, adminId, e);
-            return RedisMutationOutcome.FAILED;
-        }
-
-        deleted = isRefreshTokenActiveKeyDeleted(role, adminId);
-        return Boolean.TRUE.equals(deleted)
-                ? RedisMutationOutcome.CONFIRMED
-                : RedisMutationOutcome.UNKNOWN;
-    }
-
-    private Boolean isRefreshTokenActiveKeyDeleted(String role, Long adminId) {
-        try {
-            return refreshTokenRepository.findActiveHash(role, adminId).isEmpty();
-        } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED target=activeKey role={} adminId={}",
-                    role, adminId, e);
-            return null;
-        }
-    }
-
-    private void invalidateAccessTokenOrThrow(String role, Long adminId, LocalDateTime cutoff) {
-        Duration ttl = Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs());
-
-        try {
-            accessTokenValidAfterRepository.invalidateBefore(role, adminId, cutoff, ttl);
             return;
-        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
-            log.warn("event=ADMIN_ACCESS_TOKEN_INVALIDATION_UNKNOWN role={} adminId={}", role, adminId, e);
+
+        } catch (
+                QueryTimeoutException
+                | DataAccessResourceFailureException e) {
+
+            log.warn(
+                    "event=ADMIN_ACCESS_TOKEN_INVALIDATION_UNKNOWN "
+                            + "role={} adminId={}",
+                    role,
+                    adminId,
+                    e);
+
         } catch (DataAccessException e) {
-            throw logoutFailed(role, adminId, e);
+
+            throw logoutFailed(
+                    role,
+                    adminId,
+                    e);
         }
 
-        if (isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
+        // 2. timeout이 발생했더라도 실제로 Redis에 반영됐는지 확인한다.
+        if (isAccessTokenInvalidationConfirmed(
+                role,
+                adminId,
+                cutoff)) {
+
             return;
         }
 
+        // 3. 아직 반영 여부를 확인하지 못했다면 한 번 재시도한다.
         try {
-            accessTokenValidAfterRepository.invalidateBefore(role, adminId, cutoff, ttl);
+            accessTokenValidAfterRepository
+                    .invalidateBefore(
+                            role,
+                            adminId,
+                            cutoff,
+                            ttl);
+
             return;
-        } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
-            log.warn("event=ADMIN_ACCESS_TOKEN_INVALIDATION_RETRY_UNKNOWN role={} adminId={}", role, adminId, e);
+
+        } catch (
+                QueryTimeoutException
+                | DataAccessResourceFailureException e) {
+
+            log.warn(
+                    "event=ADMIN_ACCESS_TOKEN_INVALIDATION_RETRY_UNKNOWN "
+                            + "role={} adminId={}",
+                    role,
+                    adminId,
+                    e);
+
         } catch (DataAccessException e) {
-            throw logoutFailed(role, adminId, e);
+
+            throw logoutFailed(
+                    role,
+                    adminId,
+                    e);
         }
 
-        if (!isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
-            throw logoutFailed(role, adminId, null);
+        // 4. 재시도까지 결과가 미확정이면 마지막으로 확인한다.
+        // 끝까지 확인할 수 없다면 204 성공으로 응답하지 않는다.
+        if (!isAccessTokenInvalidationConfirmed(
+                role,
+                adminId,
+                cutoff)) {
+
+            throw logoutFailed(
+                    role,
+                    adminId,
+                    null);
         }
     }
 
-    private boolean isAccessTokenInvalidationConfirmed(String role, Long adminId, LocalDateTime cutoff) {
+    /*
+     * 저장된 커트라인이 cutoff 이상인지 간접적으로 확인한다.
+     * cutoff 직전 시각의 토큰이 더 이상 유효하지 않다면 logout 시 기록한 커트라인이 반영된 것으로 볼 수 있다.
+     */
+    private boolean isAccessTokenInvalidationConfirmed(
+            String role,
+            Long adminId,
+            LocalDateTime cutoff) {
+
         try {
-            // 저장된 커트라인이 cutoff 이상이면 cutoff 직전 토큰은 반드시 무효다.
-            return !accessTokenValidAfterRepository.isValidAfter(
-                    role, adminId, cutoff.minusNanos(1));
+            return !accessTokenValidAfterRepository
+                    .isValidAfter(
+                            role,
+                            adminId,
+                            cutoff.minusNanos(
+                                    CUTOFF_CONFIRMATION_OFFSET_NANOS));
+
         } catch (DataAccessException e) {
-            log.warn("event=ADMIN_ACCESS_TOKEN_INVALIDATION_CONFIRM_FAILED role={} adminId={}",
-                    role, adminId, e);
+
+            log.warn(
+                    "event=ADMIN_ACCESS_TOKEN_INVALIDATION_CONFIRM_FAILED "
+                            + "role={} adminId={}",
+                    role,
+                    adminId,
+                    e);
+
             return false;
         }
     }
 
-    private AdminException logoutFailed(String role, Long adminId, DataAccessException cause) {
-        log.error("event=ADMIN_ACCESS_TOKEN_INVALIDATION_FAILED role={} adminId={}", role, adminId, cause);
+    // Access Token 차단 결과를 확정하지 못했을 때 ADMIN-010 예외를 생성한다.
+    private AdminException logoutFailed(
+            String role,
+            Long adminId,
+            DataAccessException cause) {
+
+        log.error(
+                "event=ADMIN_ACCESS_TOKEN_INVALIDATION_FAILED "
+                        + "role={} adminId={}",
+                role,
+                adminId,
+                cause);
+
         return cause == null
-                ? new AdminException(AdminErrorCode.LOGOUT_FAILED)
-                : new AdminException(AdminErrorCode.LOGOUT_FAILED, cause);
+                ? new AdminException(
+                AdminErrorCode.LOGOUT_FAILED)
+                : new AdminException(
+                AdminErrorCode.LOGOUT_FAILED,
+                cause);
     }
 
+    // Redis 변경 작업 자체의 최종 결과.
     private enum RedisMutationOutcome {
         CONFIRMED,
         FAILED,
         UNKNOWN
     }
 
-    private String maskLoginId(String loginId) {
-        return PiiMasker.maskGeneric(loginId, 2, 1);
+    /*
+     * Redis에서 삭제 대상의 현재 상태.
+     * 기존 Boolean의 true / false / null을 대신해 각 상태의 의미를 명확하게 나타낸다.
+     */
+    private enum RedisDeletionState {
+        DELETED,
+        PRESENT,
+        UNKNOWN
     }
+
+    private String maskLoginId(String loginId) { return PiiMasker.maskGeneric(loginId, 2, 1); }
 }
