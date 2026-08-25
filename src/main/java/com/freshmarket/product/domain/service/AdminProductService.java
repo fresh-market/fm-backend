@@ -1,9 +1,17 @@
 package com.freshmarket.product.domain.service;
 
+import com.freshmarket.common.response.CursorPageResponse;
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.domain.dto.AdminProductCreateRequest;
+import com.freshmarket.product.domain.dto.AdminProductListItem;
+import com.freshmarket.product.domain.dto.AdminProductListRow;
 import com.freshmarket.product.domain.dto.AdminProductOptionCreateRequest;
 import com.freshmarket.product.domain.dto.AdminProductOptionResponse;
 import com.freshmarket.product.domain.dto.AdminProductResponse;
+import com.freshmarket.product.domain.dto.AdminProductSearchCondition;
+import com.freshmarket.product.domain.dto.CategorySummary;
+import com.freshmarket.product.domain.entity.Category;
 import com.freshmarket.product.domain.entity.Product;
 import com.freshmarket.product.domain.entity.ProductOption;
 import com.freshmarket.product.domain.entity.StorageType;
@@ -11,17 +19,20 @@ import com.freshmarket.product.domain.exception.ProductErrorCode;
 import com.freshmarket.product.domain.exception.ProductException;
 import com.freshmarket.product.domain.repository.CategoryRepository;
 import com.freshmarket.product.domain.repository.ProductOptionRepository;
+import com.freshmarket.product.domain.repository.ProductQueryRepository;
 import com.freshmarket.product.domain.repository.ProductRepository;
 import java.security.SecureRandom;
 import java.time.Year;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-// 관리자 화면에서 상품과 옵션을 등록하는 기능을 담당한다
+// 관리자 화면에서 상품과 옵션을 등록·조회하는 기능을 담당한다
 @Service
 @Transactional(readOnly = true)
 public class AdminProductService {
@@ -33,13 +44,68 @@ public class AdminProductService {
     private final ProductRepository productRepository;
     private final ProductOptionRepository productOptionRepository;
     private final CategoryRepository categoryRepository;
+    private final ProductQueryRepository productQueryRepository;
 
     public AdminProductService(ProductRepository productRepository,
             ProductOptionRepository productOptionRepository,
-            CategoryRepository categoryRepository) {
+            CategoryRepository categoryRepository,
+            ProductQueryRepository productQueryRepository) {
         this.productRepository = productRepository;
         this.productOptionRepository = productOptionRepository;
         this.categoryRepository = categoryRepository;
+        this.productQueryRepository = productQueryRepository;
+    }
+
+    /*
+     * 조건에 맞는 상품 목록을 커서 기반으로 조회한다(API-3-04, API-5-01). 판매안함/품절/삭제까지
+     * 전부 포함한다(includeDeleted로 삭제 상품 포함 여부만 가른다). 재고 합계는 이 이슈 범위 밖이라
+     * 넣지 않는다. 카테고리 이름은 페이지 안 상품들의 categoryId를 모아 한 번에 배치 조회한다(N+1 방지).
+     * 리포지토리가 pageSize + 1건을 주므로 초과분을 잘라내고 다음 페이지 여부를 판단한다.
+     */
+    public CursorPageResponse<AdminProductListItem> findAll(AdminProductSearchCondition condition) {
+        List<AdminProductListRow> found = productQueryRepository.searchForAdmin(condition);
+
+        boolean hasNext = found.size() > condition.pageSize();
+        List<AdminProductListRow> page = hasNext ? found.subList(0, condition.pageSize()) : found;
+
+        Map<Long, String> categoryNames = categoryNamesOf(page);
+        List<AdminProductListItem> items = page.stream()
+                .map(row -> toListItem(row, categoryNames))
+                .toList();
+
+        return CursorPageResponse.of(items, nextTokenOf(page, hasNext));
+    }
+
+    // 다음 페이지 토큰. 마지막 행의 생성일과 id로 커서를 만든다(정렬이 createdAt desc, id desc 고정)
+    private static String nextTokenOf(List<AdminProductListRow> page, boolean hasNext) {
+        if (!hasNext || page.isEmpty()) {
+            return null;
+        }
+        AdminProductListRow last = page.get(page.size() - 1);
+        return PageTokens.encode(new PageCursor(last.productId(), last.createdAt().toString()));
+    }
+
+    // 상품 단건을 조회한다. 회원용 상세와 달리 삭제된 상품도 그대로 보여준다 — id 자체가 없을 때만 404
+    public AdminProductResponse findById(Long productId) {
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ProductException(ProductErrorCode.PRODUCT_NOT_FOUND));
+        return responseOf(product);
+    }
+
+    private Map<Long, String> categoryNamesOf(List<AdminProductListRow> rows) {
+        if (rows.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> categoryIds = rows.stream().map(AdminProductListRow::categoryId).distinct().toList();
+        return categoryRepository.findAllById(categoryIds).stream()
+                .collect(Collectors.toMap(Category::getId, Category::getName));
+    }
+
+    private static AdminProductListItem toListItem(AdminProductListRow row, Map<Long, String> categoryNames) {
+        CategorySummary category = new CategorySummary(row.categoryId(), categoryNames.get(row.categoryId()));
+        return new AdminProductListItem(
+                row.productId(), row.productCode(), row.name(), category,
+                row.saleStatus(), row.deleted());
     }
 
     /*

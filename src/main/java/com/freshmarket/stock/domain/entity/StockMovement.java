@@ -85,6 +85,11 @@ public class StockMovement extends BaseImmutableTimeEntity {
                 orderId);
     }
 
+    // 만료 전환 이력을 남긴다. 가용 수량이 quantity에서 0으로 줄어든 것으로 기록한다. 주문 기인이 아니라 orderId는 없다
+    public static StockMovement expire(Long stockLotId, int quantity) {
+        return new StockMovement(stockLotId, MovementType.EXPIRE, quantity, quantity, 0, null);
+    }
+
     private static void validateStockLotId(Long stockLotId) {
         if (stockLotId == null) {
             throw new IllegalArgumentException("stockLotId 는 필수다");

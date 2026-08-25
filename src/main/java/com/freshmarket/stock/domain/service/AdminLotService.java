@@ -2,8 +2,10 @@ package com.freshmarket.stock.domain.service;
 
 import static com.freshmarket.common.exception.ConstraintViolations.isConstraintViolation;
 
+import com.freshmarket.product.OptionAvailabilityChangedEvent;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
+import com.freshmarket.stock.domain.dto.AdminLotExpireResponse;
 import com.freshmarket.stock.domain.dto.AdminLotListResponse;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
 import com.freshmarket.stock.domain.entity.LotStatus;
@@ -14,28 +16,40 @@ import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
-// 관리자 화면에서 로트를 입고 등록하고 조회하는 기능을 담당한다
+// 관리자 화면에서 로트를 입고 등록하고, 조회하고, 만료 처리하는 기능을 담당한다
 @Service
 @Transactional(readOnly = true)
 public class AdminLotService {
 
+    // (DI-4-03/PERF-4-03) expireLots()가 한 번에 적재·처리하는 최대 로트 수. 패키지 전용이라
+    // 같은 패키지의 AdminLotServiceTest가 오케스트레이션(청크 반복 횟수) 검증에 그대로 참조한다
+    static final int EXPIRE_CHUNK_SIZE = 1000;
+
     private final StockLotRepository stockLotRepository;
     private final StockMovementRepository stockMovementRepository;
     private final ProductApi productApi;
+    private final ApplicationEventPublisher eventPublisher;
+    private final AdminLotExpireChunkService adminLotExpireChunkService;
 
     public AdminLotService(StockLotRepository stockLotRepository,
-            StockMovementRepository stockMovementRepository, ProductApi productApi) {
+            StockMovementRepository stockMovementRepository, ProductApi productApi,
+            ApplicationEventPublisher eventPublisher, AdminLotExpireChunkService adminLotExpireChunkService) {
         this.stockLotRepository = stockLotRepository;
         this.stockMovementRepository = stockMovementRepository;
         this.productApi = productApi;
+        this.eventPublisher = eventPublisher;
+        this.adminLotExpireChunkService = adminLotExpireChunkService;
     }
 
     /*
@@ -88,7 +102,39 @@ public class AdminLotService {
         StockMovement movement = StockMovement.inbound(stockLot.getId(), request.initialQty());
         stockMovementRepository.save(movement);
 
+        // 입고는 항상 가용 수량을 늘리기만 하므로, 별도 조회 없이도 이 옵션은 이제 품절이 아니라고 확정할 수 있다
+        eventPublisher.publishEvent(new OptionAvailabilityChangedEvent(optionId, false, LocalDateTime.now()));
+
         return AdminLotResponse.of(stockLot);
+    }
+
+    /*
+     * 소비기한이 지난 AVAILABLE 로트를 찾아 EXPIRED로 전환하고 EXPIRE 이력을 남긴다(stock.md "만료
+     * 로트 처리"). 하루 한 번 배치로 돌거나 관리자가 수동 호출한다.
+     *
+     * (DI-4-03/PERF-4-03) 대상 전체를 한 트랜잭션·영속성 컨텍스트에 적재하지 않고, 청크(최대
+     * EXPIRE_CHUNK_SIZE건) 단위로 AdminLotExpireChunkService.expireChunk()를 반복 호출한다 —
+     * 청크마다 별도 트랜잭션이 커밋되어 영속성 컨텍스트가 그때그때 비워진다. 처리된 행은 상태가
+     * AVAILABLE→EXPIRED로 바뀌어 다음 조회 조건에서 자연히 빠지므로, 마지막 청크가
+     * EXPIRE_CHUNK_SIZE보다 적게 돌아올 때까지 반복하면 전체를 다 처리한 것이다. 옵션별 품절
+     * 이벤트 발행은 청크 단위로 이뤄진다(AdminLotExpireChunkService 참고, 정확성은 그대로 유지).
+     *
+     * (API-3-10) 이 작업은 요청 전체가 원자적이지 않다 — 명시적으로 부분 성공을 허용하는 계약이다.
+     * 뒤 청크가 실패해도 이미 커밋된 앞 청크의 EXPIRED 전환은 되돌리지 않는다. 대상 전체를 한
+     * 트랜잭션으로 묶으면 DI-4-03/PERF-4-03에서 피하려 한 대량 락·긴 트랜잭션이 되돌아오므로
+     * 이 설계를 유지한다. 실패해도 안전한 이유: 대상 조건이 status=AVAILABLE라(INF-1-01, 멱등
+     * 전이형) 이미 처리된 청크는 재실행 시 자연히 대상에서 빠져, 재호출만으로 나머지가 이어서
+     * 처리된다 — 클라이언트는 실패 시 그대로 재요청하면 된다.
+     */
+    public AdminLotExpireResponse expireLots() {
+        List<StockLot> allExpired = new ArrayList<>();
+        List<StockLot> chunk;
+        do {
+            chunk = adminLotExpireChunkService.expireChunk(EXPIRE_CHUNK_SIZE);
+            allExpired.addAll(chunk);
+        } while (chunk.size() == EXPIRE_CHUNK_SIZE);
+
+        return AdminLotExpireResponse.of(allExpired);
     }
 
     /*
