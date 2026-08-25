@@ -22,7 +22,6 @@ import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
@@ -141,14 +140,14 @@ public class AdminLotService {
      * 처리된다 — 클라이언트는 실패 시 그대로 재요청하면 된다.
      */
     public AdminLotExpireResponse expireLots() {
-        List<StockLot> allExpired = new ArrayList<>();
+        int expiredCount = 0;
         List<StockLot> chunk;
         do {
             chunk = adminLotExpireChunkService.expireChunk(EXPIRE_CHUNK_SIZE);
-            allExpired.addAll(chunk);
+            expiredCount += chunk.size();
         } while (chunk.size() == EXPIRE_CHUNK_SIZE);
 
-        return AdminLotExpireResponse.of(allExpired);
+        return AdminLotExpireResponse.of(expiredCount);
     }
 
     /*

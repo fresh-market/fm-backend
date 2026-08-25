@@ -296,7 +296,7 @@ class AdminLotServiceTest {
         AdminLotExpireResponse result = adminLotService.expireLots();
 
         // then
-        assertThat(result.lots()).isEmpty();
+        assertThat(result.expiredCount()).isZero();
         verify(adminLotExpireChunkService, times(1)).expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE);
     }
 
@@ -310,7 +310,7 @@ class AdminLotServiceTest {
         AdminLotExpireResponse result = adminLotService.expireLots();
 
         // then
-        assertThat(result.lots()).hasSize(1);
+        assertThat(result.expiredCount()).isEqualTo(1);
         verify(adminLotExpireChunkService, times(1)).expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE);
     }
 
@@ -327,7 +327,7 @@ class AdminLotServiceTest {
         AdminLotExpireResponse result = adminLotService.expireLots();
 
         // then
-        assertThat(result.lots()).hasSize(AdminLotService.EXPIRE_CHUNK_SIZE + 1);
+        assertThat(result.expiredCount()).isEqualTo(AdminLotService.EXPIRE_CHUNK_SIZE + 1);
         verify(adminLotExpireChunkService, times(2)).expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE);
     }
 

@@ -18,6 +18,7 @@ import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -68,7 +69,8 @@ class AdminLotExpireChunkServiceTest {
         // given
         StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
         stubTargets(List.of(lot));
-        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
+        when(stockLotRepository.findProductOptionIdsByProductOptionIdInAndStatus(List.of(31L), LotStatus.AVAILABLE))
+                .thenReturn(Set.of());
 
         // when
         List<StockLot> result = adminLotExpireChunkService.expireChunk(CHUNK_SIZE);
@@ -85,7 +87,8 @@ class AdminLotExpireChunkServiceTest {
         // given
         StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
         stubTargets(List.of(lot));
-        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
+        when(stockLotRepository.findProductOptionIdsByProductOptionIdInAndStatus(List.of(31L), LotStatus.AVAILABLE))
+                .thenReturn(Set.of());
 
         // when
         adminLotExpireChunkService.expireChunk(CHUNK_SIZE);
@@ -104,7 +107,8 @@ class AdminLotExpireChunkServiceTest {
         // given
         StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
         stubTargets(List.of(lot));
-        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(true);
+        when(stockLotRepository.findProductOptionIdsByProductOptionIdInAndStatus(List.of(31L), LotStatus.AVAILABLE))
+                .thenReturn(Set.of(31L));
 
         // when
         adminLotExpireChunkService.expireChunk(CHUNK_SIZE);
@@ -119,13 +123,15 @@ class AdminLotExpireChunkServiceTest {
         StockLot lotA = lotFixture(77L, 31L, LocalDate.now().minusDays(2), 10);
         StockLot lotB = lotFixture(78L, 31L, LocalDate.now().minusDays(1), 20);
         stubTargets(List.of(lotA, lotB));
-        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
+        when(stockLotRepository.findProductOptionIdsByProductOptionIdInAndStatus(List.of(31L), LotStatus.AVAILABLE))
+                .thenReturn(Set.of());
 
         // when
         adminLotExpireChunkService.expireChunk(CHUNK_SIZE);
 
         // then
-        verify(stockLotRepository, times(1)).existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE);
+        verify(stockLotRepository, times(1))
+                .findProductOptionIdsByProductOptionIdInAndStatus(List.of(31L), LotStatus.AVAILABLE);
         ArgumentCaptor<OptionAvailabilityChangedEvent> eventCaptor =
                 ArgumentCaptor.forClass(OptionAvailabilityChangedEvent.class);
         verify(eventPublisher, times(1)).publishEvent(eventCaptor.capture());
@@ -155,7 +161,8 @@ class AdminLotExpireChunkServiceTest {
         StockLot lot = lotFixture(77L, 31L, LocalDate.now().minusDays(1), 40);
         ReflectionTestUtils.setField(lot, "availableQty", 0);
         stubTargets(List.of(lot));
-        when(stockLotRepository.existsByProductOptionIdAndStatus(31L, LotStatus.AVAILABLE)).thenReturn(false);
+        when(stockLotRepository.findProductOptionIdsByProductOptionIdInAndStatus(List.of(31L), LotStatus.AVAILABLE))
+                .thenReturn(Set.of());
 
         // when
         List<StockLot> result = adminLotExpireChunkService.expireChunk(CHUNK_SIZE);
