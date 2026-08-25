@@ -7,6 +7,7 @@ import com.freshmarket.member.domain.repository.RefreshTokenRevokeFailureReposit
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,14 +44,32 @@ public class RefreshTokenRevokeRetryService {
      * 있다 — REQUIRES_NEW로 완전히 새 트랜잭션/커넥션을 써서 이 기록만은 revoke() 쪽 상태와
      * 무관하게 독립적으로 커밋되게 한다(MemberWithdrawalCompletionService를 별도 빈으로 뺀 것과
      * 같은 종류의 이유).
+     *
+     * member_id에 유니크 제약이 있어서, 같은 회원에 대해 recordFailure()가 거의 동시에 두 번
+     * 들어오면(예: Redis 전체 장애로 여러 세션이 한꺼번에 실패하는 상황) 두 트랜잭션이 둘 다
+     * findByMemberId()에서 없음을 보고 둘 다 save()를 시도해 유니크 위반이 날 수 있다.
+     * MemberLoginService.registerNewMember()와 같은 패턴으로 처리한다 — 위반이 나면 그 사이
+     * 먼저 커밋된 행을 다시 찾아 이어서 쓴다.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordFailure(Long memberId, String role, String refreshTokenHash) {
-        failureRepository.findByMemberId(memberId).ifPresentOrElse(
-                existing -> existing.reopen(refreshTokenHash),
-                () -> failureRepository.save(RefreshTokenRevokeFailure.record(memberId, role, refreshTokenHash)));
+        try {
+            failureRepository.findByMemberId(memberId).ifPresentOrElse(
+                    existing -> existing.reopen(refreshTokenHash),
+                    () -> failureRepository.save(RefreshTokenRevokeFailure.record(memberId, role, refreshTokenHash)));
+        } catch (DataIntegrityViolationException e) {
+            failureRepository.findByMemberId(memberId)
+                    .ifPresent(existing -> existing.reopen(refreshTokenHash));
+        }
     }
 
+    /**
+     * shouldGiveUp()으로 건너뛰지 않는다 — 여기서 재시도하는 DB/Redis 정리는 카카오 unlink처럼
+     * 외부 API를 계속 두드리는 게 아니라 내부 정리라 비용이 낮고 멱등하다. 인프라가 회복되면
+     * 재시도가 자연히 성공해서 행이 지워지므로 무기한 재시도해도 해롭지 않다 — 대신 반복 알림
+     * 로그는 RefreshTokenRevokeRetryOutcomeService.markFailed()가 한도를 처음 넘는 순간에만
+     * 찍도록 억제한다.
+     */
     public void retryAllPending() {
         for (RefreshTokenRevokeFailure failure : failureRepository.findAll()) {
             retryOne(failure);

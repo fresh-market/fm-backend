@@ -1,5 +1,6 @@
 package com.freshmarket.member.domain.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
 
 @ExtendWith(MockitoExtension.class)
 class RefreshTokenRevokeRetryServiceTest {
@@ -74,6 +76,22 @@ class RefreshTokenRevokeRetryServiceTest {
         sut.recordFailure(1L, "ROLE_USER", "new-hash");
 
         verify(failureRepository, never()).save(any());
+    }
+
+    @Test
+    void 동시에_같은_회원이_실패로_기록되면_유니크_위반을_잡고_기존_행에_이어_쓴다() {
+        RefreshTokenRevokeFailure existing = newFailure(10L, 1L, "ROLE_USER", "old-hash");
+        // 첫 조회는 아직 다른 트랜잭션이 커밋 전이라 없음 → save() 시도 → 유니크 위반.
+        // 재조회하면 그 사이 먼저 커밋된 행이 보인다.
+        when(failureRepository.findByMemberId(1L))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(existing));
+        doThrow(new DataIntegrityViolationException("duplicate member_id"))
+                .when(failureRepository).save(any(RefreshTokenRevokeFailure.class));
+
+        sut.recordFailure(1L, "ROLE_USER", "new-hash");
+
+        assertThat(existing.getRefreshTokenHash()).isEqualTo("new-hash");
     }
 
     // ---- retryAllPending() ----
@@ -132,5 +150,22 @@ class RefreshTokenRevokeRetryServiceTest {
         verify(memberRepository, times(2)).clearRefreshTokenIfMatches(any(), any());
         verify(outcomeService).markSucceeded(10L);
         verify(outcomeService).markSucceeded(11L);
+    }
+
+    @Test
+    void 한도를_이미_넘은_행도_계속_재시도한다() {
+        // 카카오 unlink와 달리 여기선 shouldGiveUp()이어도 retryAllPending()이 건너뛰지 않는다 —
+        // 내부 DB/Redis 정리라 비용이 낮고 멱등해서, 인프라가 회복되면 자연히 성공해 큐에서 빠진다.
+        RefreshTokenRevokeFailure failure = newFailure(10L, 1L, "ROLE_USER", "hash-1");
+        for (int i = 0; i < 10; i++) {
+            failure.markRetryFailed();
+        }
+        when(failureRepository.findAll()).thenReturn(List.of(failure));
+
+        sut.retryAllPending();
+
+        verify(memberRepository).clearRefreshTokenIfMatches(1L, "hash-1");
+        verify(refreshTokenRepository).deleteByHash("hash-1");
+        verify(outcomeService).markSucceeded(10L);
     }
 }
