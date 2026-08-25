@@ -6,8 +6,8 @@
 
 ```
 docs/coupon/README.md    이 문서. 버전과 무관하게 고정된 것
-docs/coupon/v1/          v1 설계와 측정 결과
-docs/coupon/v2/          v2 설계와 측정 결과
+docs/coupon/coupon-v1.md   v1 설계와 측정 결과
+docs/coupon/coupon-v2.md   v2 설계와 측정 결과
 ```
 
 브랜치는 이렇게 갈라진다.
