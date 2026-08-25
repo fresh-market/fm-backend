@@ -11,6 +11,7 @@ public record CampaignTargetLotCandidate(
         int initialQty,
         int availableQty
 ) {
+    // QueryDSL APT 가 @QueryProjection 을 놓을 자리로 compact 생성자만 필요할 뿐, 로직은 없다
     @QueryProjection
     public CampaignTargetLotCandidate {
     }

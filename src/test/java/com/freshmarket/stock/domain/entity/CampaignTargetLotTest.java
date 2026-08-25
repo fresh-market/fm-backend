@@ -23,36 +23,45 @@ class CampaignTargetLotTest {
 
     @Test
     void targetDate가_없으면_실패한다() {
-        assertThatThrownBy(() -> CampaignTargetLot.register(
-                null, 1L, new BigDecimal("0.5"), 50, 1))
+        BigDecimal turnoverRate = new BigDecimal("0.5");
+
+        assertThatThrownBy(() -> CampaignTargetLot.register(null, 1L, turnoverRate, 50, 1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void 소진율이_음수면_실패한다() {
-        assertThatThrownBy(() -> CampaignTargetLot.register(
-                LocalDate.now(), 1L, new BigDecimal("-0.1"), 50, 1))
+        BigDecimal turnoverRate = new BigDecimal("-0.1");
+        LocalDate targetDate = LocalDate.now();
+
+        assertThatThrownBy(() -> CampaignTargetLot.register(targetDate, 1L, turnoverRate, 50, 1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void 소진율이_1을_넘으면_실패한다() {
-        assertThatThrownBy(() -> CampaignTargetLot.register(
-                LocalDate.now(), 1L, new BigDecimal("1.1"), 50, 1))
+        BigDecimal turnoverRate = new BigDecimal("1.1");
+        LocalDate targetDate = LocalDate.now();
+
+        assertThatThrownBy(() -> CampaignTargetLot.register(targetDate, 1L, turnoverRate, 50, 1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void 발급가능수량이_음수면_실패한다() {
-        assertThatThrownBy(() -> CampaignTargetLot.register(
-                LocalDate.now(), 1L, new BigDecimal("0.5"), -1, 1))
+        BigDecimal turnoverRate = new BigDecimal("0.5");
+        LocalDate targetDate = LocalDate.now();
+
+        assertThatThrownBy(() -> CampaignTargetLot.register(targetDate, 1L, turnoverRate, -1, 1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void 순위가_1보다_작으면_실패한다() {
-        assertThatThrownBy(() -> CampaignTargetLot.register(
-                LocalDate.now(), 1L, new BigDecimal("0.5"), 50, 0))
+        BigDecimal turnoverRate = new BigDecimal("0.5");
+        LocalDate targetDate = LocalDate.now();
+
+        assertThatThrownBy(() -> CampaignTargetLot.register(targetDate, 1L, turnoverRate, 50, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

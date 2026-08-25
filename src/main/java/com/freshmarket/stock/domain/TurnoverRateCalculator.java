@@ -22,7 +22,8 @@ public final class TurnoverRateCalculator {
         if (initialQty <= 0) {
             throw new IllegalArgumentException("initialQty 는 0보다 커야 한다: " + initialQty);
         }
-        BigDecimal sold = BigDecimal.valueOf(initialQty - remainingQty);
+        // int 뺄셈 결과를 그대로 valueOf(long) 에 넘기면 오버플로 가능성이 있어 long 으로 승격한다
+        BigDecimal sold = BigDecimal.valueOf((long) initialQty - remainingQty);
         BigDecimal initial = BigDecimal.valueOf(initialQty);
         return sold.divide(initial, SCALE, RoundingMode.HALF_UP);
     }

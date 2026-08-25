@@ -6,7 +6,6 @@ import com.freshmarket.stock.domain.entity.CampaignTargetLot;
 import com.freshmarket.stock.domain.repository.CampaignTargetLotRepository;
 import com.freshmarket.stock.domain.repository.StockLotQueryRepository;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.Comparator;
