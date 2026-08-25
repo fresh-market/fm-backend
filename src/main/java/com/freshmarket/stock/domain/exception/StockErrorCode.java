@@ -36,8 +36,19 @@ public enum StockErrorCode implements ErrorCode {
      * 교착으로 실패한 경우 모두 여기로 묶는다.
      */
     RESERVATION_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-009", "동일한 재고 요청이 아직 처리 중입니다. 잠시 후 다시 시도해주세요."),
+    // stock.md에 폐기 이슈 전용으로 이미 예약돼 있는 코드
+    DISPOSAL_QUANTITY_EXCEEDS_LOT(HttpStatus.UNPROCESSABLE_CONTENT, "STOCK-005", "폐기 수량이 로트 잔량을 넘습니다."),
     // 만료 배치의 조회 자체가 쓰기 락이라(StockLotRepository.findByStatusAndExpiryDateBefore) reserve()와 경합하면 여기로 묶는다
-    EXPIRE_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-010", "만료 처리 중 다른 요청과 경합했습니다. 잠시 후 다시 시도해주세요.");
+    EXPIRE_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-010", "만료 처리 중 다른 요청과 경합했습니다. 잠시 후 다시 시도해주세요."),
+    LOT_NOT_FOUND(HttpStatus.NOT_FOUND, "STOCK-011", "없거나 삭제된 로트입니다."),
+    // 같은 로트를 동시에 건드리는 reserve/confirm/release/expire와 폐기가 경합한 경우
+    DISPOSAL_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-012", "동일한 로트에 대한 처리가 아직 진행 중입니다. 잠시 후 다시 시도해주세요."),
+    /*
+     * (CMP-4-04) 알려진 제약 위반이 아닌 저장 실패(로트 입고, 폐기 이력 저장)를 여기로 묶는다.
+     * 원인(DB 예외 메시지)은 cause로만 유지해 로그에 남기고, 응답에는 이 고정 문구만 나간다 —
+     * 내부 DB 오류 메시지를 그대로 클라이언트에 노출하지 않는다.
+     */
+    UNKNOWN_CONSTRAINT_VIOLATION(HttpStatus.INTERNAL_SERVER_ERROR, "STOCK-013", "저장 중 알 수 없는 오류가 발생했습니다.");
 
     private final HttpStatus httpStatus;
     private final String code;
