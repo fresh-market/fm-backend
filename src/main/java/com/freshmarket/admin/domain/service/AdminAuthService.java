@@ -11,13 +11,18 @@ import com.freshmarket.common.auth.jwt.JwtTokenProvider;
 import com.freshmarket.common.auth.opaque.OpaqueTokenGenerator;
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import com.freshmarket.common.auth.jwt.TokenType;
+
+import java.time.Clock;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.Optional;
 
+import com.freshmarket.common.auth.opaque.TokenHasher;
 import com.freshmarket.common.logging.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -30,6 +35,8 @@ import org.springframework.stereotype.Service;
  * 액세스 토큰 유효기간도 이제 JwtTokenProvider가 갖고 있어(jwt.access-token-validity-ms) 별도 파라미터가 필요 없다.
  * 리프레시 토큰은 member와 같은 공통 RefreshTokenRepository(Redis)에 저장한다.
  * 로그인은 최초 발급만 담당하고, Rotation은 별도 재발급 API에서 compareAndRotate()로 처리한다.
+ *
+ * Redis 완전 장애 시에도 로그인이 막히지 않도록, Refresh Token은 DB에 먼저 write-through로 백업한 뒤 Redis 저장을 시도한다.
  */
 @Slf4j
 @Service
@@ -43,6 +50,7 @@ public class AdminAuthService {
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenRepository refreshTokenRepository;
     private final long refreshTokenValiditySeconds;
+    private final Clock clock;
     private final String dummyPasswordHash;
 
     public AdminAuthService(
@@ -50,11 +58,13 @@ public class AdminAuthService {
             PasswordEncoder passwordEncoder,
             JwtTokenProvider jwtTokenProvider,
             RefreshTokenRepository refreshTokenRepository,
+            Clock clock,
             @Value("${ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS:86400}") long refreshTokenValiditySeconds) {
         this.adminRepository = adminRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.clock = clock;
         this.refreshTokenValiditySeconds = refreshTokenValiditySeconds;
         // 같은 인코더로 미리 만들어 둬야 진짜 비밀번호 검증과 연산 비용(코스트 팩터)이 완전히 같다
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_SOURCE);
@@ -95,13 +105,7 @@ public class AdminAuthService {
                 admin.getId(), TokenType.ADMIN, admin.getRole().toAuthority());
 
         String rawRefreshToken = OpaqueTokenGenerator.generate();
-        refreshTokenRepository.save(
-                rawRefreshToken,
-                admin.getId(),
-                admin.getRole().toAuthority(),
-                TokenType.ADMIN,
-                false,
-                Duration.ofSeconds(refreshTokenValiditySeconds));
+        issueRefreshToken(admin, rawRefreshToken, Duration.ofSeconds(refreshTokenValiditySeconds));
 
         AdminLoginResponse response = new AdminLoginResponse(
                 jwtTokenProvider.getAccessTokenValidityMs() / 1000,
@@ -115,7 +119,40 @@ public class AdminAuthService {
         return new AdminLoginResult(response, accessToken, rawRefreshToken, refreshTokenValiditySeconds);
     }
 
-    private String maskLoginId(String loginId) {
-        return PiiMasker.maskGeneric(loginId, 2, 1);
+    private String maskLoginId(String loginId) { return PiiMasker.maskGeneric(loginId, 2, 1); }
+
+    /*
+     * Refresh Token을 DB에 먼저 write-through로 백업한 뒤 Redis 저장을 시도한다.
+     * 순서가 이런 이유: Redis가 죽어 있어도 DB 백업만은 남겨야 재발급/로그아웃이 나중에
+     * 이 값을 근거로 계속 동작할 수 있다. 반대로 Redis부터 쓰면, DB 쓰기가 실패했을 때
+     * "Redis에는 있는데 DB 백업은 없는" 상태가 남아 오히려 백업의 의미가 없어진다.
+     * 두 저장 모두 실패해도 로그인 응답 자체는 막지 않는다 — 이미 발급된 accessToken/rawRefreshToken은
+     * 그대로 클라이언트에 내려가고, 저장 실패는 로그로만 남긴다(MemberTokenService.issue() 참고).
+     */
+    private void issueRefreshToken(Admin admin, String rawRefreshToken, Duration ttl) {
+        trySaveDbBackup(admin.getId(), TokenHasher.sha256(rawRefreshToken), LocalDateTime.now(clock).plus(ttl));
+
+        try {
+            refreshTokenRepository.save(
+                    rawRefreshToken,
+                    admin.getId(),
+                    admin.getRole().toAuthority(),
+                    TokenType.ADMIN,
+                    false,
+                    ttl);
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_LOGIN_REDIS_SAVE_FAILED adminId={} — DB 백업만 반영됨", admin.getId(), e);
+        }
+    }
+
+    private void trySaveDbBackup(Long adminId, String tokenHash, LocalDateTime expiresAt) {
+        try {
+            int updated = adminRepository.updateRefreshToken(adminId, tokenHash, expiresAt);
+            if (updated == 0) {
+                log.warn("event=ADMIN_LOGIN_DB_BACKUP_SAVE_SKIPPED adminId={} — 대상 행을 찾지 못함", adminId);
+            }
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_LOGIN_DB_BACKUP_SAVE_FAILED adminId={} — Redis만 반영됨(DB 백업 유실 가능)", adminId, e);
+        }
     }
 }

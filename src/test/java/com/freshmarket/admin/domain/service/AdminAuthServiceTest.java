@@ -2,6 +2,11 @@ package com.freshmarket.admin.domain.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -15,12 +20,18 @@ import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminRepository;
 import com.freshmarket.common.auth.jwt.JwtTokenProvider;
+
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Optional;
 
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import com.freshmarket.common.auth.jwt.TokenType;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -44,12 +55,14 @@ class AdminAuthServiceTest {
     private final JwtTokenProvider jwtTokenProvider = new JwtTokenProvider(
             TEST_JWT_SECRET, ACCESS_TOKEN_VALIDITY_MS, MEMBER_REFRESH_TOKEN_VALIDITY_MS);
     private final RefreshTokenRepository refreshTokenRepository = mock(RefreshTokenRepository.class);
+    private final Clock clock = Clock.fixed(Instant.parse("2026-08-23T06:00:00Z"), ZoneId.of("Asia/Seoul"));
 
     private final AdminAuthService adminAuthService = new AdminAuthService(
             adminRepository,
             passwordEncoder,
             jwtTokenProvider,
             refreshTokenRepository,
+            clock,
             ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS
     );
 
@@ -95,6 +108,80 @@ class AdminAuthServiceTest {
                 TokenType.ADMIN,
                 false,
                 Duration.ofSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
+
+        // Redis가 죽어도 로그인이 막히지 않도록, DB에도 항상 해시/만료시각을 write-through로 남긴다.
+        verify(adminRepository).updateRefreshToken(
+                admin.getId(),
+                any(String.class),
+                LocalDateTime.now(clock).plusSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
+    }
+
+    @Test
+    void Redis_저장이_실패해도_로그인은_성공하고_DB_백업은_남는다() {
+        // given
+        Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
+        when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository)
+                .save(anyString(), anyLong(), anyString(), any(TokenType.class), anyBoolean(), any(Duration.class));
+
+        AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
+
+        // when
+        AdminLoginResult result = adminAuthService.login(request);
+
+        // then: Redis 저장은 실패했지만 로그인 응답 자체는 정상적으로 토큰을 담아 나간다.
+        assertThat(result.accessToken()).isNotBlank();
+        assertThat(result.refreshToken()).isNotBlank();
+
+        // DB 백업은 Redis 실패와 무관하게 먼저 반영된다.
+        verify(adminRepository).updateRefreshToken(
+                admin.getId(),
+                any(String.class),
+                LocalDateTime.now(clock).plusSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
+    }
+
+    @Test
+    void DB_백업_저장이_실패해도_로그인은_성공하고_Redis에는_반영된다() {
+        // given
+        Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
+        when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
+        doThrow(new DataAccessResourceFailureException("db down"))
+                .when(adminRepository)
+                .updateRefreshToken(anyLong(), anyString(), any(LocalDateTime.class));
+
+        AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
+
+        // when
+        AdminLoginResult result = adminAuthService.login(request);
+
+        // then: DB 백업 저장은 실패했지만 로그인 응답 자체는 정상적으로 토큰을 담아 나간다.
+        assertThat(result.accessToken()).isNotBlank();
+        assertThat(result.refreshToken()).isNotBlank();
+
+        // Redis 저장은 DB 백업 실패와 무관하게 이어서 시도된다.
+        verify(refreshTokenRepository).save(
+                result.refreshToken(),
+                admin.getId(),
+                "ROLE_ADMIN",
+                TokenType.ADMIN,
+                false,
+                Duration.ofSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
+    }
+
+    @Test
+    void DB_백업_대상_행을_못_찾아도_로그인은_성공한다() {
+        // given: updateRefreshToken이 0건 반영(대상 행 없음)을 반환하는 경쟁 상황을 흉내낸다.
+        Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
+        when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
+        when(adminRepository.updateRefreshToken(anyLong(), anyString(), any(LocalDateTime.class)))
+                .thenReturn(0);
+
+        AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
+
+        // when, then
+        AdminLoginResult result = adminAuthService.login(request);
+        assertThat(result.accessToken()).isNotBlank();
     }
 
     @Test
