@@ -1,0 +1,2 @@
+ALTER TABLE kakao_unlink_failure
+    ADD COLUMN resolved BOOLEAN NOT NULL DEFAULT FALSE;

@@ -21,10 +21,10 @@ import org.springframework.security.web.servlet.util.matcher.PathPatternRequestM
 /*
  * admin 도메인이 자기 경로의 인가를 소유한다 (member/product SecurityConfig와 같은 구조).
  *
- * securityMatcher를 "/v1/admin/**"이 아니라 "/v1/admin/auth/**"로 좁힌 이유:
+ * securityMatcher를 "/v1/admin/**"이 아니라 이 도메인이 소유한 경로로 좁힌 이유:
  * ProductSecurityConfig 주석에 있듯 "/v1/admin/**" 전체를 한 도메인이 갖지 않는다
  * (예: AdminCategoryController는 "/v1/admin/categories"를 쓰지만 product 도메인 소속이다).
- * 이 체인은 admin 도메인이 실제로 소유한 로그인/인증 경로만 잡는다.
+ * 이 체인은 관리자 로그인/인증과 카카오 unlink 운영 API만 잡는다.
  *
  * 관리자 로그인은 회원과 달리 DB의 비밀번호를 BCrypt로 검증한다.
  * 요구사항의 "비밀번호 5회 오입력 시 30분 잠금" 정책은 현재 구현 범위에서 제외했으며,
@@ -46,7 +46,7 @@ class AdminSecurityConfig {
     @Order(ApiSecurityDefaults.DOMAIN_CHAIN_ORDER)
     SecurityFilterChain adminSecurityFilterChain(HttpSecurity http, ApiSecurityDefaults defaults) throws Exception {
         return defaults.apply(http)
-                .securityMatcher("/v1/admin/auth/**")
+                .securityMatcher("/v1/admin/auth/**", "/v1/admin/kakao-unlink-failures/**")
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .ignoringRequestMatchers(
