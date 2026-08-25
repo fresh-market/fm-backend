@@ -92,7 +92,7 @@ public class AdminProductImageService {
         Optional<ProductImage> existingImage = productImageRepository.findByRequestIdAndProductId(
                 request.requestId(), productId);
         if (existingImage.isPresent()) {
-            return responseOf(existingImage.get(), request.contentType());
+            return responseOf(existingImage.get(), request.contentType(), request.contentLength());
         }
 
         if (!productRepository.existsById(productId)) {
@@ -108,17 +108,19 @@ public class AdminProductImageService {
         } catch (DataIntegrityViolationException e) {
             if (isConstraintViolation(e, "uk_product_image_request_id")) {
                 return productImageRepository.findByRequestIdAndProductId(request.requestId(), productId)
-                        .map(found -> responseOf(found, request.contentType()))
+                        .map(found -> responseOf(found, request.contentType(), request.contentLength()))
                         .orElseThrow(() -> new ProductException(ProductErrorCode.IMAGE_REQUEST_ID_ALREADY_USED));
             }
             throw e;
         }
 
-        return responseOf(image, request.contentType());
+        return responseOf(image, request.contentType(), request.contentLength());
     }
 
-    private AdminProductImageUploadUrlResponse responseOf(ProductImage image, String contentType) {
-        String uploadUrl = s3ImageStorageClient.createPresignedPutUrl(image.getObjectKey(), contentType);
+    private AdminProductImageUploadUrlResponse responseOf(ProductImage image, String contentType,
+            long contentLength) {
+        String uploadUrl = s3ImageStorageClient.createPresignedPutUrl(image.getObjectKey(), contentType,
+                contentLength);
         return AdminProductImageUploadUrlResponse.of(image, uploadUrl);
     }
 

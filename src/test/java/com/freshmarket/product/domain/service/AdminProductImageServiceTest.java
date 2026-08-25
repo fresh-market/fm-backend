@@ -3,6 +3,7 @@ package com.freshmarket.product.domain.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -67,14 +68,15 @@ class AdminProductImageServiceTest {
     void 업로드_URL을_발급한다() {
         // given
         when(productRepository.existsById(1L)).thenReturn(true);
-        when(s3ImageStorageClient.createPresignedPutUrl(any(), any())).thenReturn("https://s3.example.com/signed");
+        when(s3ImageStorageClient.createPresignedPutUrl(any(), any(), anyLong()))
+                .thenReturn("https://s3.example.com/signed");
         AdminProductImageCreateUploadUrlRequest request =
                 new AdminProductImageCreateUploadUrlRequest("req-1", "image/jpeg", 100_000L);
 
         // when
         AdminProductImageUploadUrlResponse response = adminProductImageService.createUploadUrl(1L, request);
 
-        // then
+        // then — objectKey는 응답에 없다(API-2-02). 실제로 생성된 key는 저장된 엔티티로 확인한다
         assertThat(response.uploadUrl()).isEqualTo("https://s3.example.com/signed");
         ArgumentCaptor<ProductImage> imageCaptor = ArgumentCaptor.forClass(ProductImage.class);
         verify(productImageRepository).save(imageCaptor.capture());
@@ -86,7 +88,7 @@ class AdminProductImageServiceTest {
         // given — 이전 요청으로 이미 발급된 이미지가 있는 상황(사전 조회에서 바로 잡힘)
         ProductImage existing = imageFixture(88L, 1L, "products/ab/existing.jpg", UUID.randomUUID());
         when(productImageRepository.findByRequestIdAndProductId("req-1", 1L)).thenReturn(Optional.of(existing));
-        when(s3ImageStorageClient.createPresignedPutUrl("products/ab/existing.jpg", "image/jpeg"))
+        when(s3ImageStorageClient.createPresignedPutUrl("products/ab/existing.jpg", "image/jpeg", 100_000L))
                 .thenReturn("https://s3.example.com/re-signed");
         AdminProductImageCreateUploadUrlRequest request =
                 new AdminProductImageCreateUploadUrlRequest("req-1", "image/jpeg", 100_000L);
@@ -152,7 +154,7 @@ class AdminProductImageServiceTest {
                 .thenReturn(Optional.empty(), Optional.of(existing));
         when(productImageRepository.save(any())).thenThrow(new DataIntegrityViolationException(
                 "Duplicate entry 'req-1' for key 'product_image.uk_product_image_request_id'"));
-        when(s3ImageStorageClient.createPresignedPutUrl("products/ab/existing.jpg", "image/jpeg"))
+        when(s3ImageStorageClient.createPresignedPutUrl("products/ab/existing.jpg", "image/jpeg", 100_000L))
                 .thenReturn("https://s3.example.com/re-signed");
         AdminProductImageCreateUploadUrlRequest request =
                 new AdminProductImageCreateUploadUrlRequest("req-1", "image/jpeg", 100_000L);

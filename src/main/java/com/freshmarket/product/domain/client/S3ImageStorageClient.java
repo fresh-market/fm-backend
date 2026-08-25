@@ -38,12 +38,19 @@ public class S3ImageStorageClient {
         this.presignedUrlExpiry = Duration.ofSeconds(presignedUrlExpirySeconds);
     }
 
-    // 이 objectKey에 contentType으로 PUT할 수 있는 presigned URL을 발급한다
-    public String createPresignedPutUrl(String objectKey, String contentType) {
+    /*
+     * 이 objectKey에 contentType·contentLength로 PUT할 수 있는 presigned URL을 발급한다.
+     * contentLength를 서명에 포함해야(INF-11-06) 신고보다 큰 파일을 PUT하면 서명 불일치로 S3가
+     * 자체적으로 거부한다 — 안 넣으면 상한을 넘는 파일이 일단 S3에 다 올라간 뒤에야
+     * confirm()에서 걸러지므로, 이미 나간 업로드 대역폭과 PUT 비용을 되돌릴 수 없다
+     * (백엔드공통_이미지저장소_설계.md 6.2절 "상한을 강제하는 자리").
+     */
+    public String createPresignedPutUrl(String objectKey, String contentType, long contentLength) {
         PutObjectRequest putObjectRequest = PutObjectRequest.builder()
                 .bucket(bucket)
                 .key(objectKey)
                 .contentType(contentType)
+                .contentLength(contentLength)
                 .build();
         PutObjectPresignRequest presignRequest = PutObjectPresignRequest.builder()
                 .signatureDuration(presignedUrlExpiry)
