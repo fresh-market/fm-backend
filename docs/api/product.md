@@ -260,10 +260,12 @@ DELETE /v1/admin/products/{productId}/images/{imageId}
 ```
 
 ```json
-{ "productImageId": 88, "uploadId": "018f...", "uploadUrl": "https://s3...", "objectKey": "products/ab/3f9c.jpg" }
+{ "productImageId": 88, "uploadId": "018f...", "uploadUrl": "https://s3..." }
 ```
 
-**URL 을 통째로 저장하지 않는다.** 객체 키만 저장하고 도메인은 환경 설정에서 붙인다.
+**응답에 객체 키를 따로 담지 않는다.** 키는 `uploadUrl` 경로 안에만 있다 — 키를 돌려받아 저장하면
+클라이언트가 남의 키를 실어 보내 남의 이미지를 자기 상품에 붙이는 경로가 열린다.
+서버는 키만 저장하고 도메인은 환경 설정에서 붙인다.
 확장자, MIME 타입, 크기를 검증하고 **파일명은 서버가 만든다** (`SEC-3-04`).
 
 **같은 `requestId`로 재시도하면 새로 발급하지 않고 최초 발급 결과를 그대로 돌려준다** (`API-5-07`, `AIP-155`).

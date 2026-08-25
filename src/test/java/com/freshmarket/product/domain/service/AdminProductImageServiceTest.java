@@ -24,6 +24,7 @@ import com.freshmarket.product.domain.repository.ProductRepository;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -75,8 +76,9 @@ class AdminProductImageServiceTest {
 
         // then
         assertThat(response.uploadUrl()).isEqualTo("https://s3.example.com/signed");
-        assertThat(response.objectKey()).matches("products/[0-9a-f]{2}/[0-9a-f]{32}\\.jpg");
-        verify(productImageRepository).save(any(ProductImage.class));
+        ArgumentCaptor<ProductImage> imageCaptor = ArgumentCaptor.forClass(ProductImage.class);
+        verify(productImageRepository).save(imageCaptor.capture());
+        assertThat(imageCaptor.getValue().getObjectKey()).matches("products/[0-9a-f]{2}/[0-9a-f]{32}\\.jpg");
     }
 
     @Test
