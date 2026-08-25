@@ -82,11 +82,24 @@ public class MemberTokenService {
         String accessToken = jwtTokenProvider.createAccessToken(memberId, TokenType.MEMBER, role);
         String refreshToken = OpaqueTokenGenerator.generate();
 
-        trySaveDbBackup(memberId, TokenHasher.sha256(refreshToken), LocalDateTime.now(clock).plus(ttl));
+        boolean dbBackupSaved = trySaveDbBackup(memberId, TokenHasher.sha256(refreshToken), LocalDateTime.now(clock).plus(ttl));
+        boolean redisSaved = true;
         try {
             refreshTokenRepository.save(refreshToken, memberId, role, TokenType.MEMBER, rememberMe, ttl);
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_SAVE_FAILED role={} id={} — DB 백업만 반영됨", role, memberId, e);
+            redisSaved = false;
+            log.warn("event=REDIS_SAVE_FAILED role={} id={}", role, memberId, e);
+        }
+        // (2026-08-25) DB 백업 저장과 Redis 저장은 서로의 결과를 모른 채 각자 로그를 남긴다 —
+        // 둘 다 실패했을 때만 여기서 따로 알린다. 위 두 로그는 "반대쪽은 됐다"고 주장하지
+        // 않으니 각자는 정확하지만, "둘 다 안 됐다"는 조합 자체는 둘 중 하나만 봐서는 안 드러난다.
+        // error는 아니다 — 방금 쿠키로 내려준 refreshToken이 DB/Redis 어디에도 안 남아 재발급만
+        // 안 될 뿐(fail-closed), 권한이 위험하게 남는 상태가 아니라 사용자는 accessToken 만료
+        // 시점에 재로그인하면 정상화된다. 다만 두 저장소가 동시에 실패하는 빈도는 인프라 신호일
+        // 수 있어 이름은 따로 둔다.
+        if (!dbBackupSaved && !redisSaved) {
+            log.warn("event=REFRESH_TOKEN_ISSUE_PERSIST_BOTH_FAILED memberId={} role={} — 방금 발급한 "
+                    + "refreshToken이 DB/Redis 어디에도 없음(재발급 불가, 다음 재로그인 때 정상화됨)", memberId, role);
         }
 
         response.addHeader(HttpHeaders.SET_COOKIE, authCookieFactory.refreshTokenCookie(refreshToken, rememberMe).toString());
@@ -143,6 +156,9 @@ public class MemberTokenService {
         String role = member.getRole().name();
         String newAccessToken = jwtTokenProvider.createAccessToken(memberId, TokenType.MEMBER, role);
 
+        // 여기까지 왔다는 건 Redis 회전(compareAndRotate)이 이미 성공했다는 뜻이라, DB 백업만
+        // best-effort다 — 실패해도 trySaveDbBackup()이 자기 상황만 로그하면 충분하고 issue()처럼
+        // "Redis도 같이 실패했는지"를 따로 볼 필요는 없다.
         trySaveDbBackup(memberId, TokenHasher.sha256(newRefreshToken), expiresAt);
         return new ReissueResult(newAccessToken, jwtTokenProvider.getAccessTokenValidityMs() / 1000, newRefreshToken, rotated.remember());
     }
@@ -186,6 +202,8 @@ public class MemberTokenService {
             refreshTokenRepository.save(newRefreshToken, member.getId(), role, TokenType.MEMBER, false,
                     Duration.ofMillis(jwtTokenProvider.getRefreshTokenValidityMs()));
         } catch (DataAccessException e) {
+            // DB CAS는 위에서 이미 확정적으로 성공했으므로("DB만 반영됨"이 실제로 참이다) — issue()와
+            // 달리 여기선 두 저장소 결과를 따로 모아 판단할 필요가 없다.
             log.warn("event=REDIS_SAVE_FAILED_DURING_DB_FALLBACK memberId={} — DB만 반영됨", member.getId(), e);
         }
 
@@ -232,7 +250,7 @@ public class MemberTokenService {
             hash.ifPresent(refreshTokenRepository::deleteByHash);
             refreshTokenRepository.deleteActiveKey(role, memberId);
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_DELETE_FAILED role={} id={} — DB 백업만 반영됨", role, memberId, e);
+            log.warn("event=REDIS_DELETE_FAILED role={} id={}", role, memberId, e);
         }
 
         try {
@@ -254,15 +272,22 @@ public class MemberTokenService {
         }
     }
 
-    private void trySaveDbBackup(Long memberId, String tokenHash, LocalDateTime expiresAt) {
+    /**
+     * (2026-08-25) 반환값을 true/false로 알려준다 — 이 결과와 Redis 저장 결과를 호출부가 같이
+     * 모아서 "둘 다 실패"를 따로 판단할 수 있어야 하므로(issue() 참고), 예전처럼 자기 상황만 보고
+     * "반대쪽은 됐다"고 단정하는 문구를 로그에 넣지 않는다 — 그 가정이 항상 맞는 건 아니다.
+     */
+    private boolean trySaveDbBackup(Long memberId, String tokenHash, LocalDateTime expiresAt) {
         try {
             int updated = memberRepository.updateRefreshToken(memberId, tokenHash, expiresAt);
             if (updated == 0) {
                 log.warn("event=DB_BACKUP_SAVE_SKIPPED memberId={} — 대상 행을 찾지 못함", memberId);
+                return false;
             }
+            return true;
         } catch (DataAccessException e) {
-            log.warn("event=DB_BACKUP_SAVE_FAILED memberId={} — Redis만 반영됨(DB 백업 유실 가능, 다음 쓰기 때 다시 시도됨)",
-                    memberId, e);
+            log.warn("event=DB_BACKUP_SAVE_FAILED memberId={}", memberId, e);
+            return false;
         }
     }
 }

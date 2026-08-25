@@ -155,6 +155,19 @@ class MemberTokenServiceTest {
         assertThatCode(() -> sut.issue(member, false, response)).doesNotThrowAnyException();
     }
 
+    @Test
+    void db_redis_둘_다_실패해도_발급_자체는_끝난다() {
+        // 방금 내려준 refreshToken 쿠키가 DB/Redis 어디에도 안 남는 조합 — error는 아니지만
+        // (fail-closed라 위험한 상태로 남지 않는다) 발급 응답 자체는 예외 없이 끝나야 한다.
+        Member member = newMember(1L);
+        when(memberRepository.updateRefreshToken(any(), any(), any()))
+                .thenThrow(new DataAccessResourceFailureException("db down"));
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).save(any(), any(), any(), any(), anyBoolean(), any());
+
+        assertThatCode(() -> sut.issue(member, false, response)).doesNotThrowAnyException();
+    }
+
     // ---- reissue() ----
     // (2026-08-19) opaque 전환 이후 reissue(String)만 받는다 — 컨트롤러가 미리 클레임을 안 읽고
     // 그대로 넘기므로, 여기서 refreshTokenRepository.compareAndRotate()의 결과(RotateOutcome)로만
