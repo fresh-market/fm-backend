@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
+import software.amazon.awssdk.http.apache5.Apache5HttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
@@ -26,6 +27,13 @@ public class S3Config {
     private static final Duration API_CALL_ATTEMPT_TIMEOUT = Duration.ofSeconds(3);
     private static final Duration API_CALL_TIMEOUT = Duration.ofSeconds(5);
 
+    /*
+     * (REL-2-01) apiCallAttemptTimeout은 호출 전체(연결+전송+수신)의 상한이라, TCP 연결 자체가
+     * 못 열리는 상황을 별도로 빨리 잡아내지 못한다. common/qa-reliability-guideline.md 2장의
+     * "외부 연동" 기준(연결 1s/읽기 3s)대로 HTTP 클라이언트에 연결 타임아웃을 따로 둔다.
+     */
+    private static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(1);
+
     @Bean
     public S3Presigner s3Presigner(@Value("${s3.region}") String region) {
         return S3Presigner.builder()
@@ -37,6 +45,8 @@ public class S3Config {
     public S3Client s3Client(@Value("${s3.region}") String region) {
         return S3Client.builder()
                 .region(Region.of(region))
+                .httpClientBuilder(Apache5HttpClient.builder()
+                        .connectionTimeout(CONNECTION_TIMEOUT))
                 .overrideConfiguration(ClientOverrideConfiguration.builder()
                         .apiCallAttemptTimeout(API_CALL_ATTEMPT_TIMEOUT)
                         .apiCallTimeout(API_CALL_TIMEOUT)
