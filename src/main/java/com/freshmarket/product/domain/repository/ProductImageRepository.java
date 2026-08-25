@@ -2,9 +2,11 @@ package com.freshmarket.product.domain.repository;
 
 import com.freshmarket.product.domain.entity.ProductImage;
 import com.freshmarket.product.domain.entity.UploadStatus;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -40,6 +42,22 @@ public interface ProductImageRepository extends JpaRepository<ProductImage, Long
 
     // 상품 상세 조회에서 노출할 확정된 이미지 목록을 가져온다
     List<ProductImage> findByProductIdAndUploadStatus(Long productId, UploadStatus uploadStatus);
+
+    /*
+     * (INF-11-13) 정리 배치의 대상 조회. 유예 시간을 넘긴 PENDING 행을 id 기준 keyset 페이지네이션으로
+     * 나눠 가져온다(OptionAvailabilitySyncRetryService.retryAllPending()과 같은 이유 — findAll()로
+     * 한 번에 올리지 않는다). status·created_at 복합 인덱스가 필요하다(V17 마이그레이션).
+     */
+    List<ProductImage> findByUploadStatusAndIdGreaterThanAndCreatedAtBeforeOrderByIdAsc(
+            UploadStatus uploadStatus, Long afterId, LocalDateTime cutoff, Pageable pageable);
+
+    /*
+     * 정리 배치의 행 삭제를 원자적으로 수행한다(INF-1-04). "PENDING일 때만" 조건부라, 그 사이
+     * 관리자가 confirm()한 행을 배치가 지우는 일이 없다(영향받은 행 0이면 건드리지 않은 것).
+     */
+    @Modifying
+    @Query("delete from ProductImage i where i.id = :id and i.uploadStatus = :pending")
+    int deleteByIdAndUploadStatus(@Param("id") Long id, @Param("pending") UploadStatus pending);
 
     /*
      * (API-5-07) 업로드 URL 발급 재시도 감지. requestId는 DB 전역에서 유일하다(uk_product_image_
