@@ -12,7 +12,7 @@ import static org.mockito.Mockito.when;
 import com.freshmarket.cart.CartApi;
 import com.freshmarket.cart.CartCheckoutInfo;
 import com.freshmarket.cart.CartCheckoutItem;
-import com.freshmarket.common.auth.jwt.TokenHasher;
+import com.freshmarket.common.auth.opaque.TokenHasher;
 import com.freshmarket.member.AddressInfo;
 import com.freshmarket.member.MemberApi;
 import com.freshmarket.order.domain.OrderNoGenerator;
