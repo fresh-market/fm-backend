@@ -64,4 +64,13 @@ class CampaignTargetLotTest {
         assertThatThrownBy(() -> CampaignTargetLot.register(targetDate, 1L, turnoverRate, 50, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void 순위가_3을_넘으면_실패한다() {
+        BigDecimal turnoverRate = new BigDecimal("0.5");
+        LocalDate targetDate = LocalDate.now();
+
+        assertThatThrownBy(() -> CampaignTargetLot.register(targetDate, 1L, turnoverRate, 50, 4))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

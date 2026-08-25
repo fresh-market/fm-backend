@@ -29,6 +29,9 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class CampaignTargetLot extends BaseImmutableTimeEntity {
 
+    // "상위 3건만 남긴다"는 요구사항 원문 그 자체다. chk_campaign_target_rank 와 짝을 이룬다
+    private static final int MAX_TARGET_RANK = 3;
+
     // 대상 확정 기준일(배치 실행일). 조회는 이 값으로 그날의 스냅샷을 찾는다
     @Column(name = "target_date", nullable = false)
     private LocalDate targetDate;
@@ -97,8 +100,9 @@ public class CampaignTargetLot extends BaseImmutableTimeEntity {
     }
 
     private static void validateTargetRank(int targetRank) {
-        if (targetRank < 1) {
-            throw new IllegalArgumentException("targetRank 는 1 이상이어야 한다: " + targetRank);
+        if (targetRank < 1 || targetRank > MAX_TARGET_RANK) {
+            throw new IllegalArgumentException(
+                    "targetRank 는 1 이상 " + MAX_TARGET_RANK + " 이하여야 한다: " + targetRank);
         }
     }
 }

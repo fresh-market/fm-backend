@@ -101,9 +101,19 @@ class CampaignTargetLotBatchIntegrationTest {
         Long lowest = saveLot("l1", TODAY.plusDays(5), 1000, 1);   // 소진율 0.0010, 1순위
         Long second = saveLot("l2", TODAY.plusDays(5), 1000, 2);   // 소진율 0.0020, 2순위
         Long third = saveLot("l3", TODAY.plusDays(5), 1000, 3);    // 소진율 0.0030, 3순위
-        for (int i = 4; i <= 15; i++) {
-            saveLot("l" + i, TODAY.plusDays(5), 1000, i);
-        }
+        // 나머지 12건. 소진율만 위 세 건보다 높으면 되므로 정확한 값은 결과에 영향 없다 (UT-3-04)
+        saveLot("l4", TODAY.plusDays(5), 1000, 4);
+        saveLot("l5", TODAY.plusDays(5), 1000, 5);
+        saveLot("l6", TODAY.plusDays(5), 1000, 6);
+        saveLot("l7", TODAY.plusDays(5), 1000, 7);
+        saveLot("l8", TODAY.plusDays(5), 1000, 8);
+        saveLot("l9", TODAY.plusDays(5), 1000, 9);
+        saveLot("l10", TODAY.plusDays(5), 1000, 10);
+        saveLot("l11", TODAY.plusDays(5), 1000, 11);
+        saveLot("l12", TODAY.plusDays(5), 1000, 12);
+        saveLot("l13", TODAY.plusDays(5), 1000, 13);
+        saveLot("l14", TODAY.plusDays(5), 1000, 14);
+        saveLot("l15", TODAY.plusDays(5), 1000, 15);
 
         // when
         campaignTargetLotBatch.run();

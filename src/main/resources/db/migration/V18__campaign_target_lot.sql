@@ -22,6 +22,6 @@ CREATE TABLE campaign_target_lot (
     CONSTRAINT fk_campaign_target_lot FOREIGN KEY (stock_lot_id) REFERENCES stock_lot (stock_lot_id),
     CONSTRAINT chk_campaign_turnover_rate CHECK (turnover_rate >= 0 AND turnover_rate <= 1),
     CONSTRAINT chk_campaign_issuable_qty CHECK (issuable_qty >= 0),
-    CONSTRAINT chk_campaign_target_rank CHECK (target_rank >= 1),
+    CONSTRAINT chk_campaign_target_rank CHECK (target_rank >= 1 AND target_rank <= 3), -- 상위 3건만 남긴다는 요구사항 그 자체를 DB에서도 강제한다 (DI-3-02)
     KEY idx_campaign_target_date (target_date, target_rank) -- 당일 대상을 순위대로 조회
 ); -- 선착순 쿠폰 캠페인 대상 로트(자정 배치가 확정한 그날의 스냅샷)
