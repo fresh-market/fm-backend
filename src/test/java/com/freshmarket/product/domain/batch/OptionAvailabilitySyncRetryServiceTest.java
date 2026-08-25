@@ -1,5 +1,6 @@
 package com.freshmarket.product.domain.batch;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -110,6 +111,37 @@ class OptionAvailabilitySyncRetryServiceTest {
 
         verify(outcomeService).markFailed(eq(10L), any(RuntimeException.class));
         verify(outcomeService, never()).markSucceeded(any());
+    }
+
+    // 동기화 자체는 성공했는데 markSucceeded()가 실패해도 markFailed()로 넘어가면 안 된다(잘못된 실패 카운트 방지)
+    @Test
+    void 성공_처리_자체가_실패해도_실패_처리로_넘기지_않는다() {
+        OptionAvailabilitySyncFailure failure = newFailure(10L, 11L, true);
+        stubPage(0L, List.of(failure));
+        stubPage(10L, List.of());
+        doThrow(new RuntimeException("deadlock")).when(outcomeService).markSucceeded(10L);
+
+        sut.retryAllPending();
+
+        verify(outcomeService, never()).markFailed(any(), any());
+    }
+
+    // markFailed() 자체가 던져도 배치(retryAllPending) 밖으로 전파되면 안 된다 — 나머지 대기 건이 스킵되는 걸 막는다
+    @Test
+    void 실패_처리_자체가_실패해도_배치_전체를_중단시키지_않는다() {
+        OptionAvailabilitySyncFailure f1 = newFailure(10L, 11L, true);
+        OptionAvailabilitySyncFailure f2 = newFailure(20L, 12L, false);
+        stubPage(0L, List.of(f1, f2));
+        stubPage(20L, List.of());
+        doThrow(new RuntimeException("lock timeout")).when(productOptionAvailabilityService)
+                .updateSoldOut(11L, true, OCCURRED_AT);
+        doThrow(new RuntimeException("outcome save failed")).when(outcomeService)
+                .markFailed(eq(10L), any());
+
+        assertThatCode(() -> sut.retryAllPending()).doesNotThrowAnyException();
+
+        verify(productOptionAvailabilityService).updateSoldOut(12L, false, OCCURRED_AT);
+        verify(outcomeService).markSucceeded(20L);
     }
 
     @Test

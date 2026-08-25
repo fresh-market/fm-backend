@@ -6,6 +6,7 @@ import com.freshmarket.product.domain.service.ProductOptionAvailabilityService;
 import java.time.LocalDateTime;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
  * retryAllPending()을 @Transactional로 묶지 않는다 — 재시도(updateSoldOut)와 결과 반영을 각각
  * 별도 트랜잭션으로 나눠서, 재시도 자체가 실패해도 실패 횟수 증가가 함께 롤백되지 않게 한다.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OptionAvailabilitySyncRetryService {
@@ -56,12 +58,28 @@ public class OptionAvailabilitySyncRetryService {
         } while (!page.isEmpty());
     }
 
+    /*
+     * markSucceeded/markFailed 자체의 실패를 updateSoldOut의 실패와 같은 catch로 묶지 않는다.
+     * 같은 catch 안에 두면 동기화 자체는 성공했는데 markSucceeded()가 실패했을 때 markFailed()가
+     * 불려 attemptCount가 잘못 올라가고(조기 포기를 앞당김), markFailed() 자체가 던지면 그 예외가
+     * retryAllPending() 밖(@Scheduled)까지 전파돼 이번 주기의 나머지 대기 건 전부가 스킵된다.
+     */
     private void retryOne(Long failureId, Long productOptionId, boolean soldOut, LocalDateTime occurredAt) {
         try {
             productOptionAvailabilityService.updateSoldOut(productOptionId, soldOut, occurredAt);
-            outcomeService.markSucceeded(failureId);
         } catch (Exception e) {
-            outcomeService.markFailed(failureId, e);
+            safely(() -> outcomeService.markFailed(failureId, e), failureId);
+            return;
+        }
+        safely(() -> outcomeService.markSucceeded(failureId), failureId);
+    }
+
+    private void safely(Runnable action, Long failureId) {
+        try {
+            action.run();
+        } catch (Exception e) {
+            // 한 건의 결과 반영 실패 때문에 배치 전체(나머지 대기 건)를 중단시키지 않는다
+            log.error("event=OPTION_AVAILABILITY_SYNC_OUTCOME_FAILED failureId={}", failureId, e);
         }
     }
 }
