@@ -30,8 +30,6 @@ public class OptionAvailabilitySyncOutcomeService {
             failure.markRetryFailed();
             if (failure.shouldGiveUp()) {
                 // 여기부턴 실제 재고와 노출 상태가 계속 어긋난 채로 남는 것이라 사람이 봐야 한다
-                // (REL-2-07) 재시도 대상에서 빼되 행은 남긴다 — 수동 개입 전까지 무한 재시도를 막는다
-                failure.markExhausted();
                 log.error("event=OPTION_AVAILABILITY_SYNC_GAVE_UP productOptionId={} soldOut={} attempts={}",
                         failure.getProductOptionId(), failure.isSoldOut(), failure.getAttemptCount(), cause);
             } else {

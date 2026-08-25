@@ -1,7 +1,8 @@
 package com.freshmarket.product.domain.batch;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -14,7 +15,6 @@ import com.freshmarket.product.domain.repository.OptionAvailabilitySyncFailureRe
 import com.freshmarket.product.domain.service.ProductOptionAvailabilityService;
 import java.lang.reflect.Field;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,8 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.Pageable;
-import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
 class OptionAvailabilitySyncRetryServiceTest {
@@ -83,22 +81,16 @@ class OptionAvailabilitySyncRetryServiceTest {
 
     // ---- retryAllPending() ----
 
-    // 프로덕션 코드의 private RETRY_CHUNK_SIZE 값을 그대로 읽어, 청크 경계 테스트가 상수 변경에도 안 깨지게 한다
-    private static int chunkSize() {
-        try {
-            Field field = OptionAvailabilitySyncRetryService.class.getDeclaredField("RETRY_CHUNK_SIZE");
-            field.setAccessible(true);
-            return field.getInt(null);
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException(e);
-        }
+    private void stubPage(Long afterId, List<OptionAvailabilitySyncFailure> content) {
+        when(failureRepository.findByIdGreaterThanAndAttemptCountLessThanOrderByIdAsc(eq(afterId), anyInt(), any()))
+                .thenReturn(content);
     }
 
     @Test
     void 재시도가_성공하면_성공_처리로_넘긴다() {
         OptionAvailabilitySyncFailure failure = newFailure(10L, 11L, true);
-        when(failureRepository.findByIdGreaterThanOrderByIdAsc(eq(0L), any(Pageable.class)))
-                .thenReturn(List.of(failure));
+        stubPage(0L, List.of(failure));
+        stubPage(10L, List.of());
 
         sut.retryAllPending();
 
@@ -110,8 +102,8 @@ class OptionAvailabilitySyncRetryServiceTest {
     @Test
     void 재시도가_또_실패하면_실패_처리로_넘긴다() {
         OptionAvailabilitySyncFailure failure = newFailure(10L, 11L, true);
-        when(failureRepository.findByIdGreaterThanOrderByIdAsc(eq(0L), any(Pageable.class)))
-                .thenReturn(List.of(failure));
+        stubPage(0L, List.of(failure));
+        stubPage(10L, List.of());
         doThrow(new RuntimeException("lock timeout")).when(productOptionAvailabilityService)
                 .updateSoldOut(11L, true, OCCURRED_AT);
 
@@ -121,12 +113,43 @@ class OptionAvailabilitySyncRetryServiceTest {
         verify(outcomeService, never()).markSucceeded(any());
     }
 
+    // 동기화 자체는 성공했는데 markSucceeded()가 실패해도 markFailed()로 넘어가면 안 된다(잘못된 실패 카운트 방지)
     @Test
-    void 미완료_건이_여러개면_전부_처리한다() {
+    void 성공_처리_자체가_실패해도_실패_처리로_넘기지_않는다() {
+        OptionAvailabilitySyncFailure failure = newFailure(10L, 11L, true);
+        stubPage(0L, List.of(failure));
+        stubPage(10L, List.of());
+        doThrow(new RuntimeException("deadlock")).when(outcomeService).markSucceeded(10L);
+
+        sut.retryAllPending();
+
+        verify(outcomeService, never()).markFailed(any(), any());
+    }
+
+    // markFailed() 자체가 던져도 배치(retryAllPending) 밖으로 전파되면 안 된다 — 나머지 대기 건이 스킵되는 걸 막는다
+    @Test
+    void 실패_처리_자체가_실패해도_배치_전체를_중단시키지_않는다() {
         OptionAvailabilitySyncFailure f1 = newFailure(10L, 11L, true);
         OptionAvailabilitySyncFailure f2 = newFailure(20L, 12L, false);
-        when(failureRepository.findByIdGreaterThanOrderByIdAsc(eq(0L), any(Pageable.class)))
-                .thenReturn(List.of(f1, f2));
+        stubPage(0L, List.of(f1, f2));
+        stubPage(20L, List.of());
+        doThrow(new RuntimeException("lock timeout")).when(productOptionAvailabilityService)
+                .updateSoldOut(11L, true, OCCURRED_AT);
+        doThrow(new RuntimeException("outcome save failed")).when(outcomeService)
+                .markFailed(eq(10L), any());
+
+        assertThatCode(() -> sut.retryAllPending()).doesNotThrowAnyException();
+
+        verify(productOptionAvailabilityService).updateSoldOut(12L, false, OCCURRED_AT);
+        verify(outcomeService).markSucceeded(20L);
+    }
+
+    @Test
+    void 미완료_건이_한_페이지에_여러개면_전부_처리한다() {
+        OptionAvailabilitySyncFailure f1 = newFailure(10L, 11L, true);
+        OptionAvailabilitySyncFailure f2 = newFailure(20L, 12L, false);
+        stubPage(0L, List.of(f1, f2));
+        stubPage(20L, List.of());
 
         sut.retryAllPending();
 
@@ -136,39 +159,29 @@ class OptionAvailabilitySyncRetryServiceTest {
         verify(outcomeService).markSucceeded(20L);
     }
 
-    // (REL-2-07) 한도를 넘어 exhausted로 남은 행은 재시도하지 않는다(지우지는 않되 건너뛴다)
+    // (PERF-4-03) 페이지 경계를 넘는 미완료 건도 id 커서로 이어서 다음 페이지까지 처리하는지 검증한다
     @Test
-    void exhausted된_행은_재시도하지_않는다() {
-        OptionAvailabilitySyncFailure failure = newFailure(10L, 11L, true);
-        ReflectionTestUtils.setField(failure, "exhausted", true);
-        when(failureRepository.findByIdGreaterThanOrderByIdAsc(eq(0L), any(Pageable.class)))
-                .thenReturn(List.of(failure));
+    void 페이지_경계를_넘는_미완료_건도_커서로_이어서_처리한다() {
+        OptionAvailabilitySyncFailure f1 = newFailure(10L, 11L, true);
+        OptionAvailabilitySyncFailure f2 = newFailure(20L, 12L, false);
+        stubPage(0L, List.of(f1));
+        stubPage(10L, List.of(f2));
+        stubPage(20L, List.of());
 
         sut.retryAllPending();
 
-        verify(productOptionAvailabilityService, never()).updateSoldOut(any(), anyBoolean(), any());
-        verify(outcomeService, never()).markSucceeded(any());
-        verify(outcomeService, never()).markFailed(any(), any());
+        verify(productOptionAvailabilityService).updateSoldOut(11L, true, OCCURRED_AT);
+        verify(productOptionAvailabilityService).updateSoldOut(12L, false, OCCURRED_AT);
     }
 
-    // (FUN-3-03/PERF-4-01/PERF-4-03) 청크가 상한만큼 차면 다음 청크를 마지막 id 기준으로 이어서 조회한다
+    // (REL-2-07) 재시도 한도를 조회 조건으로 넘기는지 검증한다 — 한도를 넘긴 행은 조회 자체에서 빠진다
     @Test
-    void 한_청크가_상한만큼_차면_다음_id부터_이어서_조회한다() {
-        int chunkSize = chunkSize();
-        List<OptionAvailabilitySyncFailure> firstChunk = new ArrayList<>();
-        for (int i = 0; i < chunkSize; i++) {
-            firstChunk.add(newFailure((long) (i + 1), 11L, true));
-        }
-        long lastIdOfFirstChunk = chunkSize;
-        when(failureRepository.findByIdGreaterThanOrderByIdAsc(eq(0L), any(Pageable.class)))
-                .thenReturn(firstChunk);
-        when(failureRepository.findByIdGreaterThanOrderByIdAsc(eq(lastIdOfFirstChunk), any(Pageable.class)))
-                .thenReturn(List.of());
+    void 재시도_한도를_조회_조건으로_넘긴다() {
+        stubPage(0L, List.of());
 
         sut.retryAllPending();
 
-        verify(failureRepository).findByIdGreaterThanOrderByIdAsc(eq(0L), any(Pageable.class));
-        verify(failureRepository).findByIdGreaterThanOrderByIdAsc(eq(lastIdOfFirstChunk), any(Pageable.class));
-        verify(productOptionAvailabilityService, times(chunkSize)).updateSoldOut(eq(11L), eq(true), any());
+        verify(failureRepository).findByIdGreaterThanAndAttemptCountLessThanOrderByIdAsc(
+                eq(0L), eq(OptionAvailabilitySyncFailure.MAX_RETRY_ATTEMPTS), any());
     }
 }

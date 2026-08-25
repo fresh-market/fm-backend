@@ -23,7 +23,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class OptionAvailabilitySyncFailure extends BaseMutableTimeEntity {
 
-    private static final int MAX_RETRY_ATTEMPTS = 5;
+    // (REL-2-07) 재시도 조회 쪽(OptionAvailabilitySyncFailureRepository)도 이 한도로 대상을 거른다
+    public static final int MAX_RETRY_ATTEMPTS = 5;
 
     @Column(name = "product_option_id", nullable = false, unique = true)
     private Long productOptionId;
@@ -42,16 +43,13 @@ public class OptionAvailabilitySyncFailure extends BaseMutableTimeEntity {
     @Column(name = "attempt_count", nullable = false)
     private int attemptCount;
 
-    // (REL-2-07) 재시도 한도에 도달해 포기한 행. TRUE면 스케줄러가 더는 재시도하지 않는다(행은 남겨 수동 개입에 대비한다)
-    @Column(name = "exhausted", nullable = false)
-    private boolean exhausted;
-
     private OptionAvailabilitySyncFailure(Long productOptionId, boolean soldOut, LocalDateTime occurredAt) {
+        validateProductOptionId(productOptionId);
+        validateOccurredAt(occurredAt);
         this.productOptionId = productOptionId;
         this.soldOut = soldOut;
         this.occurredAt = occurredAt;
         this.attemptCount = 1;
-        this.exhausted = false;
     }
 
     // 리스너의 첫 반영 실패 때 쓰는 유일한 생성 진입점
@@ -60,15 +58,12 @@ public class OptionAvailabilitySyncFailure extends BaseMutableTimeEntity {
         return new OptionAvailabilitySyncFailure(productOptionId, soldOut, occurredAt);
     }
 
-    /*
-     * 이미 대기 중인 실패가 있는 옵션에 새 이벤트가 또 실패로 들어온 경우. 목표 값을 최신 이벤트로 덮어쓴다.
-     * 포기 상태였더라도 목표 값 자체가 바뀐 새 이벤트라 다시 시도할 기회를 준다(exhausted 해제).
-     */
+    // 이미 대기 중인 실패가 있는 옵션에 새 이벤트가 또 실패로 들어온 경우. 목표 값을 최신 이벤트로 덮어쓴다
     public void overwriteWithNewerFailure(boolean soldOut, LocalDateTime occurredAt) {
+        validateOccurredAt(occurredAt);
         this.soldOut = soldOut;
         this.occurredAt = occurredAt;
         this.attemptCount++;
-        this.exhausted = false;
     }
 
     // 대기 중인 실패를 그대로 다시 시도했는데 또 실패한 경우. 새 이벤트가 아니라 목표 값은 그대로 둔다
@@ -80,8 +75,15 @@ public class OptionAvailabilitySyncFailure extends BaseMutableTimeEntity {
         return attemptCount >= MAX_RETRY_ATTEMPTS;
     }
 
-    // (REL-2-07) 한도에 도달해 포기할 때 호출한다. 이후 스케줄러 재시도 대상에서 빠진다
-    public void markExhausted() {
-        this.exhausted = true;
+    private static void validateProductOptionId(Long productOptionId) {
+        if (productOptionId == null) {
+            throw new IllegalArgumentException("productOptionId 는 필수다");
+        }
+    }
+
+    private static void validateOccurredAt(LocalDateTime occurredAt) {
+        if (occurredAt == null) {
+            throw new IllegalArgumentException("occurredAt 은 필수다");
+        }
     }
 }

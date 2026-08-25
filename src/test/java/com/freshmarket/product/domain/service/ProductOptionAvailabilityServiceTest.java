@@ -2,6 +2,9 @@ package com.freshmarket.product.domain.service;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -27,7 +30,7 @@ class ProductOptionAvailabilityServiceTest {
     void 조건부_UPDATE로_품절_여부를_갱신한다() {
         // given
         LocalDateTime occurredAt = LocalDateTime.of(2026, 8, 24, 10, 0);
-        when(productOptionRepository.updateSoldOutIfNewer(31L, false, occurredAt)).thenReturn(1);
+        when(productOptionRepository.updateSoldOutIfNewer(anyLong(), anyBoolean(), any())).thenReturn(1);
 
         // when
         productOptionAvailabilityService.updateSoldOut(31L, false, occurredAt);
@@ -37,26 +40,26 @@ class ProductOptionAvailabilityServiceTest {
     }
 
     @Test
-    void 대상은_있지만_이미_더_최신_값이_반영돼_있으면_예외를_던지지_않는다() {
-        // given — (DI-2-01) 0건 갱신이지만 대상 옵션 자체는 존재한다 — 낡은 이벤트를 정상적으로 무시한 것
+    void 이미_더_최신_값이_반영돼_있으면_예외를_던지지_않는다() {
+        // given — 0건 갱신이지만 옵션 자체는 존재한다(더 최신 값이 이미 반영된 정상 케이스)
         LocalDateTime occurredAt = LocalDateTime.of(2026, 8, 24, 10, 0);
-        when(productOptionRepository.updateSoldOutIfNewer(31L, false, occurredAt)).thenReturn(0);
-        when(productOptionRepository.existsById(31L)).thenReturn(true);
+        when(productOptionRepository.updateSoldOutIfNewer(anyLong(), anyBoolean(), any())).thenReturn(0);
+        when(productOptionRepository.existsById(999L)).thenReturn(true);
 
         // when, then
-        assertThatCode(() -> productOptionAvailabilityService.updateSoldOut(31L, false, occurredAt))
+        assertThatCode(() -> productOptionAvailabilityService.updateSoldOut(999L, false, occurredAt))
                 .doesNotThrowAnyException();
     }
 
     @Test
     void 대상_옵션이_없으면_예외를_던진다() {
-        // given — (DI-2-01) 0건 갱신인데 대상 옵션 자체가 없다 — 진짜 갱신 실패라 재시도 큐로 보내야 한다
+        // given — 0건 갱신이고 옵션 자체가 존재하지 않는다(데이터 정합성 문제)
         LocalDateTime occurredAt = LocalDateTime.of(2026, 8, 24, 10, 0);
-        when(productOptionRepository.updateSoldOutIfNewer(999L, false, occurredAt)).thenReturn(0);
-        when(productOptionRepository.existsById(999L)).thenReturn(false);
+        when(productOptionRepository.updateSoldOutIfNewer(anyLong(), anyBoolean(), any())).thenReturn(0);
+        when(productOptionRepository.existsById(404L)).thenReturn(false);
 
         // when, then
-        assertThatThrownBy(() -> productOptionAvailabilityService.updateSoldOut(999L, false, occurredAt))
+        assertThatThrownBy(() -> productOptionAvailabilityService.updateSoldOut(404L, false, occurredAt))
                 .isInstanceOf(IllegalStateException.class);
     }
 }

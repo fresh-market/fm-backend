@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -11,6 +12,7 @@ import com.freshmarket.product.OptionAvailabilityChangedEvent;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
 import com.freshmarket.stock.domain.dto.AdminLotDisposeRequest;
+import com.freshmarket.stock.domain.dto.AdminLotExpireResponse;
 import com.freshmarket.stock.domain.dto.AdminLotListResponse;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
 import com.freshmarket.stock.domain.entity.DisposalReason;
@@ -22,6 +24,7 @@ import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -50,6 +53,9 @@ class AdminLotServiceTest {
 
     @Mock
     private ApplicationEventPublisher eventPublisher;
+
+    @Mock
+    private AdminLotExpireChunkService adminLotExpireChunkService;
 
     @InjectMocks
     private AdminLotService adminLotService;
@@ -269,6 +275,61 @@ class AdminLotServiceTest {
                 .isInstanceOf(StockException.class)
                 .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.EXPIRY_BEFORE_RECEIVED);
         verify(stockLotRepository, never()).save(any());
+    }
+
+    // (DI-4-03/PERF-4-03) 실제 만료 로직은 AdminLotExpireChunkService로 옮겨서 그쪽 테스트가 맡는다.
+    // 여기서는 청크를 몇 번 반복 호출하는지(오케스트레이션)만 검증한다.
+
+    @Test
+    void 만료_대상이_없으면_빈_응답을_돌려준다() {
+        // given
+        when(adminLotExpireChunkService.expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE)).thenReturn(List.of());
+
+        // when
+        AdminLotExpireResponse result = adminLotService.expireLots();
+
+        // then
+        assertThat(result.lots()).isEmpty();
+        verify(adminLotExpireChunkService, times(1)).expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE);
+    }
+
+    @Test
+    void 청크가_가득_차지_않으면_한_번만_호출하고_끝낸다() {
+        // given — 청크 크기보다 적게 돌아오면 다음 청크가 없다는 뜻이다
+        StockLot lot = lotFixture(77L, 31L);
+        when(adminLotExpireChunkService.expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE)).thenReturn(List.of(lot));
+
+        // when
+        AdminLotExpireResponse result = adminLotService.expireLots();
+
+        // then
+        assertThat(result.lots()).hasSize(1);
+        verify(adminLotExpireChunkService, times(1)).expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE);
+    }
+
+    @Test
+    void 청크가_가득_차면_다음_청크를_이어서_처리한다() {
+        // given — 첫 청크가 EXPIRE_CHUNK_SIZE건 꽉 차면 뒤에 더 있을 수 있어 다음 청크를 마저 부른다
+        List<StockLot> fullChunk = Collections.nCopies(AdminLotService.EXPIRE_CHUNK_SIZE, lotFixture(1L, 31L));
+        List<StockLot> lastChunk = List.of(lotFixture(2000L, 31L));
+        when(adminLotExpireChunkService.expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE))
+                .thenReturn(fullChunk)
+                .thenReturn(lastChunk);
+
+        // when
+        AdminLotExpireResponse result = adminLotService.expireLots();
+
+        // then
+        assertThat(result.lots()).hasSize(AdminLotService.EXPIRE_CHUNK_SIZE + 1);
+        verify(adminLotExpireChunkService, times(2)).expireChunk(AdminLotService.EXPIRE_CHUNK_SIZE);
+    }
+
+    private StockLot lotFixture(Long id, Long productOptionId) {
+        StockLot lot = StockLot.register("req-" + id, productOptionId, LocalDate.now().minusDays(15),
+                LocalDate.now().minusDays(1), 40);
+        ReflectionTestUtils.setField(lot, "id", id);
+        ReflectionTestUtils.setField(lot, "status", LotStatus.EXPIRED);
+        return lot;
     }
 
     @Test

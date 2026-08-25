@@ -11,9 +11,15 @@ public interface OptionAvailabilitySyncFailureRepository extends JpaRepository<O
     Optional<OptionAvailabilitySyncFailure> findByProductOptionId(Long productOptionId);
 
     /*
-     * (FUN-3-03/PERF-4-03) retryAllPending()이 findAll()로 전체를 한 번에 메모리에 올리지 않도록
-     * id 기준 청크로 나눠 읽는다. id 순으로 계속 전진하므로 처리 중 행이 지워져도(markSucceeded)
-     * 다음 청크가 밀리거나 건너뛰지 않는다(OFFSET 페이징의 약점을 피한다).
+     * (PERF-4-03) id 기준 keyset 페이지네이션. offset 페이지네이션과 달리, 배치 처리 중 앞쪽 행이
+     * 삭제(성공 처리)돼도 뒤 페이지가 밀리거나 건너뛰는 문제가 없다 — "id > 마지막으로 본 id"
+     * 조건이라 이미 지나온 위치보다 앞쪽에서 벌어지는 변화에 영향받지 않는다.
+     *
+     * (REL-2-07) attemptCount가 재시도 한도 이상인 행은 애초에 조회 대상에서 뺀다. 그대로 두면
+     * 스케줄러가 매 주기 이미 포기한 행을 계속 다시 시도해 ERROR 로그만 무한히 반복된다 — 행
+     * 자체는 사람이 볼 수 있게 지우지 않고 남기되(OptionAvailabilitySyncOutcomeService 참고),
+     * 자동 재시도 대상에서만 뺀다.
      */
-    List<OptionAvailabilitySyncFailure> findByIdGreaterThanOrderByIdAsc(Long id, Pageable pageable);
+    List<OptionAvailabilitySyncFailure> findByIdGreaterThanAndAttemptCountLessThanOrderByIdAsc(
+            Long id, int attemptCount, Pageable pageable);
 }

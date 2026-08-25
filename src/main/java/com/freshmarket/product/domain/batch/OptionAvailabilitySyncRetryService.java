@@ -6,7 +6,9 @@ import com.freshmarket.product.domain.service.ProductOptionAvailabilityService;
 import java.time.LocalDateTime;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,12 +20,12 @@ import org.springframework.transaction.annotation.Transactional;
  * retryAllPending()을 @Transactional로 묶지 않는다 — 재시도(updateSoldOut)와 결과 반영을 각각
  * 별도 트랜잭션으로 나눠서, 재시도 자체가 실패해도 실패 횟수 증가가 함께 롤백되지 않게 한다.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OptionAvailabilitySyncRetryService {
 
-    // (FUN-3-04) 한 주기에 처리할 상한. 서버가 강제하는 값이라 적체가 커져도 배치 실행 시간이 늘어나지 않는다
-    private static final int RETRY_CHUNK_SIZE = 200;
+    private static final int PAGE_SIZE = 200;
 
     private final OptionAvailabilitySyncFailureRepository failureRepository;
     private final ProductOptionAvailabilityService productOptionAvailabilityService;
@@ -38,31 +40,46 @@ public class OptionAvailabilitySyncRetryService {
     }
 
     /*
-     * (FUN-3-03/DI-4-03/PERF-4-01/PERF-4-03) findAll()로 전체를 한 번에 올리지 않고 id 청크로 나눠 처리한다.
-     * id 기준으로 전진해서, 청크 처리 중 성공한 행이 지워져도(markSucceeded) 다음 청크가 밀리지 않는다.
-     * (REL-2-07) 재시도 한도를 넘어 exhausted 로 남은 행은 건너뛴다 — 지우지는 않되 무한 재시도를 막는다.
+     * (PERF-4-03) 미완료 건 전체를 findAll()로 한 번에 메모리에 올리지 않고 id 기준 keyset
+     * 페이지네이션으로 나눠 처리한다. 페이지 안에서 성공한 행이 삭제돼도(markSucceeded) "id > 마지막
+     * 처리 id" 조건이라 다음 페이지 조회가 밀리거나 건너뛰지 않는다.
      */
     public void retryAllPending() {
-        long lastId = 0L;
-        List<OptionAvailabilitySyncFailure> chunk;
+        Long afterId = 0L;
+        List<OptionAvailabilitySyncFailure> page;
+        Pageable pageable = PageRequest.of(0, PAGE_SIZE);
         do {
-            chunk = failureRepository.findByIdGreaterThanOrderByIdAsc(lastId, PageRequest.of(0, RETRY_CHUNK_SIZE));
-            for (OptionAvailabilitySyncFailure failure : chunk) {
-                if (!failure.isExhausted()) {
-                    retryOne(failure.getId(), failure.getProductOptionId(), failure.isSoldOut(),
-                            failure.getOccurredAt());
-                }
-                lastId = failure.getId();
+            page = failureRepository.findByIdGreaterThanAndAttemptCountLessThanOrderByIdAsc(
+                    afterId, OptionAvailabilitySyncFailure.MAX_RETRY_ATTEMPTS, pageable);
+            for (OptionAvailabilitySyncFailure failure : page) {
+                retryOne(failure.getId(), failure.getProductOptionId(), failure.isSoldOut(), failure.getOccurredAt());
+                afterId = failure.getId();
             }
-        } while (chunk.size() == RETRY_CHUNK_SIZE);
+        } while (!page.isEmpty());
     }
 
+    /*
+     * markSucceeded/markFailed 자체의 실패를 updateSoldOut의 실패와 같은 catch로 묶지 않는다.
+     * 같은 catch 안에 두면 동기화 자체는 성공했는데 markSucceeded()가 실패했을 때 markFailed()가
+     * 불려 attemptCount가 잘못 올라가고(조기 포기를 앞당김), markFailed() 자체가 던지면 그 예외가
+     * retryAllPending() 밖(@Scheduled)까지 전파돼 이번 주기의 나머지 대기 건 전부가 스킵된다.
+     */
     private void retryOne(Long failureId, Long productOptionId, boolean soldOut, LocalDateTime occurredAt) {
         try {
             productOptionAvailabilityService.updateSoldOut(productOptionId, soldOut, occurredAt);
-            outcomeService.markSucceeded(failureId);
         } catch (Exception e) {
-            outcomeService.markFailed(failureId, e);
+            safely(() -> outcomeService.markFailed(failureId, e), failureId);
+            return;
+        }
+        safely(() -> outcomeService.markSucceeded(failureId), failureId);
+    }
+
+    private void safely(Runnable action, Long failureId) {
+        try {
+            action.run();
+        } catch (Exception e) {
+            // 한 건의 결과 반영 실패 때문에 배치 전체(나머지 대기 건)를 중단시키지 않는다
+            log.error("event=OPTION_AVAILABILITY_SYNC_OUTCOME_FAILED failureId={}", failureId, e);
         }
     }
 }
