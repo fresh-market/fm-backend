@@ -1,5 +1,6 @@
 package com.freshmarket.admin.domain.service;
 
+import java.util.Objects;
 import com.freshmarket.admin.domain.entity.Admin;
 import com.freshmarket.admin.domain.entity.AdminAuditLog;
 import com.freshmarket.admin.domain.exception.AdminErrorCode;
@@ -28,6 +29,8 @@ public class AdminLogoutTransactionService {
      */
     @Transactional(timeout = 5)
     public LogoutDbState revokeRefreshToken(Long adminId) {
+        Objects.requireNonNull(adminId, "adminId");
+
         Admin admin = adminRepository.findByIdForUpdate(adminId)
                 .orElseThrow(() -> new AdminException(AdminErrorCode.LOGIN_FAILED));
 

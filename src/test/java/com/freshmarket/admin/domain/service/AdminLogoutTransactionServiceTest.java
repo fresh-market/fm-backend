@@ -43,6 +43,13 @@ class AdminLogoutTransactionServiceTest {
     }
 
     @Test
+    void adminId가_null이면_즉시_예외가_발생한다() {
+        assertThatThrownBy(() -> service.revokeRefreshToken(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("adminId");
+    }
+
+    @Test
     void 존재하지_않는_관리자의_DB_토큰_폐기는_로그인_실패로_처리한다() {
         when(adminRepository.findByIdForUpdate(999L)).thenReturn(Optional.empty());
 
