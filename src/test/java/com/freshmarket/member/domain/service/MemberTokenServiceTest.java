@@ -67,6 +67,9 @@ class MemberTokenServiceTest {
     @Mock
     private HttpServletResponse response;
 
+    @Mock
+    private RefreshTokenRevokeRetryService refreshTokenRevokeRetryService;
+
     private MemberTokenService sut;
 
     @BeforeEach
@@ -75,7 +78,8 @@ class MemberTokenServiceTest {
         authCookieFactory = new AuthCookieFactory(jwtTokenProvider);
 
         sut = new MemberTokenService(jwtTokenProvider, refreshTokenRepository, accessTokenValidAfterRepository,
-                authCookieFactory, memberRepository, eventPublisher, Clock.systemDefaultZone());
+                authCookieFactory, memberRepository, eventPublisher, Clock.systemDefaultZone(),
+                refreshTokenRevokeRetryService);
     }
 
     private static Member newMember(Long id) {
@@ -297,6 +301,47 @@ class MemberTokenServiceTest {
         verify(refreshTokenRepository).deleteByHash("current-hash");
         verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
         verify(accessTokenValidAfterRepository).invalidateBefore(eq("ROLE_USER"), eq(1L), any(), any());
+        // 정리가 둘 다 성공했으니 재시도 아웃박스에 남길 게 없다
+        verify(refreshTokenRevokeRetryService, never()).recordFailure(any(), any(), any());
+    }
+
+    // (2026-08-25) DB 백업/Redis 정리 중 하나라도 실패하면 RefreshTokenRevokeRetryService로 넘겨
+    // 스케줄러가 재시도하게 한다 — 그래야 로그아웃했는데도 그 refreshToken이 그대로 유효하게 남는
+    // 창을 좁힌다.
+
+    @Test
+    void db_삭제가_실패하면_아웃박스에_기록한다() {
+        when(refreshTokenRepository.findActiveHash("ROLE_USER", 1L)).thenReturn(Optional.of("current-hash"));
+        doThrow(new DataAccessResourceFailureException("db down")).when(memberRepository).clearRefreshToken(1L);
+
+        sut.revoke(1L, "ROLE_USER", false);
+
+        verify(refreshTokenRevokeRetryService).recordFailure(1L, "ROLE_USER", "current-hash");
+    }
+
+    @Test
+    void redis_삭제가_실패하면_아웃박스에_기록한다() {
+        when(refreshTokenRepository.findActiveHash("ROLE_USER", 1L)).thenReturn(Optional.of("current-hash"));
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
+
+        sut.revoke(1L, "ROLE_USER", false);
+
+        verify(refreshTokenRevokeRetryService).recordFailure(1L, "ROLE_USER", "current-hash");
+    }
+
+    @Test
+    void 지울_해시를_모르면_db_삭제가_실패해도_아웃박스에_기록하지_않는다() {
+        // Redis 조회 자체가 실패해서(activeKey 못 구함) hash 확보 시도 전체가 catch로 빠지는 경우 —
+        // 어느 해시를 조건으로 재시도할지 몰라 안전하게 남길 방법이 없다
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).findActiveHash("ROLE_USER", 1L);
+        doThrow(new DataAccessResourceFailureException("db down")).when(memberRepository).clearRefreshToken(1L);
+
+        sut.revoke(1L, "ROLE_USER", false);
+
+        verify(memberRepository, never()).findById(any());
+        verify(refreshTokenRevokeRetryService, never()).recordFailure(any(), any(), any());
     }
 
     @Test

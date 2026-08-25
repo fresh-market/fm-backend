@@ -51,6 +51,12 @@ import org.springframework.transaction.annotation.Transactional;
  * Clock을 쓴다 — admin-login 브랜치의 AdminAuthService와 같은 패턴이다(Clock을 서비스 레이어에서
  * "영속되는 시각" 계산에만 쓰고, JwtTokenProvider 자체는 Clock을 안 받는다). 두 브랜치를 합칠 때
  * 충돌을 줄이려고 이 범위에 맞췄다 — JwtTokenProvider.java의 관련 주석 참고.
+ *
+ * (2026-08-25 추가) revoke()가 DB 백업/Redis 정리 중 하나라도 실패하면, 무효화됐어야 할
+ * refreshToken이 그대로 남아 재발급에 쓰일 수 있다(Redis 정리 실패면 Redis가 멀쩡한 동안에도,
+ * DB 백업 정리 실패면 나중에 Redis 완전장애 시 reissueViaDbFallback()이 여전히 믿어버린다).
+ * 그 실패를 RefreshTokenRevokeRetryService(아웃박스)로 넘겨 스케줄러가 재시도하게 한다 —
+ * KakaoUnlinkEventListener/KakaoUnlinkRetryService와 같은 패턴.
  */
 @Slf4j
 @Service
@@ -64,6 +70,7 @@ public class MemberTokenService {
     private final MemberRepository memberRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
+    private final RefreshTokenRevokeRetryService refreshTokenRevokeRetryService;
 
     public record IssueResult(String accessToken, long expiresInSeconds) {
     }
@@ -222,17 +229,28 @@ public class MemberTokenService {
             hash = Optional.empty();
         }
 
+        boolean dbCleared = true;
         try {
             memberRepository.clearRefreshToken(memberId);
         } catch (DataAccessException e) {
-            log.warn("event=DB_BACKUP_DELETE_FAILED memberId={} — DB 백업 삭제 실패(계속 진행)", memberId, e);
+            dbCleared = false;
+            log.warn("event=DB_BACKUP_DELETE_FAILED memberId={} — DB 백업 삭제 실패(재시도 아웃박스로 넘김)", memberId, e);
         }
 
+        boolean redisCleared = true;
         try {
             hash.ifPresent(refreshTokenRepository::deleteByHash);
             refreshTokenRepository.deleteActiveKey(role, memberId);
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_DELETE_FAILED role={} id={} — DB 백업만 반영됨", role, memberId, e);
+            redisCleared = false;
+            log.warn("event=REDIS_DELETE_FAILED role={} id={} — 재시도 아웃박스로 넘김", role, memberId, e);
+        }
+
+        // (2026-08-25) 둘 중 하나라도 실패했으면 아웃박스에 남겨 스케줄러가 재시도하게 한다. hash가
+        // 없으면(Redis 조회 자체가 실패했거나 애초에 발급 이력이 없으면) 어느 해시를 조건으로 지울지
+        // 몰라 안전하게 재시도할 수 없으므로 건너뛴다 — RefreshTokenRevokeRetryService 클래스 주석 참고.
+        if (!dbCleared || !redisCleared) {
+            hash.ifPresent(h -> refreshTokenRevokeRetryService.recordFailure(memberId, role, h));
         }
 
         try {
