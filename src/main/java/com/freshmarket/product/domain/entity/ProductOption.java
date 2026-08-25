@@ -7,6 +7,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
+import java.time.LocalDateTime;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -39,6 +40,14 @@ public class ProductOption extends BaseMutableTimeEntity {
     // 재고 기반 품절 여부. sale_status와는 별개다
     @Column(name = "sold_out", nullable = false)
     private boolean soldOut;
+
+    /*
+     * (DI-2-01) sold_out을 마지막으로 갱신한 이벤트의 발생 시각. ProductOptionRepository의 조건부
+     * UPDATE가 "더 최신 이벤트만 반영"을 판정하는 기준이라, 이 값을 직접 대입하는 도메인 메서드를
+     * 두지 않는다 — 그 UPDATE 자체가 sold_out과 이 값을 원자적으로 함께 갱신한다.
+     */
+    @Column(name = "sold_out_synced_at")
+    private LocalDateTime soldOutSyncedAt;
 
     private ProductOption(Long productId, String name, int price) {
         validateProductId(productId);
@@ -76,10 +85,5 @@ public class ProductOption extends BaseMutableTimeEntity {
         if (price < 0) {
             throw new IllegalArgumentException("price 는 0 이상이어야 한다: " + price);
         }
-    }
-
-    // 재고 기반 품절 여부를 갱신한다. stock 도메인의 이벤트에 반응해서만 호출된다
-    public void updateSoldOut(boolean soldOut) {
-        this.soldOut = soldOut;
     }
 }

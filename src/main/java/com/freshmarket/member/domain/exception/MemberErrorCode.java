@@ -54,6 +54,8 @@ public enum MemberErrorCode implements ErrorCode {
     // (2026-08-20, FUN-3-03/FUN-3-04) docs/api/member.md에 배송지 등록 상한이 명시돼 있지 않아
     // 10개로 잡았다 — 문서가 나중에 다른 값을 못박으면 그 값으로 바꾼다.
     ADDRESS_LIMIT_EXCEEDED(HttpStatus.CONFLICT, "MEMBER-016", "배송지는 최대 10개까지 등록할 수 있습니다."),
+    KAKAO_UNLINK_FAILURE_NOT_FOUND(HttpStatus.NOT_FOUND, "MEMBER-017", "카카오 연결 해제 실패 기록을 찾을 수 없습니다."),
+    KAKAO_UNLINK_FAILURE_NOT_GAVE_UP(HttpStatus.CONFLICT, "MEMBER-018", "아직 포기 처리된 카카오 연결 해제 실패 기록이 아닙니다."),
     ;
 
     private final HttpStatus httpStatus;

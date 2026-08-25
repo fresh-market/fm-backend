@@ -9,6 +9,7 @@ import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -69,7 +70,8 @@ public class AdminLotExpireChunkService {
                 .distinct()
                 .filter(optionId -> !stockLotRepository.existsByProductOptionIdAndStatus(
                         optionId, LotStatus.AVAILABLE))
-                .forEach(optionId -> eventPublisher.publishEvent(new OptionAvailabilityChangedEvent(optionId, true)));
+                .forEach(optionId -> eventPublisher.publishEvent(
+                        new OptionAvailabilityChangedEvent(optionId, true, LocalDateTime.now())));
 
         return expiredLots;
     }

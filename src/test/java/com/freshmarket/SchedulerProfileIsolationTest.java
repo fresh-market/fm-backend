@@ -8,6 +8,8 @@ import com.freshmarket.member.domain.KakaoUnlinkRetryScheduler;
 import com.freshmarket.member.domain.KakaoUnlinkStuckReportScheduler;
 import com.freshmarket.member.domain.service.KakaoUnlinkRetryService;
 import com.freshmarket.member.domain.service.KakaoUnlinkStuckReportService;
+import com.freshmarket.product.domain.batch.OptionAvailabilitySyncRetryService;
+import com.freshmarket.product.domain.batch.OptionAvailabilitySyncScheduler;
 import com.freshmarket.stock.domain.AdminLotExpireScheduler;
 import com.freshmarket.stock.domain.service.AdminLotService;
 import org.junit.jupiter.api.Test;
@@ -33,6 +35,10 @@ class SchedulerProfileIsolationTest {
     private final ApplicationContextRunner lotExpireRunner = new ApplicationContextRunner()
             .withBean(AdminLotService.class, () -> mock(AdminLotService.class))
             .withUserConfiguration(SchedulingConfig.class, AdminLotExpireScheduler.class);
+
+    private final ApplicationContextRunner optionAvailabilitySyncRunner = new ApplicationContextRunner()
+            .withBean(OptionAvailabilitySyncRetryService.class, () -> mock(OptionAvailabilitySyncRetryService.class))
+            .withUserConfiguration(SchedulingConfig.class, OptionAvailabilitySyncScheduler.class);
 
     @Test
     void batch_프로필이_없으면_스케줄러가_꺼진다() {
@@ -69,6 +75,24 @@ class SchedulerProfileIsolationTest {
             assertThat(context).hasSingleBean(SchedulingConfig.class);
             assertThat(context).hasSingleBean(ScheduledAnnotationBeanPostProcessor.class);
             assertThat(context).hasSingleBean(AdminLotExpireScheduler.class);
+        });
+    }
+
+    @Test
+    void batch_프로필이_없으면_옵션_가용성_재동기화_스케줄러가_꺼진다() {
+        optionAvailabilitySyncRunner.run(context -> {
+            assertThat(context).doesNotHaveBean(SchedulingConfig.class);
+            assertThat(context).doesNotHaveBean(ScheduledAnnotationBeanPostProcessor.class);
+            assertThat(context).doesNotHaveBean(OptionAvailabilitySyncScheduler.class);
+        });
+    }
+
+    @Test
+    void batch_프로필이면_옵션_가용성_재동기화_스케줄러가_켜진다() {
+        optionAvailabilitySyncRunner.withPropertyValues("spring.profiles.active=batch").run(context -> {
+            assertThat(context).hasSingleBean(SchedulingConfig.class);
+            assertThat(context).hasSingleBean(ScheduledAnnotationBeanPostProcessor.class);
+            assertThat(context).hasSingleBean(OptionAvailabilitySyncScheduler.class);
         });
     }
 }

@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -76,7 +77,12 @@ class AdminLotServiceTest {
         assertThat(result.availableQty()).isEqualTo(200);
         assertThat(result.status()).isEqualTo("AVAILABLE");
         verify(stockMovementRepository).save(any());
-        verify(eventPublisher).publishEvent(new OptionAvailabilityChangedEvent(31L, false));
+        ArgumentCaptor<OptionAvailabilityChangedEvent> eventCaptor =
+                ArgumentCaptor.forClass(OptionAvailabilityChangedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().productOptionId()).isEqualTo(31L);
+        assertThat(eventCaptor.getValue().soldOut()).isFalse();
+        assertThat(eventCaptor.getValue().occurredAt()).isNotNull();
     }
 
     @Test
