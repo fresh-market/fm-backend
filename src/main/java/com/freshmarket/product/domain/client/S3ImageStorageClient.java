@@ -22,7 +22,7 @@ import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignReques
  */
 @Slf4j
 @Component
-public class S3ImageStorageClient {
+public class S3ImageStorageClient implements ImageStorageClient {
 
     private final S3Presigner s3Presigner;
     private final S3Client s3Client;
@@ -45,6 +45,7 @@ public class S3ImageStorageClient {
      * confirm()에서 걸러지므로, 이미 나간 업로드 대역폭과 PUT 비용을 되돌릴 수 없다
      * (백엔드공통_이미지저장소_설계.md 6.2절 "상한을 강제하는 자리").
      */
+    @Override
     public String createPresignedPutUrl(String objectKey, String contentType, long contentLength) {
         PutObjectRequest putObjectRequest = PutObjectRequest.builder()
                 .bucket(bucket)
@@ -67,6 +68,7 @@ public class S3ImageStorageClient {
      * headObject()는 문서상 NoSuchKeyException을 던진다고 되어 있지만 실제로는 상태코드 404인
      * 일반 S3Exception을 던진다(SDK 쪽 알려진 불일치) — statusCode로 직접 구분한다.
      */
+    @Override
     public Optional<S3ObjectMetadata> headObject(String objectKey) {
         try {
             HeadObjectResponse response = s3Client.headObject(HeadObjectRequest.builder()
@@ -88,6 +90,7 @@ public class S3ImageStorageClient {
      * 정리 배치가 같은 키로 다시 시도할 수 있다. 관리자가 이미지를 직접 지우는 delete()는 행 자체가
      * 사라져 재시도 대상이 없어지므로 이 메서드가 아니라 deleteObjectOrThrow()를 쓴다(INF-11-08).
      */
+    @Override
     public void deleteObject(String objectKey) {
         try {
             s3Client.deleteObject(DeleteObjectRequest.builder()
@@ -104,6 +107,7 @@ public class S3ImageStorageClient {
      * 실제로 고아를 막으려면, 객체 삭제 실패가 호출부에 전달되어 행 삭제를 막아야 한다 —
      * 삼키면 행만 사라지고 객체는 참조를 잃어 영영 못 찾는 고아가 된다.
      */
+    @Override
     public void deleteObjectOrThrow(String objectKey) {
         s3Client.deleteObject(DeleteObjectRequest.builder()
                 .bucket(bucket)

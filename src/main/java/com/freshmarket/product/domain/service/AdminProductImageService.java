@@ -2,7 +2,7 @@ package com.freshmarket.product.domain.service;
 
 import static com.freshmarket.common.exception.ConstraintViolations.isConstraintViolation;
 
-import com.freshmarket.product.domain.client.S3ImageStorageClient;
+import com.freshmarket.product.domain.client.ImageStorageClient;
 import com.freshmarket.product.domain.client.S3ObjectMetadata;
 import com.freshmarket.product.domain.dto.AdminProductImageConfirmRequest;
 import com.freshmarket.product.domain.dto.AdminProductImageConfirmResponse;
@@ -49,17 +49,17 @@ public class AdminProductImageService {
 
     private final ProductRepository productRepository;
     private final ProductImageRepository productImageRepository;
-    private final S3ImageStorageClient s3ImageStorageClient;
+    private final ImageStorageClient imageStorageClient;
     private final Set<String> allowedContentTypes;
     private final long maxSizeBytes;
 
     public AdminProductImageService(ProductRepository productRepository,
-            ProductImageRepository productImageRepository, S3ImageStorageClient s3ImageStorageClient,
+            ProductImageRepository productImageRepository, ImageStorageClient imageStorageClient,
             @Value("${upload.product-image.allowed-content-types}") String allowedContentTypesCsv,
             @Value("${upload.product-image.max-size-bytes}") long maxSizeBytes) {
         this.productRepository = productRepository;
         this.productImageRepository = productImageRepository;
-        this.s3ImageStorageClient = s3ImageStorageClient;
+        this.imageStorageClient = imageStorageClient;
         this.allowedContentTypes = Set.of(allowedContentTypesCsv.split(","));
         this.maxSizeBytes = maxSizeBytes;
         validateExtensionMappingCoversConfig();
@@ -123,7 +123,7 @@ public class AdminProductImageService {
 
     private AdminProductImageUploadUrlResponse responseOf(ProductImage image, String contentType,
             long contentLength) {
-        String uploadUrl = s3ImageStorageClient.createPresignedPutUrl(image.getObjectKey(), contentType,
+        String uploadUrl = imageStorageClient.createPresignedPutUrl(image.getObjectKey(), contentType,
                 contentLength);
         return AdminProductImageUploadUrlResponse.of(image, uploadUrl);
     }
@@ -151,7 +151,7 @@ public class AdminProductImageService {
 
         // 발급 시 신고한 조건과 실제 업로드가 다르면(서명되지 않은 조건이라 S3가 막지 못한다) 지우고 거절한다
         if (metadata.contentLength() > maxSizeBytes || !allowedContentTypes.contains(metadata.contentType())) {
-            s3ImageStorageClient.deleteObject(image.getObjectKey());
+            imageStorageClient.deleteObject(image.getObjectKey());
             throw new ProductException(ProductErrorCode.IMAGE_UPLOAD_MISMATCH);
         }
 
@@ -200,7 +200,7 @@ public class AdminProductImageService {
         ProductImage image = productImageRepository.findByIdAndProductId(imageId, productId)
                 .orElseThrow(() -> new ProductException(ProductErrorCode.IMAGE_NOT_FOUND));
         try {
-            s3ImageStorageClient.deleteObjectOrThrow(image.getObjectKey());
+            imageStorageClient.deleteObjectOrThrow(image.getObjectKey());
         } catch (S3Exception e) {
             // (INF-11-08) 객체 삭제가 실패하면 행을 지우지 않는다 — 그래야 다시 지워서 해소할 수 있다
             log.error("event=IMAGE_DELETE_OBJECT_FAILED productId={} imageId={} objectKey={}",
@@ -218,7 +218,7 @@ public class AdminProductImageService {
      */
     private Optional<S3ObjectMetadata> headObject(String objectKey) {
         try {
-            return s3ImageStorageClient.headObject(objectKey);
+            return imageStorageClient.headObject(objectKey);
         } catch (S3Exception e) {
             log.error("event=IMAGE_HEAD_OBJECT_FAILED objectKey={} statusCode={}", objectKey, e.statusCode(), e);
             throw new ProductException(ProductErrorCode.IMAGE_VERIFICATION_UNAVAILABLE, e);

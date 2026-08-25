@@ -11,7 +11,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.freshmarket.product.domain.client.S3ImageStorageClient;
+import com.freshmarket.product.domain.client.ImageStorageClient;
 import com.freshmarket.product.domain.client.S3ObjectMetadata;
 import com.freshmarket.product.domain.dto.AdminProductImageConfirmRequest;
 import com.freshmarket.product.domain.dto.AdminProductImageConfirmResponse;
@@ -33,7 +33,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
 /*
- * ProductRepository/ProductImageRepository/S3ImageStorageClient 전부 들어오는 데이터를 제공하는
+ * ProductRepository/ProductImageRepository/ImageStorageClient 전부 들어오는 데이터를 제공하는
  * 의존성이라 mock이다(UT-4-01). AdminAuthServiceTest와 같은 이유로 @InjectMocks 대신 생성자를
  * 직접 호출한다 — allowedContentTypesCsv/maxSizeBytes가 @Value 원시값이라 자동 주입이 안 된다.
  */
@@ -44,10 +44,10 @@ class AdminProductImageServiceTest {
 
     private final ProductRepository productRepository = mock(ProductRepository.class);
     private final ProductImageRepository productImageRepository = mock(ProductImageRepository.class);
-    private final S3ImageStorageClient s3ImageStorageClient = mock(S3ImageStorageClient.class);
+    private final ImageStorageClient imageStorageClient = mock(ImageStorageClient.class);
 
     private final AdminProductImageService adminProductImageService = new AdminProductImageService(
-            productRepository, productImageRepository, s3ImageStorageClient,
+            productRepository, productImageRepository, imageStorageClient,
             ALLOWED_CONTENT_TYPES, MAX_SIZE_BYTES);
 
     // ---- 생성자 ----
@@ -56,7 +56,7 @@ class AdminProductImageServiceTest {
     void 허용된_콘텐츠_타입에_대응하는_확장자가_없으면_기동_시점에_실패한다() {
         // given — 설정에만 새 타입(image/gif)을 추가하고 확장자 맵은 안 늘린 상황을 재현한다
         assertThatThrownBy(() -> new AdminProductImageService(
-                productRepository, productImageRepository, s3ImageStorageClient,
+                productRepository, productImageRepository, imageStorageClient,
                 "image/jpeg,image/gif", MAX_SIZE_BYTES))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("image/gif");
@@ -68,7 +68,7 @@ class AdminProductImageServiceTest {
     void 업로드_URL을_발급한다() {
         // given
         when(productRepository.existsById(1L)).thenReturn(true);
-        when(s3ImageStorageClient.createPresignedPutUrl(any(), any(), anyLong()))
+        when(imageStorageClient.createPresignedPutUrl(any(), any(), anyLong()))
                 .thenReturn("https://s3.example.com/signed");
         AdminProductImageCreateUploadUrlRequest request =
                 new AdminProductImageCreateUploadUrlRequest("req-1", "image/jpeg", 100_000L);
@@ -88,7 +88,7 @@ class AdminProductImageServiceTest {
         // given — 이전 요청으로 이미 발급된 이미지가 있는 상황(사전 조회에서 바로 잡힘)
         ProductImage existing = imageFixture(88L, 1L, "products/ab/existing.jpg", UUID.randomUUID());
         when(productImageRepository.findByRequestIdAndProductId("req-1", 1L)).thenReturn(Optional.of(existing));
-        when(s3ImageStorageClient.createPresignedPutUrl("products/ab/existing.jpg", "image/jpeg", 100_000L))
+        when(imageStorageClient.createPresignedPutUrl("products/ab/existing.jpg", "image/jpeg", 100_000L))
                 .thenReturn("https://s3.example.com/re-signed");
         AdminProductImageCreateUploadUrlRequest request =
                 new AdminProductImageCreateUploadUrlRequest("req-1", "image/jpeg", 100_000L);
@@ -154,7 +154,7 @@ class AdminProductImageServiceTest {
                 .thenReturn(Optional.empty(), Optional.of(existing));
         when(productImageRepository.save(any())).thenThrow(new DataIntegrityViolationException(
                 "Duplicate entry 'req-1' for key 'product_image.uk_product_image_request_id'"));
-        when(s3ImageStorageClient.createPresignedPutUrl("products/ab/existing.jpg", "image/jpeg", 100_000L))
+        when(imageStorageClient.createPresignedPutUrl("products/ab/existing.jpg", "image/jpeg", 100_000L))
                 .thenReturn("https://s3.example.com/re-signed");
         AdminProductImageCreateUploadUrlRequest request =
                 new AdminProductImageCreateUploadUrlRequest("req-1", "image/jpeg", 100_000L);
@@ -191,7 +191,7 @@ class AdminProductImageServiceTest {
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
         when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
-        when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
+        when(imageStorageClient.headObject("products/ab/key.jpg"))
                 .thenReturn(Optional.of(new S3ObjectMetadata(100_000L, "image/jpeg")));
         when(productImageRepository.confirmIfPending(88L, UploadStatus.PENDING, UploadStatus.CONFIRMED))
                 .thenReturn(1);
@@ -203,7 +203,7 @@ class AdminProductImageServiceTest {
         // then — DI-4-02: 트랜잭션 안 엔티티 변경(dirty checking)이 아니라 원자적 UPDATE로 확정한다
         assertThat(response.productImageId()).isEqualTo(88L);
         verify(productImageRepository).confirmIfPending(88L, UploadStatus.PENDING, UploadStatus.CONFIRMED);
-        verify(s3ImageStorageClient, never()).deleteObject(any());
+        verify(imageStorageClient, never()).deleteObject(any());
     }
 
     @Test
@@ -212,7 +212,7 @@ class AdminProductImageServiceTest {
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
         when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
-        when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
+        when(imageStorageClient.headObject("products/ab/key.jpg"))
                 .thenThrow((S3Exception) S3Exception.builder().statusCode(500).message("Internal Error").build());
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
 
@@ -243,7 +243,7 @@ class AdminProductImageServiceTest {
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
         when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
-        when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
+        when(imageStorageClient.headObject("products/ab/key.jpg"))
                 .thenReturn(Optional.of(new S3ObjectMetadata(100_000L, "image/jpeg")));
         when(productImageRepository.confirmIfPending(88L, UploadStatus.PENDING, UploadStatus.CONFIRMED))
                 .thenReturn(0);
@@ -263,7 +263,7 @@ class AdminProductImageServiceTest {
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
         when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
-        when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
+        when(imageStorageClient.headObject("products/ab/key.jpg"))
                 .thenReturn(Optional.of(new S3ObjectMetadata(100_000L, "image/jpeg")));
         when(productImageRepository.confirmIfPending(88L, UploadStatus.PENDING, UploadStatus.CONFIRMED))
                 .thenReturn(0);
@@ -311,7 +311,7 @@ class AdminProductImageServiceTest {
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
         when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
-        when(s3ImageStorageClient.headObject("products/ab/key.jpg")).thenReturn(Optional.empty());
+        when(imageStorageClient.headObject("products/ab/key.jpg")).thenReturn(Optional.empty());
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
 
         // when, then
@@ -326,7 +326,7 @@ class AdminProductImageServiceTest {
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
         when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
-        when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
+        when(imageStorageClient.headObject("products/ab/key.jpg"))
                 .thenReturn(Optional.of(new S3ObjectMetadata(MAX_SIZE_BYTES + 1, "image/jpeg")));
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
 
@@ -334,7 +334,7 @@ class AdminProductImageServiceTest {
         assertThatThrownBy(() -> adminProductImageService.confirm(1L, 88L, request))
                 .isInstanceOf(ProductException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_UPLOAD_MISMATCH);
-        verify(s3ImageStorageClient).deleteObject("products/ab/key.jpg");
+        verify(imageStorageClient).deleteObject("products/ab/key.jpg");
     }
 
     @Test
@@ -343,7 +343,7 @@ class AdminProductImageServiceTest {
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
         when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
-        when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
+        when(imageStorageClient.headObject("products/ab/key.jpg"))
                 .thenReturn(Optional.of(new S3ObjectMetadata(100L, "application/pdf")));
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
 
@@ -351,7 +351,7 @@ class AdminProductImageServiceTest {
         assertThatThrownBy(() -> adminProductImageService.confirm(1L, 88L, request))
                 .isInstanceOf(ProductException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_UPLOAD_MISMATCH);
-        verify(s3ImageStorageClient).deleteObject("products/ab/key.jpg");
+        verify(imageStorageClient).deleteObject("products/ab/key.jpg");
     }
 
     // ---- delete() ----
@@ -366,8 +366,8 @@ class AdminProductImageServiceTest {
         adminProductImageService.delete(1L, 88L);
 
         // then
-        InOrder order = inOrder(s3ImageStorageClient, productImageRepository);
-        order.verify(s3ImageStorageClient).deleteObjectOrThrow("products/ab/key.jpg");
+        InOrder order = inOrder(imageStorageClient, productImageRepository);
+        order.verify(imageStorageClient).deleteObjectOrThrow("products/ab/key.jpg");
         order.verify(productImageRepository).deleteByIdAndProductId(88L, 1L);
     }
 
@@ -377,7 +377,7 @@ class AdminProductImageServiceTest {
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", UUID.randomUUID());
         when(productImageRepository.findByIdAndProductId(88L, 1L)).thenReturn(Optional.of(image));
         S3Exception s3Exception = (S3Exception) S3Exception.builder().statusCode(500).build();
-        doThrow(s3Exception).when(s3ImageStorageClient).deleteObjectOrThrow("products/ab/key.jpg");
+        doThrow(s3Exception).when(imageStorageClient).deleteObjectOrThrow("products/ab/key.jpg");
 
         // when, then
         assertThatThrownBy(() -> adminProductImageService.delete(1L, 88L))
@@ -398,7 +398,7 @@ class AdminProductImageServiceTest {
 
         // when, then — 예외 없이 끝난다
         adminProductImageService.delete(1L, 88L);
-        verify(s3ImageStorageClient).deleteObjectOrThrow("products/ab/key.jpg");
+        verify(imageStorageClient).deleteObjectOrThrow("products/ab/key.jpg");
     }
 
     @Test
@@ -411,7 +411,7 @@ class AdminProductImageServiceTest {
                 .isInstanceOf(ProductException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_NOT_FOUND);
         verify(productImageRepository, never()).deleteByIdAndProductId(any(), any());
-        verify(s3ImageStorageClient, never()).deleteObjectOrThrow(any());
+        verify(imageStorageClient, never()).deleteObjectOrThrow(any());
     }
 
     private ProductImage imageFixture(Long id, Long productId, String objectKey, UUID uploadId) {
