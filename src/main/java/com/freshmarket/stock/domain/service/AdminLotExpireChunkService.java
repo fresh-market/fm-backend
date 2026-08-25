@@ -12,6 +12,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -65,15 +66,30 @@ public class AdminLotExpireChunkService {
             expiredLots.add(lot);
         }
 
-        expiredLots.stream()
-                .map(StockLot::getProductOptionId)
-                .distinct()
-                .filter(optionId -> !stockLotRepository.existsByProductOptionIdAndStatus(
-                        optionId, LotStatus.AVAILABLE))
-                .forEach(optionId -> eventPublisher.publishEvent(
-                        new OptionAvailabilityChangedEvent(optionId, true, LocalDateTime.now())));
+        publishSoldOutEvents(expiredLots);
 
         return expiredLots;
+    }
+
+    /*
+     * (PERF-4-01) 옵션마다 existsByProductOptionIdAndStatus를 반복 호출하지 않고, 청크 안 옵션
+     * 전체를 한 번에 조회해 아직 AVAILABLE 로트가 남은 옵션 집합과 메모리에서 비교한다.
+     */
+    private void publishSoldOutEvents(List<StockLot> expiredLots) {
+        List<Long> distinctOptionIds = expiredLots.stream()
+                .map(StockLot::getProductOptionId)
+                .distinct()
+                .toList();
+        if (distinctOptionIds.isEmpty()) {
+            return;
+        }
+
+        Set<Long> stillAvailableOptionIds = stockLotRepository.findProductOptionIdsByProductOptionIdInAndStatus(
+                distinctOptionIds, LotStatus.AVAILABLE);
+        distinctOptionIds.stream()
+                .filter(optionId -> !stillAvailableOptionIds.contains(optionId))
+                .forEach(optionId -> eventPublisher.publishEvent(
+                        new OptionAvailabilityChangedEvent(optionId, true, LocalDateTime.now())));
     }
 
     /*
