@@ -5,7 +5,9 @@ import static org.mockito.Mockito.mock;
 
 import com.freshmarket.config.SchedulingConfig;
 import com.freshmarket.member.domain.KakaoUnlinkRetryScheduler;
+import com.freshmarket.member.domain.RefreshTokenRevokeRetryScheduler;
 import com.freshmarket.member.domain.service.KakaoUnlinkRetryService;
+import com.freshmarket.member.domain.service.RefreshTokenRevokeRetryService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
@@ -22,7 +24,9 @@ class SchedulerProfileIsolationTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(KakaoUnlinkRetryService.class, () -> mock(KakaoUnlinkRetryService.class))
-            .withUserConfiguration(SchedulingConfig.class, KakaoUnlinkRetryScheduler.class);
+            .withBean(RefreshTokenRevokeRetryService.class, () -> mock(RefreshTokenRevokeRetryService.class))
+            .withUserConfiguration(SchedulingConfig.class, KakaoUnlinkRetryScheduler.class,
+                    RefreshTokenRevokeRetryScheduler.class);
 
     @Test
     void batch_프로필이_없으면_스케줄러가_꺼진다() {
@@ -30,6 +34,7 @@ class SchedulerProfileIsolationTest {
             assertThat(context).doesNotHaveBean(SchedulingConfig.class);
             assertThat(context).doesNotHaveBean(ScheduledAnnotationBeanPostProcessor.class);
             assertThat(context).doesNotHaveBean(KakaoUnlinkRetryScheduler.class);
+            assertThat(context).doesNotHaveBean(RefreshTokenRevokeRetryScheduler.class);
         });
     }
 
@@ -39,6 +44,7 @@ class SchedulerProfileIsolationTest {
             assertThat(context).hasSingleBean(SchedulingConfig.class);
             assertThat(context).hasSingleBean(ScheduledAnnotationBeanPostProcessor.class);
             assertThat(context).hasSingleBean(KakaoUnlinkRetryScheduler.class);
+            assertThat(context).hasSingleBean(RefreshTokenRevokeRetryScheduler.class);
         });
     }
 }
