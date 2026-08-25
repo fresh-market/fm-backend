@@ -119,6 +119,14 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
 
     /*
+     * 상품 이미지 업로드(#21). S3Presigner로 업로드 URL을 발급하고, HeadObject로 실제 업로드를
+     * 확인한다(백엔드공통_이미지저장소_설계.md 6.2절). presigned POST 생성 기능은 Java SDK v2에
+     * 없어 PUT만 쓴다 — 그래서 s3 모듈 하나로 충분하다(별도 presigner 아티팩트가 없다).
+     */
+    implementation platform('software.amazon.awssdk:bom:2.46.7')
+    implementation 'software.amazon.awssdk:s3'
+
+    /*
      * @Scheduled 메서드 공통 로깅(SchedulerLoggingAspect)이 커스텀 애노테이션
      * 포인트컷(@annotation(...))을 쓴다. spring-aop 자체는 spring-data-jpa가
      * (→ @Transactional 프록시) 전이 의존성으로 이미 들여오지만, AspectJ 애노테이션

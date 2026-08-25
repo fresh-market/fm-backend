@@ -141,6 +141,22 @@ app:
 cdn:
   base-url: "${CDN_BASE_URL:}"
 
+# 상품 이미지 업로드(#21)가 쓰는 S3 버킷. presigned PUT 발급과 HeadObject 확인에 쓰인다
+# (fm-infra 백엔드공통_이미지저장소_설계.md 6.2절). 버킷은 terraform/storage.tf의
+# aws_s3_bucket.media, 리전은 기술스택 확정값(ap-northeast-2)이 기본값이다.
+s3:
+  region: "${S3_REGION:ap-northeast-2}"
+  media-bucket: "${S3_MEDIA_BUCKET:}"
+  # presigned PUT의 유효 시간. 인프라 문서 예시(300초)를 기본값으로 둔다
+  presigned-url-expiry-seconds: "${S3_PRESIGNED_URL_EXPIRY_SECONDS:300}"
+
+# 업로드 검증 상한(SEC-3-04). 등급 C 추정치라 나중에 재검토될 수 있다
+# (같은 문서 "업로드 크기 상한" 절 — product_image 1MB).
+upload:
+  product-image:
+    max-size-bytes: "${UPLOAD_PRODUCT_IMAGE_MAX_SIZE_BYTES:1048576}"
+    allowed-content-types: "${UPLOAD_PRODUCT_IMAGE_ALLOWED_CONTENT_TYPES:image/jpeg,image/png,image/webp}"
+
 jwt:
   secret: "${JWT_SECRET}"
   access-token-validity-ms: "${JWT_ACCESS_VALIDITY_MS:1800000}"
