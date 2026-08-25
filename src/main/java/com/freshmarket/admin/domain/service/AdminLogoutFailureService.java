@@ -4,6 +4,11 @@ import com.freshmarket.admin.domain.entity.Admin;
 import com.freshmarket.admin.domain.entity.AdminLogoutFailure;
 import com.freshmarket.admin.domain.repository.AdminLogoutFailureRepository;
 import com.freshmarket.admin.domain.repository.AdminRepository;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,10 +30,13 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class AdminLogoutFailureService {
 
+    private static final Duration CLAIM_LEASE = Duration.ofMinutes(10);
+
     private final AdminLogoutFailureRepository failureRepository;
     private final AdminRepository adminRepository;
     private final AdminRefreshTokenCleanupService cleanupService;
     private final AdminLogoutFailureOutcomeService outcomeService;
+    private final Clock clock;
 
     /*
      * 같은 관리자에 대해 미해결 행이 있으면 재오픈하고, 없으면 새로 만든다. admin_id에 UNIQUE
@@ -43,14 +51,38 @@ public class AdminLogoutFailureService {
                         AdminLogoutFailure.record(adminId, refreshTokenHash, redisFailed, dbFailed)));
     }
 
-    /** 미해결 행만 DB에서 조회해 재시도한다. */
+    /**
+     * 미해결 행을 PK 커서 기준 100건씩 읽어 재시도한다. 한 청크 처리 중 resolved 값이 바뀌어도
+     * 마지막으로 본 PK 다음부터 이어가므로 offset pagination처럼 행을 건너뛰지 않는다.
+     */
     public void retryAllPending() {
-        for (AdminLogoutFailure failure : failureRepository.findByResolvedFalse()) {
-            retryOne(failure.getId());
+        long lastSeenId = 0L;
+
+        while (true) {
+            List<AdminLogoutFailure> failures =
+                    failureRepository.findTop100ByResolvedFalseAndIdGreaterThanOrderByIdAsc(lastSeenId);
+            if (failures.isEmpty()) {
+                return;
+            }
+
+            for (AdminLogoutFailure failure : failures) {
+                lastSeenId = failure.getId();
+                retryOne(failure.getId());
+            }
+
+            if (failures.size() < 100) {
+                return;
+            }
         }
     }
 
     private void retryOne(Long failureId) {
+        LocalDateTime claimedAt = LocalDateTime.now(clock);
+        LocalDateTime staleBefore = claimedAt.minus(CLAIM_LEASE);
+        if (failureRepository.claimForRetry(failureId, claimedAt, staleBefore) != 1) {
+            return;
+        }
+
         Optional<AdminLogoutFailure> maybeFailure = failureRepository.findById(failureId);
         if (maybeFailure.isEmpty()) {
             return;
@@ -60,8 +92,9 @@ public class AdminLogoutFailureService {
 
         Optional<Admin> maybeAdmin = adminRepository.findById(adminId);
         if (maybeAdmin.isEmpty()) {
-            // 관리자 계정 자체가 더는 없다 — 재시도할 대상이 없으니 다음 회차로 미룬다.
+            // 관리자 계정 자체가 더는 없다 — 재시도할 대상이 없으니 선점만 반납하고 다음 회차로 미룬다.
             log.warn("event=ADMIN_LOGOUT_OUTBOX_ADMIN_NOT_FOUND adminId={}", adminId);
+            outcomeService.releaseClaim(failureId);
             return;
         }
         String role = maybeAdmin.get().getRole().toAuthority();

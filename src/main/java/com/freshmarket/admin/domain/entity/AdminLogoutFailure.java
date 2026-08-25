@@ -9,6 +9,9 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+import java.util.Objects;
+
 /**
  * 관리자 로그아웃의 Refresh Token 정리(Redis 삭제 + DB 폐기)가 즉시 재시도(3회)까지 실패하면
  * 이 행으로 남는다 — AdminLogoutFailureScheduler가 매일 00:00에 미해결 건을 재시도한다.
@@ -46,8 +49,20 @@ public class AdminLogoutFailure extends BaseMutableTimeEntity {
     @Column(name = "resolved", nullable = false)
     private boolean resolved;
 
+    /**
+     * 배치 인스턴스가 둘 이상이어도 같은 실패 건의 외부 Redis 정리를 동시에 실행하지 않도록
+     * 조건부 UPDATE로 선점할 때 사용하는 상태다. 일정 시간이 지난 선점은 재획득할 수 있어
+     * 프로세스가 중간에 종료되어도 영구적으로 멈추지 않는다.
+     */
+    @Column(name = "processing", nullable = false)
+    private boolean processing;
+
+    @Column(name = "processing_started_at")
+    private LocalDateTime processingStartedAt;
+
     private AdminLogoutFailure(Long adminId, String refreshTokenHash, boolean redisFailed, boolean dbFailed) {
-        this.adminId = adminId;
+        this.adminId = Objects.requireNonNull(adminId, "adminId");
+        validateFailureState(redisFailed, dbFailed);
         this.refreshTokenHash = refreshTokenHash;
         this.redisFailed = redisFailed;
         this.dbFailed = dbFailed;
@@ -66,11 +81,13 @@ public class AdminLogoutFailure extends BaseMutableTimeEntity {
      * 한 행에서 계속 추적하는 게 조회하기도 더 쉽다.
      */
     public void reopen(String refreshTokenHash, boolean redisFailed, boolean dbFailed) {
+        validateFailureState(redisFailed, dbFailed);
         this.refreshTokenHash = refreshTokenHash;
         this.redisFailed = redisFailed;
         this.dbFailed = dbFailed;
         this.attemptCount = 1;
         this.resolved = false;
+        releaseProcessing();
     }
 
     /**
@@ -87,6 +104,19 @@ public class AdminLogoutFailure extends BaseMutableTimeEntity {
         }
         if (dbNowOk && redisNowOk) {
             this.resolved = true;
+        }
+        releaseProcessing();
+    }
+
+    /** 외부 작업을 시작하지 못한 경우 현재 선점만 반납한다. */
+    public void releaseProcessing() {
+        this.processing = false;
+        this.processingStartedAt = null;
+    }
+
+    private static void validateFailureState(boolean redisFailed, boolean dbFailed) {
+        if (!redisFailed && !dbFailed) {
+            throw new IllegalArgumentException("redisFailed 또는 dbFailed 중 하나는 true여야 한다");
         }
     }
 }

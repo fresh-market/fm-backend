@@ -6,6 +6,8 @@ import static org.mockito.Mockito.when;
 
 import com.freshmarket.admin.domain.entity.AdminLogoutFailure;
 import com.freshmarket.admin.domain.repository.AdminLogoutFailureRepository;
+
+import java.time.LocalDateTime;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -17,15 +19,20 @@ class AdminLogoutFailureOutcomeServiceTest {
     private final AdminLogoutFailureOutcomeService sut = new AdminLogoutFailureOutcomeService(failureRepository);
 
     @Test
-    void 둘_다_성공하면_resolved로_바뀐다() {
+    void 둘_다_성공하면_resolved로_바뀌고_선점을_반납한다() {
         AdminLogoutFailure failure = AdminLogoutFailure.record(1L, null, false, true);
         ReflectionTestUtils.setField(failure, "id", 10L);
+        ReflectionTestUtils.setField(failure, "processing", true);
+        ReflectionTestUtils.setField(failure, "processingStartedAt", LocalDateTime.now());
         when(failureRepository.findById(10L)).thenReturn(Optional.of(failure));
 
         sut.applyOutcome(10L, true, true, "newHash");
 
         assertThat(failure.isDbFailed()).isFalse();
         assertThat(failure.isRedisFailed()).isFalse();
+        assertThat(failure.isResolved()).isTrue();
+        assertThat(failure.isProcessing()).isFalse();
+        assertThat(failure.getProcessingStartedAt()).isNull();
     }
 
     @Test
@@ -35,6 +42,31 @@ class AdminLogoutFailureOutcomeServiceTest {
         sut.applyOutcome(10L, true, true, "newHash");
 
         // 예외 없이 조용히 끝나야 한다 (findById만 확인)
+        assertThat(failureRepository.findById(10L)).isEmpty();
+    }
+
+    @Test
+    void releaseClaim은_선점만_반납한다() {
+        AdminLogoutFailure failure = AdminLogoutFailure.record(1L, "hash", true, false);
+        ReflectionTestUtils.setField(failure, "id", 10L);
+        ReflectionTestUtils.setField(failure, "processing", true);
+        ReflectionTestUtils.setField(failure, "processingStartedAt", LocalDateTime.now());
+        when(failureRepository.findById(10L)).thenReturn(Optional.of(failure));
+
+        sut.releaseClaim(10L);
+
+        assertThat(failure.isProcessing()).isFalse();
+        assertThat(failure.getProcessingStartedAt()).isNull();
+        assertThat(failure.isResolved()).isFalse();
+        assertThat(failure.isRedisFailed()).isTrue();
+    }
+
+    @Test
+    void releaseClaim_대상이_없으면_아무_일도_하지_않는다() {
+        when(failureRepository.findById(10L)).thenReturn(Optional.empty());
+
+        sut.releaseClaim(10L);
+
         assertThat(failureRepository.findById(10L)).isEmpty();
     }
 }

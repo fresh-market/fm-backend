@@ -22,4 +22,10 @@ class AdminLogoutFailureOutcomeService {
         failureRepository.findById(failureId)
                 .ifPresent(failure -> failure.applyRetryOutcome(dbOk, redisOk, latestRefreshTokenHash));
     }
+
+    @Transactional
+    void releaseClaim(Long failureId) {
+        failureRepository.findById(failureId)
+                .ifPresent(failure -> failure.releaseProcessing());
+    }
 }
