@@ -240,6 +240,29 @@ class AdminAuthServiceTest {
         verify(adminLogoutTransactionService).recordSuccess(1L);
     }
 
+    /*
+     * 이 시점이면 DB Refresh Token 폐기와 Access Token 차단은 이미 확정된 뒤다.
+     * 감사 로그 저장은 그 결과를 기록만 하는 부가 작업이므로, 저장에 실패해도 이미 끝난 로그아웃 자체가 예외로 전파되어서는 안 된다(fail-open).
+     */
+    @Test
+    void 감사로그_저장이_실패해도_로그아웃은_예외없이_끝난다() {
+        String tokenHash = "a".repeat(64);
+        when(adminLogoutTransactionService.revokeRefreshToken(1L))
+                .thenReturn(new AdminLogoutTransactionService.LogoutDbState(tokenHash));
+        doThrow(new DataAccessResourceFailureException("db down"))
+                .when(adminLogoutTransactionService).recordSuccess(1L);
+
+        adminAuthService.logout(1L, "ROLE_ADMIN");
+
+        verify(refreshTokenRepository).deleteByHash(tokenHash);
+        verify(accessTokenValidAfterRepository).invalidateBefore(
+                "ROLE_ADMIN",
+                1L,
+                LocalDateTime.now(clock),
+                Duration.ofMillis(ACCESS_TOKEN_VALIDITY_MS));
+        verify(adminLogoutTransactionService).recordSuccess(1L);
+    }
+
     @Test
     void DB에_리프레시토큰_해시가_없어도_Redis_active_key는_정리한다() {
         when(adminLogoutTransactionService.revokeRefreshToken(1L))

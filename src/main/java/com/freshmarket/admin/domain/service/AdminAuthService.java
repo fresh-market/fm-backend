@@ -181,6 +181,19 @@ public class AdminAuthService {
         invalidateAccessTokenOrThrow(role, adminId, cutoff);
 
         adminLogoutTransactionService.recordSuccess(adminId);
+
+        /*
+         * 이 시점이면 Refresh Token 폐기와 Access Token 차단은 이미 확정된 뒤다.
+         * 감사 로그는 그 결과를 기록만 하는 부가 작업이라, 저장이 실패해도 이미 끝난 로그아웃 자체를 실패로 되돌리지 않는다(fail-open).
+         * 그러지 않으면 보안적으로 완전히 끝난 로그아웃이 감사 로그 하나 때문에 스펙에 없는 500으로 응답되고, 쿠키도 안 지워져
+         * 클라이언트가 이미 무의미해진 재시도를 하게 된다.
+         */
+        try {
+            adminLogoutTransactionService.recordSuccess(adminId);
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_LOGOUT_AUDIT_LOG_FAILED adminId={}", adminId, e);
+        }
+
         log.info("event=ADMIN_LOGOUT success=true adminId={}", adminId);
     }
 
@@ -280,12 +293,9 @@ public class AdminAuthService {
         }
 
         // 2. timeout/연결 단절로 결과를 알 수 없다면 실제 Redis 상태를 다시 조회한다.
-        RedisDeletionState state =
-                checkAction.get();
+        RedisDeletionState state = checkAction.get();
 
-        if (state == RedisDeletionState.DELETED) {
-            return RedisMutationOutcome.CONFIRMED;
-        }
+        if (state == RedisDeletionState.DELETED) { return RedisMutationOutcome.CONFIRMED; }
 
         // 3. 아직 키가 남아 있거나, 조회 결과 자체를 확인할 수 없으면 한 번 더 삭제한다.
         // Redis DELETE는 멱등적이므로 이미 삭제된 상태에서 다시 호출돼도 최종 결과는 같다.
