@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
 class OptionAvailabilitySyncOutcomeServiceTest {
@@ -28,6 +29,13 @@ class OptionAvailabilitySyncOutcomeServiceTest {
     @BeforeEach
     void setUp() {
         sut = new OptionAvailabilitySyncOutcomeService(failureRepository);
+    }
+
+    // (UT-3-04) 반복문 없이 "한도 직전(MAX_RETRY_ATTEMPTS - 1)까지 실패한" 상태를 바로 픽스처로 만든다
+    private static OptionAvailabilitySyncFailure failureAtAttempt(int attemptCount) {
+        OptionAvailabilitySyncFailure failure = OptionAvailabilitySyncFailure.record(11L, true, OCCURRED_AT);
+        ReflectionTestUtils.setField(failure, "attemptCount", attemptCount);
+        return failure;
     }
 
     @Test
@@ -50,11 +58,8 @@ class OptionAvailabilitySyncOutcomeServiceTest {
 
     @Test
     void 재시도_한도를_넘으면_그래도_행은_유지한다() {
-        // 5회(MAX_RETRY_ATTEMPTS)까지 계속 실패시킨 상태를 재현
-        OptionAvailabilitySyncFailure failure = OptionAvailabilitySyncFailure.record(11L, true, OCCURRED_AT);
-        for (int i = 0; i < 4; i++) {
-            failure.markRetryFailed();
-        }
+        // given — 이미 4회 실패한 상태(다음 실패가 5번째, MAX_RETRY_ATTEMPTS)
+        OptionAvailabilitySyncFailure failure = failureAtAttempt(4);
         when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
 
         sut.markFailed(1L, new RuntimeException("lock timeout"));
