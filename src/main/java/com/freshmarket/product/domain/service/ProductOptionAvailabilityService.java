@@ -14,12 +14,18 @@ public class ProductOptionAvailabilityService {
     private final ProductOptionRepository productOptionRepository;
 
     /*
-     * 옵션이 존재하지 않거나(0건 갱신), occurredAt보다 더 최신 사실이 이미 반영돼 있어도(DI-2-01,
-     * 역시 0건 갱신) 예외를 던지지 않고 조용히 넘어간다.
-     * AFTER_COMMIT 리스너에서 예외가 나면 원 요청 스레드로 동기 전파돼, 이미 성공적으로 끝난 로트
-     * 입고 요청이 뒤늦게 500으로 뒤집힐 수 있다.
+     * (DI-2-01) 0건 갱신이 "대상 없음"인지 "이미 더 최신 사실이 반영됨"인지 구분한다.
+     * 후자는 낡은 이벤트를 정상적으로 무시한 것이라 조용히 넘어가지만, 전자는 실제로 반영에
+     * 실패한 것이라 예외를 던져 호출부(OptionAvailabilityEventListener)가 재시도 큐로 보내게 한다.
+     * 예외를 던져도 안전한 이유는 그 리스너가 AFTER_COMMIT에서 이 예외를 잡아 삼키기 때문이다 —
+     * 원 요청 스레드로 전파되지 않으니, 이미 성공적으로 끝난 로트 입고 요청이 뒤늦게 500으로
+     * 뒤집히는 일은 없다.
      */
     public void updateSoldOut(Long productOptionId, boolean soldOut, LocalDateTime occurredAt) {
-        productOptionRepository.updateSoldOutIfNewer(productOptionId, soldOut, occurredAt);
+        int updatedRows = productOptionRepository.updateSoldOutIfNewer(productOptionId, soldOut, occurredAt);
+        if (updatedRows == 0 && !productOptionRepository.existsById(productOptionId)) {
+            throw new IllegalStateException(
+                    "대상 옵션을 찾을 수 없어 품절 여부를 갱신하지 못했다. productOptionId=" + productOptionId);
+        }
     }
 }
