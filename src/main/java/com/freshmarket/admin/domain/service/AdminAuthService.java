@@ -180,8 +180,6 @@ public class AdminAuthService {
         LocalDateTime cutoff = LocalDateTime.now(clock);
         invalidateAccessTokenOrThrow(role, adminId, cutoff);
 
-        adminLogoutTransactionService.recordSuccess(adminId);
-
         /*
          * 이 시점이면 Refresh Token 폐기와 Access Token 차단은 이미 확정된 뒤다.
          * 감사 로그는 그 결과를 기록만 하는 부가 작업이라, 저장이 실패해도 이미 끝난 로그아웃 자체를 실패로 되돌리지 않는다(fail-open).
