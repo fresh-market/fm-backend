@@ -7,17 +7,27 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.freshmarket.common.response.CursorPageResponse;
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.domain.dto.AdminProductCreateRequest;
+import com.freshmarket.product.domain.dto.AdminProductListItem;
+import com.freshmarket.product.domain.dto.AdminProductListRow;
 import com.freshmarket.product.domain.dto.AdminProductOptionCreateRequest;
 import com.freshmarket.product.domain.dto.AdminProductResponse;
+import com.freshmarket.product.domain.dto.AdminProductSearchCondition;
+import com.freshmarket.product.domain.entity.Category;
 import com.freshmarket.product.domain.entity.Product;
 import com.freshmarket.product.domain.entity.ProductOption;
+import com.freshmarket.product.domain.entity.SaleStatus;
 import com.freshmarket.product.domain.entity.StorageType;
 import com.freshmarket.product.domain.exception.ProductErrorCode;
 import com.freshmarket.product.domain.exception.ProductException;
 import com.freshmarket.product.domain.repository.CategoryRepository;
 import com.freshmarket.product.domain.repository.ProductOptionRepository;
+import com.freshmarket.product.domain.repository.ProductQueryRepository;
 import com.freshmarket.product.domain.repository.ProductRepository;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -29,7 +39,7 @@ import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 
-// AdminProductService의 등록과 각 실패 케이스를 검증한다
+// AdminProductService의 등록, 목록/단건 조회와 각 실패 케이스를 검증한다
 @ExtendWith(MockitoExtension.class)
 class AdminProductServiceTest {
 
@@ -41,6 +51,9 @@ class AdminProductServiceTest {
 
     @Mock
     private CategoryRepository categoryRepository;
+
+    @Mock
+    private ProductQueryRepository productQueryRepository;
 
     @InjectMocks
     private AdminProductService adminProductService;
@@ -292,6 +305,151 @@ class AdminProductServiceTest {
         // when, then
         assertThatThrownBy(() -> adminProductService.register(request))
                 .isSameAs(unknownViolation);
+    }
+
+    @Test
+    void 조건에_맞는_상품_목록을_커서로_조회한다() {
+        // given
+        AdminProductSearchCondition condition = new AdminProductSearchCondition(
+                null, null, null, false, null, 20);
+        AdminProductListRow row = productListRowFixture(1L, "제주 감귤 1kg", 4L, false);
+        when(productQueryRepository.searchForAdmin(condition)).thenReturn(List.of(row));
+        when(categoryRepository.findAllById(List.of(4L))).thenReturn(List.of(categoryFixture(4L, "과일")));
+
+        // when
+        CursorPageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
+
+        // then
+        assertThat(result.items()).hasSize(1);
+        assertThat(result.items().get(0).name()).isEqualTo("제주 감귤 1kg");
+        assertThat(result.items().get(0).category().name()).isEqualTo("과일");
+        assertThat(result.nextPageToken()).isNull();
+    }
+
+    @Test
+    void 삭제된_상품도_deleted가_true로_내려간다() {
+        // given
+        AdminProductSearchCondition condition = new AdminProductSearchCondition(
+                null, null, null, true, null, 20);
+        AdminProductListRow deleted = productListRowFixture(1L, "제주 감귤 1kg", 4L, true);
+        when(productQueryRepository.searchForAdmin(condition)).thenReturn(List.of(deleted));
+        when(categoryRepository.findAllById(List.of(4L))).thenReturn(List.of(categoryFixture(4L, "과일")));
+
+        // when
+        CursorPageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
+
+        // then
+        assertThat(result.items().get(0).deleted()).isTrue();
+    }
+
+    @Test
+    void 목록_조회_결과가_없으면_빈_목록을_준다() {
+        // given
+        AdminProductSearchCondition condition = new AdminProductSearchCondition(
+                null, null, null, false, null, 20);
+        when(productQueryRepository.searchForAdmin(condition)).thenReturn(List.of());
+
+        // when
+        CursorPageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
+
+        // then
+        assertThat(result.items()).isEmpty();
+        assertThat(result.nextPageToken()).isNull();
+    }
+
+    @Test
+    void 다음_페이지가_있으면_토큰을_채운다() {
+        // given — 리포지토리가 pageSize보다 하나 더 주면 다음 페이지가 있다는 뜻이다
+        AdminProductSearchCondition condition = new AdminProductSearchCondition(
+                null, null, null, false, null, 1);
+        AdminProductListRow first = productListRowFixture(2L, "제주 감귤 1kg", 4L, false);
+        AdminProductListRow extra = productListRowFixture(1L, "무농약 사과", 4L, false);
+        when(productQueryRepository.searchForAdmin(condition)).thenReturn(List.of(first, extra));
+        when(categoryRepository.findAllById(List.of(4L))).thenReturn(List.of(categoryFixture(4L, "과일")));
+
+        // when
+        CursorPageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
+
+        // then
+        assertThat(result.items()).hasSize(1);
+        assertThat(result.items().get(0).name()).isEqualTo("제주 감귤 1kg");
+        assertThat(result.nextPageToken()).isNotNull();
+    }
+
+    @Test
+    void 페이지_토큰으로_커서를_복원해_다음_페이지를_조회한다() {
+        // given
+        PageCursor cursor = new PageCursor(5L, LocalDateTime.of(2026, 8, 20, 0, 0).toString());
+        String pageToken = PageTokens.encode(cursor);
+        AdminProductSearchCondition condition = new AdminProductSearchCondition(
+                null, null, null, false, PageTokens.decode(pageToken), 20);
+        when(productQueryRepository.searchForAdmin(condition)).thenReturn(List.of());
+
+        // when
+        CursorPageResponse<AdminProductListItem> result = adminProductService.findAll(condition);
+
+        // then
+        assertThat(result.items()).isEmpty();
+    }
+
+    @Test
+    void 상품_단건을_조회한다() {
+        // given
+        Product product = productFixture(1L, "제주 감귤 1kg", 4L);
+        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
+        when(productOptionRepository.findAllByProductId(1L))
+                .thenReturn(List.of(ProductOption.register(1L, "1kg", 12900)));
+
+        // when
+        AdminProductResponse result = adminProductService.findById(1L);
+
+        // then
+        assertThat(result.productId()).isEqualTo(1L);
+        assertThat(result.options()).hasSize(1);
+    }
+
+    @Test
+    void 삭제된_상품도_단건_조회는_그대로_보여준다() {
+        // given — 회원용 상세와 달리 관리자는 삭제 상품도 조회할 수 있어야 한다
+        Product deleted = productFixture(1L, "제주 감귤 1kg", 4L);
+        ReflectionTestUtils.setField(deleted, "deletedAt", LocalDateTime.now());
+        when(productRepository.findById(1L)).thenReturn(Optional.of(deleted));
+        when(productOptionRepository.findAllByProductId(1L)).thenReturn(List.of());
+
+        // when
+        AdminProductResponse result = adminProductService.findById(1L);
+
+        // then
+        assertThat(result.productId()).isEqualTo(1L);
+    }
+
+    @Test
+    void 존재하지_않는_상품을_단건_조회하면_실패한다() {
+        // given
+        when(productRepository.findById(999L)).thenReturn(Optional.empty());
+
+        // when, then
+        assertThatThrownBy(() -> adminProductService.findById(999L))
+                .isInstanceOf(ProductException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.PRODUCT_NOT_FOUND);
+    }
+
+    private Product productFixture(Long id, String name, Long categoryId) {
+        Product product = Product.register("req-" + id, "P-2026-ABC123", name, categoryId, 2L,
+                StorageType.COLD, 3, "달콤한 제주 감귤입니다.");
+        ReflectionTestUtils.setField(product, "id", id);
+        return product;
+    }
+
+    private AdminProductListRow productListRowFixture(Long id, String name, Long categoryId, boolean deleted) {
+        return new AdminProductListRow(id, "P-2026-ABC123", name, categoryId, SaleStatus.ON_SALE, deleted,
+                LocalDateTime.of(2026, 8, 24, 10, 0));
+    }
+
+    private Category categoryFixture(Long id, String name) {
+        Category category = Category.register(name);
+        ReflectionTestUtils.setField(category, "id", id);
+        return category;
     }
 
     // 실제 저장이 없는 단위 테스트에서 JPA가 채워줄 생성 ID를 대신 채워준다.
