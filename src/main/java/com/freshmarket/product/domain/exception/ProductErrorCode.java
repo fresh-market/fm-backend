@@ -36,8 +36,6 @@ public enum ProductErrorCode implements ErrorCode {
      * 전달되어 행 삭제를 막아야 한다 — 그래야 고아 객체 대신 재시도 가능한 상태로 남는다.
      */
     IMAGE_DELETE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "PRODUCT-014", "이미지 삭제에 실패했습니다. 잠시 후 다시 시도해주세요."),
-    // 같은 이미지를 동시에 건드리는 confirm()/delete()끼리 경합해 쓰기 락 대기가 타임아웃된 경우
-    IMAGE_PROCESSING_IN_PROGRESS(HttpStatus.CONFLICT, "PRODUCT-015", "동일한 이미지에 대한 처리가 아직 진행 중입니다. 잠시 후 다시 시도해주세요."),
     /*
      * (API-5-07) requestId는 DB 전역에서 유일하다. save() 시점에 유니크 위반이 났는데 같은
      * (requestId, productId) 조합으로 재조회해도 없다면, 그 requestId는 다른 상품 소속이라는

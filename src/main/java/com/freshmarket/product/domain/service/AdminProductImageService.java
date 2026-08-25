@@ -21,7 +21,6 @@ import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import software.amazon.awssdk.services.s3.model.S3Exception;
@@ -31,9 +30,14 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  * 업로드는 앱을 거치지 않고 클라이언트가 S3로 직접 올린다 — 서버는 URL 발급과 확정만 한다
  * (백엔드공통_이미지저장소_설계.md 6.2절).
  */
+/*
+ * (DI-4-02) 클래스 레벨 @Transactional(readOnly = true)을 두지 않는다 — confirm()/delete()가
+ * S3 호출을 트랜잭션 밖에서 실행해야 하는데, 클래스 기본값이 있으면 메서드 전체가 그 트랜잭션에
+ * 묶여 버린다. 대신 각 메서드가 필요한 만큼만 Spring Data 리포지토리 메서드(자체적으로 트랜잭션을
+ * 가진다)로 짧게 끊어 처리한다 — MemberLoginService.login()과 같은 구조다.
+ */
 @Slf4j
 @Service
-@Transactional(readOnly = true)
 public class AdminProductImageService {
 
     private static final Map<String, String> EXTENSION_BY_CONTENT_TYPE = Map.of(
@@ -133,20 +137,14 @@ public class AdminProductImageService {
      * 확정 근거는 통지가 아니라 HeadObject다(INF-11-10) — 통지만으로 확정하면 PUT을 안 했거나
      * 실패했어도 확정되어 객체 없는 key가 조회에 나갈 수 있다.
      *
-     * 조회에 쓰기 락을 건다(findByUploadIdForUpdate) — 같은 이미지를 동시에 건드리는
-     * confirm()/delete()끼리 경합하면(같은 uploadId 중복 확정 요청, 확정 중 삭제 등) 조회~커밋
-     * 사이 상태가 바뀔 창을 없앤다(AdminLotService.findLotForUpdate와 같은 이유).
+     * (DI-4-02) S3 호출(HeadObject, 조건 불일치 시 DeleteObject)은 트랜잭션 밖에서 끝낸다. DB
+     * 상태 전이는 confirmOrThrow()의 원자적 UPDATE 하나로만 하고, 조회에는 더는 쓰기 락을 걸지
+     * 않는다 — "PENDING일 때만" 조건으로 갱신해 그 사이 값이 바뀌었으면(중복 확정, 확정 중 삭제)
+     * 영향받은 행이 0이 되어 실패로 걸러진다(MemberLoginService.login()과 같은 이유).
      */
-    @Transactional
     public AdminProductImageConfirmResponse confirm(Long productId, Long imageId,
             AdminProductImageConfirmRequest request) {
-        ProductImage image = findByUploadIdForUpdate(request.uploadId())
-                .filter(found -> found.getId().equals(imageId) && found.getProductId().equals(productId))
-                .orElseThrow(() -> new ProductException(ProductErrorCode.IMAGE_NOT_FOUND));
-
-        if (image.getUploadStatus() != UploadStatus.PENDING) {
-            throw new ProductException(ProductErrorCode.IMAGE_ALREADY_CONFIRMED);
-        }
+        ProductImage image = findConfirmableImage(productId, imageId, request.uploadId());
 
         S3ObjectMetadata metadata = headObject(image.getObjectKey())
                 .orElseThrow(() -> new ProductException(ProductErrorCode.IMAGE_UPLOAD_NOT_FOUND));
@@ -157,8 +155,32 @@ public class AdminProductImageService {
             throw new ProductException(ProductErrorCode.IMAGE_UPLOAD_MISMATCH);
         }
 
-        image.confirm();
+        confirmOrThrow(image.getId());
         return AdminProductImageConfirmResponse.of(image);
+    }
+
+    private ProductImage findConfirmableImage(Long productId, Long imageId, UUID uploadId) {
+        ProductImage image = productImageRepository.findByUploadId(uploadId)
+                .filter(found -> found.getId().equals(imageId) && found.getProductId().equals(productId))
+                .orElseThrow(() -> new ProductException(ProductErrorCode.IMAGE_NOT_FOUND));
+        if (image.getUploadStatus() != UploadStatus.PENDING) {
+            throw new ProductException(ProductErrorCode.IMAGE_ALREADY_CONFIRMED);
+        }
+        return image;
+    }
+
+    /*
+     * 여기서 영향받은 행이 0이면, S3 확인 이후 이 행이 바뀐 것이다(동시 확정 요청, 확정 중 삭제).
+     * 어느 쪽인지 구분하려고 한 번 더 조회한다 — 행이 남아 있으면 이미 확정된 것이고, 없으면
+     * 그 사이 삭제된 것이다.
+     */
+    private void confirmOrThrow(Long imageId) {
+        int updated = productImageRepository.confirmIfPending(imageId, UploadStatus.PENDING, UploadStatus.CONFIRMED);
+        if (updated == 0) {
+            boolean stillExists = productImageRepository.existsById(imageId);
+            throw new ProductException(
+                    stillExists ? ProductErrorCode.IMAGE_ALREADY_CONFIRMED : ProductErrorCode.IMAGE_NOT_FOUND);
+        }
     }
 
     /*
@@ -167,13 +189,15 @@ public class AdminProductImageService {
      * 지우면 뒤이은 행 삭제가 실패해도 사용자가 다시 지워서 해소된다. DeleteObject는 없는 객체에도
      * 성공하므로(멱등) 이 순서에서 재시도가 안전하다.
      *
-     * 조회에 쓰기 락을 건다 — 삭제 중인 이미지를 동시에 confirm()하는 경합을 막는다. 락 없이
-     * confirm()이 먼저 커밋해 버리면, 뒤이은 delete()가 방금 확정된 이미지를 그대로 지워
-     * "확정 직후 삭제"가 사용자 의도와 다르게 조용히 일어날 수 있다.
+     * (DI-4-02) S3 삭제는 트랜잭션 밖에서 끝낸다. DB 행 삭제는 deleteByIdAndProductId()의 원자적
+     * DELETE 하나로만 하고, 조회에는 더는 쓰기 락을 걸지 않는다 — DeleteObject·DELETE 둘 다 멱등이라
+     * 그 사이 다른 요청이 먼저 지웠어도(영향받은 행 0) 목표 상태(행 없음)에 이미 도달한 것이라
+     * 오류로 보지 않는다. 이 락은 원래 confirm() 직후 delete()가 곧바로 도는 순서를 막는
+     * 용도였는데, 그 순서 자체가 데이터 정합성을 해치지 않아 트랜잭션 경계와 맞바꿀 만하다고
+     * 판단했다 — 그 순서가 사용자 관점에서 문제가 된다면 별도로 다뤄야 한다.
      */
-    @Transactional
     public void delete(Long productId, Long imageId) {
-        ProductImage image = findByIdAndProductIdForUpdate(imageId, productId)
+        ProductImage image = productImageRepository.findByIdAndProductId(imageId, productId)
                 .orElseThrow(() -> new ProductException(ProductErrorCode.IMAGE_NOT_FOUND));
         try {
             s3ImageStorageClient.deleteObjectOrThrow(image.getObjectKey());
@@ -183,27 +207,7 @@ public class AdminProductImageService {
                     productId, imageId, image.getObjectKey(), e);
             throw new ProductException(ProductErrorCode.IMAGE_DELETE_FAILED, e);
         }
-        productImageRepository.delete(image);
-    }
-
-    /*
-     * 락 대기 타임아웃/교착은 도메인 밖으로 raw 타입을 새어나가게 두지 않고 재시도 가능한 오류로
-     * 감싼다(AdminLotService.findLotForUpdate와 같은 패턴).
-     */
-    private Optional<ProductImage> findByUploadIdForUpdate(UUID uploadId) {
-        try {
-            return productImageRepository.findByUploadIdForUpdate(uploadId);
-        } catch (PessimisticLockingFailureException e) {
-            throw new ProductException(ProductErrorCode.IMAGE_PROCESSING_IN_PROGRESS, e);
-        }
-    }
-
-    private Optional<ProductImage> findByIdAndProductIdForUpdate(Long imageId, Long productId) {
-        try {
-            return productImageRepository.findByIdAndProductIdForUpdate(imageId, productId);
-        } catch (PessimisticLockingFailureException e) {
-            throw new ProductException(ProductErrorCode.IMAGE_PROCESSING_IN_PROGRESS, e);
-        }
+        productImageRepository.deleteByIdAndProductId(imageId, productId);
     }
 
     /*

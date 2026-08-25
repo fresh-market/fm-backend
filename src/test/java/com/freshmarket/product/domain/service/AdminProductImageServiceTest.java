@@ -18,6 +18,7 @@ import com.freshmarket.product.domain.dto.AdminProductImageConfirmResponse;
 import com.freshmarket.product.domain.dto.AdminProductImageCreateUploadUrlRequest;
 import com.freshmarket.product.domain.dto.AdminProductImageUploadUrlResponse;
 import com.freshmarket.product.domain.entity.ProductImage;
+import com.freshmarket.product.domain.entity.UploadStatus;
 import com.freshmarket.product.domain.exception.ProductErrorCode;
 import com.freshmarket.product.domain.exception.ProductException;
 import com.freshmarket.product.domain.repository.ProductImageRepository;
@@ -27,7 +28,6 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
-import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 import software.amazon.awssdk.services.s3.model.S3Exception;
@@ -190,17 +190,19 @@ class AdminProductImageServiceTest {
         // given
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
-        when(productImageRepository.findByUploadIdForUpdate(uploadId)).thenReturn(Optional.of(image));
+        when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
         when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
                 .thenReturn(Optional.of(new S3ObjectMetadata(100_000L, "image/jpeg")));
+        when(productImageRepository.confirmIfPending(88L, UploadStatus.PENDING, UploadStatus.CONFIRMED))
+                .thenReturn(1);
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
 
         // when
         AdminProductImageConfirmResponse response = adminProductImageService.confirm(1L, 88L, request);
 
-        // then
+        // then — DI-4-02: 트랜잭션 안 엔티티 변경(dirty checking)이 아니라 원자적 UPDATE로 확정한다
         assertThat(response.productImageId()).isEqualTo(88L);
-        assertThat(image.getUploadStatus().name()).isEqualTo("CONFIRMED");
+        verify(productImageRepository).confirmIfPending(88L, UploadStatus.PENDING, UploadStatus.CONFIRMED);
         verify(s3ImageStorageClient, never()).deleteObject(any());
     }
 
@@ -209,7 +211,7 @@ class AdminProductImageServiceTest {
         // given — HeadObject가 404가 아닌 다른 이유(타임아웃, 5xx 등)로 실패한 상황
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
-        when(productImageRepository.findByUploadIdForUpdate(uploadId)).thenReturn(Optional.of(image));
+        when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
         when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
                 .thenThrow((S3Exception) S3Exception.builder().statusCode(500).message("Internal Error").build());
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
@@ -224,7 +226,7 @@ class AdminProductImageServiceTest {
     void uploadId로_못_찾으면_실패한다() {
         // given
         UUID uploadId = UUID.randomUUID();
-        when(productImageRepository.findByUploadIdForUpdate(uploadId)).thenReturn(Optional.empty());
+        when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.empty());
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
 
         // when, then
@@ -234,17 +236,44 @@ class AdminProductImageServiceTest {
     }
 
     @Test
-    void 확정_중_락_경합이_발생하면_처리중_오류를_던진다() {
-        // given — 같은 이미지를 동시에 confirm()/delete()하는 경합으로 쓰기 락 대기가 타임아웃된 상황
+    void 확정_직전에_다른_요청이_먼저_확정하면_실패한다() {
+        // given — DI-4-02로 락을 없앤 뒤의 경합: HeadObject 이후, 원자적 UPDATE 직전에 동시 확정
+        // 요청이 먼저 커밋해 PENDING 조건이 깨진 상황(영향받은 행 0). 행은 남아 있으므로 이미
+        // 확정된 것으로 본다
         UUID uploadId = UUID.randomUUID();
-        when(productImageRepository.findByUploadIdForUpdate(uploadId))
-                .thenThrow(new CannotAcquireLockException("Lock wait timeout exceeded"));
+        ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
+        when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
+        when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
+                .thenReturn(Optional.of(new S3ObjectMetadata(100_000L, "image/jpeg")));
+        when(productImageRepository.confirmIfPending(88L, UploadStatus.PENDING, UploadStatus.CONFIRMED))
+                .thenReturn(0);
+        when(productImageRepository.existsById(88L)).thenReturn(true);
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
 
         // when, then
         assertThatThrownBy(() -> adminProductImageService.confirm(1L, 88L, request))
                 .isInstanceOf(ProductException.class)
-                .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_PROCESSING_IN_PROGRESS);
+                .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_ALREADY_CONFIRMED);
+    }
+
+    @Test
+    void 확정_직전에_다른_요청이_먼저_삭제하면_실패한다() {
+        // given — 위와 같은 경합이지만, 그 사이 delete()가 먼저 행을 지운 경우(영향받은 행 0,
+        // 재조회해도 행이 없음)
+        UUID uploadId = UUID.randomUUID();
+        ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
+        when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
+        when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
+                .thenReturn(Optional.of(new S3ObjectMetadata(100_000L, "image/jpeg")));
+        when(productImageRepository.confirmIfPending(88L, UploadStatus.PENDING, UploadStatus.CONFIRMED))
+                .thenReturn(0);
+        when(productImageRepository.existsById(88L)).thenReturn(false);
+        AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
+
+        // when, then
+        assertThatThrownBy(() -> adminProductImageService.confirm(1L, 88L, request))
+                .isInstanceOf(ProductException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_NOT_FOUND);
     }
 
     @Test
@@ -252,7 +281,7 @@ class AdminProductImageServiceTest {
         // given — uploadId는 유효하지만 그 행은 다른 상품(2L) 소속이다
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 2L, "products/ab/key.jpg", uploadId);
-        when(productImageRepository.findByUploadIdForUpdate(uploadId)).thenReturn(Optional.of(image));
+        when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
 
         // when, then — productId가 1L인 경로로 요청함
@@ -267,7 +296,7 @@ class AdminProductImageServiceTest {
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
         image.confirm();
-        when(productImageRepository.findByUploadIdForUpdate(uploadId)).thenReturn(Optional.of(image));
+        when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
 
         // when, then
@@ -281,7 +310,7 @@ class AdminProductImageServiceTest {
         // given — HeadObject가 404(빈 값)
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
-        when(productImageRepository.findByUploadIdForUpdate(uploadId)).thenReturn(Optional.of(image));
+        when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
         when(s3ImageStorageClient.headObject("products/ab/key.jpg")).thenReturn(Optional.empty());
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
 
@@ -296,7 +325,7 @@ class AdminProductImageServiceTest {
         // given — 발급 때는 정상 크기였지만 실제로는 상한을 넘는 파일이 올라온 상황
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
-        when(productImageRepository.findByUploadIdForUpdate(uploadId)).thenReturn(Optional.of(image));
+        when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
         when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
                 .thenReturn(Optional.of(new S3ObjectMetadata(MAX_SIZE_BYTES + 1, "image/jpeg")));
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
@@ -313,7 +342,7 @@ class AdminProductImageServiceTest {
         // given
         UUID uploadId = UUID.randomUUID();
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", uploadId);
-        when(productImageRepository.findByUploadIdForUpdate(uploadId)).thenReturn(Optional.of(image));
+        when(productImageRepository.findByUploadId(uploadId)).thenReturn(Optional.of(image));
         when(s3ImageStorageClient.headObject("products/ab/key.jpg"))
                 .thenReturn(Optional.of(new S3ObjectMetadata(100L, "application/pdf")));
         AdminProductImageConfirmRequest request = new AdminProductImageConfirmRequest(uploadId);
@@ -331,7 +360,7 @@ class AdminProductImageServiceTest {
     void 이미지를_삭제하면_S3_객체를_먼저_지우고_DB_행을_지운다() {
         // given — (INF-11-08) 순서가 반대면 행을 잃어 객체를 다시 찾을 방법이 없어진다
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", UUID.randomUUID());
-        when(productImageRepository.findByIdAndProductIdForUpdate(88L, 1L)).thenReturn(Optional.of(image));
+        when(productImageRepository.findByIdAndProductId(88L, 1L)).thenReturn(Optional.of(image));
 
         // when
         adminProductImageService.delete(1L, 88L);
@@ -339,14 +368,14 @@ class AdminProductImageServiceTest {
         // then
         InOrder order = inOrder(s3ImageStorageClient, productImageRepository);
         order.verify(s3ImageStorageClient).deleteObjectOrThrow("products/ab/key.jpg");
-        order.verify(productImageRepository).delete(image);
+        order.verify(productImageRepository).deleteByIdAndProductId(88L, 1L);
     }
 
     @Test
     void S3_객체_삭제가_실패하면_DB_행을_지우지_않는다() {
         // given — (INF-11-08) 객체 삭제 실패가 삼켜지면 행만 지워져 객체가 고아로 남는다
         ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", UUID.randomUUID());
-        when(productImageRepository.findByIdAndProductIdForUpdate(88L, 1L)).thenReturn(Optional.of(image));
+        when(productImageRepository.findByIdAndProductId(88L, 1L)).thenReturn(Optional.of(image));
         S3Exception s3Exception = (S3Exception) S3Exception.builder().statusCode(500).build();
         doThrow(s3Exception).when(s3ImageStorageClient).deleteObjectOrThrow("products/ab/key.jpg");
 
@@ -355,32 +384,33 @@ class AdminProductImageServiceTest {
                 .isInstanceOf(ProductException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_DELETE_FAILED)
                 .hasCause(s3Exception);
-        verify(productImageRepository, never()).delete(any());
+        verify(productImageRepository, never()).deleteByIdAndProductId(any(), any());
     }
 
     @Test
-    void 삭제_중_락_경합이_발생하면_처리중_오류를_던진다() {
-        // given
-        when(productImageRepository.findByIdAndProductIdForUpdate(88L, 1L))
-                .thenThrow(new CannotAcquireLockException("Lock wait timeout exceeded"));
+    void 삭제_직전에_다른_요청이_먼저_지웠어도_성공한다() {
+        // given — DI-4-02로 락을 없앤 뒤의 경합: S3 삭제(멱등) 이후, DB 삭제 직전에 동시 삭제
+        // 요청이 먼저 행을 지운 상황(영향받은 행 0). 목표 상태(행 없음)에 이미 도달했으므로 오류가
+        // 아니다
+        ProductImage image = imageFixture(88L, 1L, "products/ab/key.jpg", UUID.randomUUID());
+        when(productImageRepository.findByIdAndProductId(88L, 1L)).thenReturn(Optional.of(image));
+        when(productImageRepository.deleteByIdAndProductId(88L, 1L)).thenReturn(0);
 
-        // when, then
-        assertThatThrownBy(() -> adminProductImageService.delete(1L, 88L))
-                .isInstanceOf(ProductException.class)
-                .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_PROCESSING_IN_PROGRESS);
-        verify(s3ImageStorageClient, never()).deleteObjectOrThrow(any());
+        // when, then — 예외 없이 끝난다
+        adminProductImageService.delete(1L, 88L);
+        verify(s3ImageStorageClient).deleteObjectOrThrow("products/ab/key.jpg");
     }
 
     @Test
     void 없는_이미지를_삭제하면_실패한다() {
         // given
-        when(productImageRepository.findByIdAndProductIdForUpdate(88L, 1L)).thenReturn(Optional.empty());
+        when(productImageRepository.findByIdAndProductId(88L, 1L)).thenReturn(Optional.empty());
 
         // when, then
         assertThatThrownBy(() -> adminProductImageService.delete(1L, 88L))
                 .isInstanceOf(ProductException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_NOT_FOUND);
-        verify(productImageRepository, never()).delete(any());
+        verify(productImageRepository, never()).deleteByIdAndProductId(any(), any());
         verify(s3ImageStorageClient, never()).deleteObjectOrThrow(any());
     }
 

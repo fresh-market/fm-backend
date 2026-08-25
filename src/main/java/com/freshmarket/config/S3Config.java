@@ -20,8 +20,9 @@ public class S3Config {
 
     /*
      * AWS SDK v2는 apiCallTimeout/apiCallAttemptTimeout을 기본적으로 꺼 둔다(무제한) — S3가 응답을
-     * 안 주면 호출이 사실상 무기한 걸릴 수 있다. AdminProductImageService.confirm()/delete()가 이
-     * 호출을 DB 쓰기 락을 쥔 채로 하므로(DI-4-03), 여기서 막지 않으면 락이 그만큼 오래 묶인다.
+     * 안 주면 호출이 사실상 무기한 걸릴 수 있다. AdminProductImageService.confirm()/delete()는 이
+     * 호출을 DB 트랜잭션 밖에서 하지만(DI-4-02), 그와 별개로 호출 자체가 무기한 걸리는 상황은
+     * 막아야 한다 — 안 그러면 그 요청을 처리하던 스레드/커넥션이 응답 없는 S3를 무기한 기다린다.
      * WebClientConfig(카카오 호출)가 명시적 타임아웃을 두는 것과 같은 이유다.
      */
     private static final Duration API_CALL_ATTEMPT_TIMEOUT = Duration.ofSeconds(3);
