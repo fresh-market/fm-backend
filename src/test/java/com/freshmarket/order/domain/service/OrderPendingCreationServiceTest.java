@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.freshmarket.cart.CartApi;
+import com.freshmarket.cart.CartCheckoutCompletedEvent;
 import com.freshmarket.cart.CartCheckoutInfo;
 import com.freshmarket.cart.CartCheckoutItem;
 import com.freshmarket.common.auth.opaque.TokenHasher;
@@ -44,6 +45,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
@@ -72,13 +74,16 @@ class OrderPendingCreationServiceTest {
     @Mock
     private OrderNoGenerator orderNoGenerator;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     private OrderPendingCreationService sut;
 
     @BeforeEach
     void setUp() {
         Clock clock = Clock.fixed(Instant.parse("2026-08-21T03:00:00Z"), ZoneId.of("Asia/Seoul"));
-        sut = new OrderPendingCreationService(
-                orderRepository, orderItemRepository, cartApi, memberApi, stockApi, productApi, orderNoGenerator, clock);
+        sut = new OrderPendingCreationService(orderRepository, orderItemRepository, cartApi, memberApi, stockApi,
+                productApi, orderNoGenerator, clock, eventPublisher);
     }
 
     @Test
@@ -102,7 +107,8 @@ class OrderPendingCreationServiceTest {
         assertThat(captor.getValue().orderId()).isEqualTo(100L);
         assertThat(captor.getValue().items()).hasSize(2);
 
-        verify(cartApi).removeCheckedOutItems(MEMBER_ID, checkoutInfo().items());
+        verify(cartApi, never()).removeCheckedOutItems(any(), any());
+        verify(eventPublisher).publishEvent(new CartCheckoutCompletedEvent(MEMBER_ID, checkoutInfo().items()));
     }
 
     @Test
@@ -160,6 +166,7 @@ class OrderPendingCreationServiceTest {
                 .isInstanceOf(IllegalStateException.class);
 
         verify(cartApi, never()).removeCheckedOutItems(any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -177,6 +184,7 @@ class OrderPendingCreationServiceTest {
         assertThat(result.response().totalAmount()).isEqualTo(28_800);
         verify(cartApi, never()).getCheckoutItems(any(), any());
         verify(cartApi, never()).removeCheckedOutItems(any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
         verify(stockApi).reserve(any());
     }
 

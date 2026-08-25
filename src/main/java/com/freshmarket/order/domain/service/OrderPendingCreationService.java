@@ -1,6 +1,7 @@
 package com.freshmarket.order.domain.service;
 
 import com.freshmarket.cart.CartApi;
+import com.freshmarket.cart.CartCheckoutCompletedEvent;
 import com.freshmarket.cart.CartCheckoutInfo;
 import com.freshmarket.cart.CartCheckoutItem;
 import com.freshmarket.common.auth.opaque.TokenHasher;
@@ -33,6 +34,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -57,6 +59,7 @@ class OrderPendingCreationService {
     private final ProductApi productApi;
     private final OrderNoGenerator orderNoGenerator;
     private final Clock clock;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     PendingOrderResult createPendingOrder(Long memberId, OrderCreateRequest request) {
@@ -129,10 +132,14 @@ class OrderPendingCreationService {
         // 롤백된다 — 방금 저장한 order/order_item도 함께 사라진다.
         stockApi.reserve(new StockReservationRequest(order.getId(), reservationItems));
 
-        // 재고 예약이 끝난 뒤에만 장바구니에서 제거한다 — 재고가 모자라 위에서 롤백되면 장바구니는
-        // 그대로 남아 있어야 한다.
+        // (2026-08-25) 장바구니 정리는 주문 성공 여부에 영향 없는 부수효과라 커밋 후로 미룬다.
+        // 이걸 이 트랜잭션 안에서 직접 호출하면 findCartForUpdate 락이 stockApi.reserve()의 대기
+        // 시간까지 물고 가게 된다 — cart 락 자체는 memberId 스코프라 다른 유저와 안 겹치지만, stock
+        // 경합이 있을 때 이 유저 본인의 다른 cart 조작까지 덩달아 오래 막히는 걸 피하려는 목적이다.
+        // 실패해도 이미 주문한 상품이 장바구니에 잠깐 남는 정도라, Kakao unlink처럼 아웃박스+재시도
+        // 안전망까지는 두지 않는다(CartCheckoutCleanupListener 참고).
         if (checkout.isCartOrder()) {
-            cartApi.removeCheckedOutItems(memberId, checkout.cartItems());
+            eventPublisher.publishEvent(new CartCheckoutCompletedEvent(memberId, checkout.cartItems()));
         }
 
         // 명령성 상태 변화 로그 — PII/토큰/pgTid 없이 orderId/상태/금액만 남긴다.
