@@ -91,7 +91,7 @@ public class AdminProductImageService {
      * 유니크 위반). presigned URL은 매번 새로 서명해서 돌려준다 — URL 자체는 저장하지 않고
      * (INF-11-05) 만료 시간이 있어(TTL), 재시도 응답이라도 그 자리에서 바로 쓸 수 있어야 한다.
      */
-    @Transactional
+    @Transactional(timeout = 5)
     public AdminProductImageUploadUrlResponse createUploadUrl(Long productId,
             AdminProductImageCreateUploadUrlRequest request) {
         Optional<ProductImage> existingImage = productImageRepository.findByRequestIdAndProductId(
