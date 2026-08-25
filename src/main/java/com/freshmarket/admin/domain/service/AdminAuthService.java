@@ -51,6 +51,13 @@ public class AdminAuthService {
     // Access Token 차단 커트라인 반영 여부를 확인할 때 사용하는 최소 시간 오프셋
     private static final long CUTOFF_CONFIRMATION_OFFSET_NANOS = 1L;
 
+    // 로그인 실패 로그 포맷
+    private static final String LOG_ADMIN_LOGIN_FAILED = "event=ADMIN_LOGIN success=false loginId={}";
+
+    // Redis 정리/차단 로그에서 반복되는 필드 포맷
+    private static final String LOG_FIELDS_ROLE_ADMIN_ID = "role={} adminId={}";
+    private static final String LOG_FIELDS_TARGET_ROLE_ADMIN_ID = "target={} role={} adminId={}";
+
     private final AdminRepository adminRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
@@ -100,7 +107,7 @@ public class AdminAuthService {
         boolean passwordMatches = passwordEncoder.matches(request.password(), hashToCompare);
 
         if (found.isEmpty() || !passwordMatches) {
-            log.warn("event=ADMIN_LOGIN success=false loginId={}", maskLoginId(request.loginId()));
+            log.warn(LOG_ADMIN_LOGIN_FAILED, maskLoginId(request.loginId()));
             throw new AdminException(AdminErrorCode.LOGIN_FAILED);
         }
 
@@ -110,7 +117,7 @@ public class AdminAuthService {
          */
         Admin admin = found.get();
         if (!admin.isActive()) {
-            log.warn("event=ADMIN_LOGIN success=false loginId={}", maskLoginId(request.loginId()));
+            log.warn(LOG_ADMIN_LOGIN_FAILED, maskLoginId(request.loginId()));
             throw new AdminException(AdminErrorCode.LOGIN_FAILED);
         }
 
@@ -123,7 +130,7 @@ public class AdminAuthService {
         Admin lockedAdmin = adminRepository.findByIdForUpdate(admin.getId())
                 .orElseThrow(() -> new AdminException(AdminErrorCode.LOGIN_FAILED));
         if (!lockedAdmin.isActive()) {
-            log.warn("event=ADMIN_LOGIN success=false loginId={}", maskLoginId(request.loginId()));
+            log.warn(LOG_ADMIN_LOGIN_FAILED, maskLoginId(request.loginId()));
             throw new AdminException(AdminErrorCode.LOGIN_FAILED);
         }
 
@@ -271,7 +278,7 @@ public class AdminAuthService {
 
             log.warn(
                     "event=ADMIN_REFRESH_TOKEN_DELETE_UNKNOWN "
-                            + "target={} role={} adminId={}",
+                            + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
                     target,
                     role,
                     adminId,
@@ -281,7 +288,7 @@ public class AdminAuthService {
 
             log.warn(
                     "event=ADMIN_REFRESH_TOKEN_DELETE_FAILED "
-                            + "target={} role={} adminId={}",
+                            + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
                     target,
                     role,
                     adminId,
@@ -306,7 +313,7 @@ public class AdminAuthService {
 
             log.warn(
                     "event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_UNKNOWN "
-                            + "target={} role={} adminId={}",
+                            + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
                     target,
                     role,
                     adminId,
@@ -316,7 +323,7 @@ public class AdminAuthService {
 
             log.warn(
                     "event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_FAILED "
-                            + "target={} role={} adminId={}",
+                            + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
                     target,
                     role,
                     adminId,
@@ -401,7 +408,7 @@ public class AdminAuthService {
         if (outcome != RedisMutationOutcome.CONFIRMED) {
             log.warn(
                     "event=ADMIN_REFRESH_TOKEN_{}_CLEANUP_{} "
-                            + "role={} adminId={}",
+                            + LOG_FIELDS_ROLE_ADMIN_ID,
                     target,
                     outcome,
                     role,
@@ -440,7 +447,7 @@ public class AdminAuthService {
 
             log.warn(
                     "event=ADMIN_ACCESS_TOKEN_INVALIDATION_UNKNOWN "
-                            + "role={} adminId={}",
+                            + LOG_FIELDS_ROLE_ADMIN_ID,
                     role,
                     adminId,
                     e);
@@ -479,7 +486,7 @@ public class AdminAuthService {
 
             log.warn(
                     "event=ADMIN_ACCESS_TOKEN_INVALIDATION_RETRY_UNKNOWN "
-                            + "role={} adminId={}",
+                            + LOG_FIELDS_ROLE_ADMIN_ID,
                     role,
                     adminId,
                     e);
@@ -527,7 +534,7 @@ public class AdminAuthService {
 
             log.warn(
                     "event=ADMIN_ACCESS_TOKEN_INVALIDATION_CONFIRM_FAILED "
-                            + "role={} adminId={}",
+                            + LOG_FIELDS_ROLE_ADMIN_ID,
                     role,
                     adminId,
                     e);
@@ -544,7 +551,7 @@ public class AdminAuthService {
 
         log.error(
                 "event=ADMIN_ACCESS_TOKEN_INVALIDATION_FAILED "
-                        + "role={} adminId={}",
+                        + LOG_FIELDS_ROLE_ADMIN_ID,
                 role,
                 adminId,
                 cause);
