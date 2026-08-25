@@ -349,6 +349,62 @@ class AdminAuthServiceTest {
                 .isEqualTo(AdminErrorCode.LOGOUT_FAILED);
     }
 
+    @Test
+    void 비밀번호_검증후_잠금_조회에서_관리자가_없으면_로그인에_실패한다() {
+        // given
+        Admin admin = AdminFixture.active(
+                "admin.kim",
+                passwordEncoder.encode(RAW_PASSWORD),
+                AdminRole.ADMIN
+        );
+
+        when(adminRepository.findByLoginId("admin.kim"))
+                .thenReturn(Optional.of(admin));
+
+        when(adminRepository.findByIdForUpdate(admin.getId()))
+                .thenReturn(Optional.empty());
+
+        AdminLoginRequest request =
+                new AdminLoginRequest("admin.kim", RAW_PASSWORD);
+
+        // when, then
+        assertThatThrownBy(() -> adminAuthService.login(request))
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.LOGIN_FAILED);
+    }
+
+    @Test
+    void 비밀번호_검증후_잠금_조회에서_관리자가_비활성화됐으면_로그인에_실패한다() {
+        // given
+        Admin admin = AdminFixture.active(
+                "admin.kim",
+                passwordEncoder.encode(RAW_PASSWORD),
+                AdminRole.ADMIN
+        );
+
+        Admin lockedAdmin = AdminFixture.inactive(
+                "admin.kim",
+                passwordEncoder.encode(RAW_PASSWORD),
+                AdminRole.ADMIN
+        );
+
+        when(adminRepository.findByLoginId("admin.kim"))
+                .thenReturn(Optional.of(admin));
+
+        when(adminRepository.findByIdForUpdate(admin.getId()))
+                .thenReturn(Optional.of(lockedAdmin));
+
+        AdminLoginRequest request =
+                new AdminLoginRequest("admin.kim", RAW_PASSWORD);
+
+        // when, then
+        assertThatThrownBy(() -> adminAuthService.login(request))
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.LOGIN_FAILED);
+    }
+
     /*
      * ==========================
      * 기존 로그인 JWT 검증 테스트
