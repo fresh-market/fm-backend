@@ -42,6 +42,8 @@ import org.springframework.transaction.annotation.Transactional;
  * InvalidDataAccessApiUsageException("Executing an update/delete query")이 난다 — 그래서 login() 전체를 @Transactional로 감싼다.
  * MemberTokenService.issue()도 같은 이유로 Redis 호출을 포함해 메서드 전체가
  * @Transactional이다(트랜잭션 안에서 외부 I/O를 하는 대가보다, DB 백업 자체가 항상 저장되는 게 우선이라는 판단).
+ * Redis가 응답 없이 계속 걸려 있는 최악의 경우까지 커넥션을 붙잡고 있지 않도록 timeout = 5를 둔다
+ * (feat/admin-logout 브랜치의 login()과 동일한 값 — 병합 시 구조를 맞추기 위함이기도 하다).
  */
 @Slf4j
 @Service
@@ -75,7 +77,7 @@ public class AdminAuthService {
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_SOURCE);
     }
 
-    @Transactional
+    @Transactional(timeout = 5)
     public AdminLoginResult login(AdminLoginRequest request) {
         Objects.requireNonNull(request, "request");
 
