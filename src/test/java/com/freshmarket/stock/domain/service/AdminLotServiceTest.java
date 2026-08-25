@@ -453,6 +453,23 @@ class AdminLotServiceTest {
     }
 
     @Test
+    void 폐기_저장_중_알_수_없는_제약_위반은_감싸서_던진다() {
+        // given — uk_movement_request_id가 아닌 다른 위반(예: chk_movement_delta처럼 별도로 변환하지 않는 제약)
+        StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 70);
+        ReflectionTestUtils.setField(lot, "id", 77L);
+        when(stockLotRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(lot));
+        DataIntegrityViolationException unknownViolation = new DataIntegrityViolationException(
+                "Check constraint 'chk_movement_delta' is violated");
+        when(stockMovementRepository.save(any())).thenThrow(unknownViolation);
+        AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 30, DisposalReason.DAMAGED, null);
+
+        // when, then
+        assertThatThrownBy(() -> adminLotService.dispose(77L, 5L, request))
+                .isInstanceOf(IllegalStateException.class)
+                .hasCause(unknownViolation);
+    }
+
+    @Test
     void 저장_중_요청_식별자가_동시에_중복됐는데_재조회에도_없으면_상태_오류를_던진다() {
         // given — uk_movement_request_id 위반 직후 재조회했는데도 없는, 있을 수 없는 상황을 방어한다
         StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 70);

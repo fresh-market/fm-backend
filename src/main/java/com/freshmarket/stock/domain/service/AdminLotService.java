@@ -171,7 +171,8 @@ public class AdminLotService {
                         .orElseThrow(() -> new IllegalStateException(
                                 "request_id 유니크 위반 직후 재조회에 실패했다: " + request.requestId()));
             }
-            throw e;
+            throw new IllegalStateException(
+                    "폐기 이력 저장 중 알 수 없는 제약 위반이 발생했다: " + e.getMostSpecificCause().getMessage(), e);
         }
 
         if (qtyBefore != qtyAfter && qtyAfter == 0 && !stockLotRepository.existsByProductOptionIdAndStatus(
