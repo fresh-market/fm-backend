@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -111,9 +112,9 @@ class AdminAuthServiceTest {
 
         // Redis가 죽어도 로그인이 막히지 않도록, DB에도 항상 해시/만료시각을 write-through로 남긴다.
         verify(adminRepository).updateRefreshToken(
-                admin.getId(),
+                eq(admin.getId()),
                 any(String.class),
-                LocalDateTime.now(clock).plusSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
+                eq(LocalDateTime.now(clock).plusSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS)));
     }
 
     @Test
@@ -136,9 +137,9 @@ class AdminAuthServiceTest {
 
         // DB 백업은 Redis 실패와 무관하게 먼저 반영된다.
         verify(adminRepository).updateRefreshToken(
-                admin.getId(),
+                eq(admin.getId()),
                 any(String.class),
-                LocalDateTime.now(clock).plusSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
+                eq(LocalDateTime.now(clock).plusSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS)));
     }
 
     @Test
