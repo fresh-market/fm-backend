@@ -2,6 +2,7 @@ package com.freshmarket.stock.domain.service;
 
 import static com.freshmarket.common.exception.ConstraintViolations.isConstraintViolation;
 
+import com.freshmarket.product.OptionAvailabilityChangedEvent;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
 import com.freshmarket.stock.domain.dto.AdminLotListResponse;
@@ -14,8 +15,10 @@ import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
@@ -30,12 +33,15 @@ public class AdminLotService {
     private final StockLotRepository stockLotRepository;
     private final StockMovementRepository stockMovementRepository;
     private final ProductApi productApi;
+    private final ApplicationEventPublisher eventPublisher;
 
     public AdminLotService(StockLotRepository stockLotRepository,
-            StockMovementRepository stockMovementRepository, ProductApi productApi) {
+            StockMovementRepository stockMovementRepository, ProductApi productApi,
+            ApplicationEventPublisher eventPublisher) {
         this.stockLotRepository = stockLotRepository;
         this.stockMovementRepository = stockMovementRepository;
         this.productApi = productApi;
+        this.eventPublisher = eventPublisher;
     }
 
     /*
@@ -87,6 +93,9 @@ public class AdminLotService {
 
         StockMovement movement = StockMovement.inbound(stockLot.getId(), request.initialQty());
         stockMovementRepository.save(movement);
+
+        // 입고는 항상 가용 수량을 늘리기만 하므로, 별도 조회 없이도 이 옵션은 이제 품절이 아니라고 확정할 수 있다
+        eventPublisher.publishEvent(new OptionAvailabilityChangedEvent(optionId, false, LocalDateTime.now()));
 
         return AdminLotResponse.of(stockLot);
     }

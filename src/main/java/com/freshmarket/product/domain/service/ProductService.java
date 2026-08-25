@@ -106,8 +106,7 @@ public class ProductService {
     /*
      * 목록 조회 결과를 응답 표현으로 옮긴다.
      *
-     * soldOut 은 원래 가용 재고로 판정해야 하나 stock 도메인이 없어
-     * 지금은 saleStatus 로 대신한다. 재고 연동은 후속 이슈다.
+     * soldOut 은 ProductQueryRepository의 집계(조인된 옵션이 전부 품절인지)를 그대로 옮긴다.
      * mainImageUrl 은 product_image 조인과 CDN 설정이 필요해 아직 채우지 않는다.
      */
     private static ProductListItem toItem(ProductWithMinPrice row) {
@@ -117,7 +116,7 @@ public class ProductService {
                 new CategorySummary(row.categoryId(), row.categoryName()),
                 row.minPrice(),
                 row.saleStatus(),
-                row.saleStatus() == SaleStatus.SOLD_OUT,
+                row.soldOut(),
                 null);
     }
 
@@ -127,7 +126,7 @@ public class ProductService {
                 option.getName(),
                 option.getPrice(),
                 option.getSaleStatus(),
-                option.getSaleStatus() == SaleStatus.SOLD_OUT);
+                option.isSoldOut());
     }
 
     // url 은 CDN 설정이 없어 지금은 null 이다 (ProductDetailResponse 참고)
