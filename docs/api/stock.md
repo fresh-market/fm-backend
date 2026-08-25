@@ -45,10 +45,12 @@ POST /v1/admin/products/{productId}/options/{optionId}/lots
 ## 로트별 조회
 
 ```
-GET /v1/admin/products/{productId}/lots?availableOnly=true
+GET /v1/admin/products/{productId}/lots?availableOnly=true&pageSize=20&pageToken=
 ```
 
-**소비기한 오름차순이다.** FEFO 로 나가는 순서와 같다.
+**소비기한 오름차순이다.** FEFO 로 나가는 순서와 같다. **커서 기반으로 페이지네이션한다** (`API-3-04`,
+`API-5-01`). `pageToken` 은 이전 응답의 `nextPageToken` 을 그대로 실어 보내는 불투명 문자열이다
+(`API-5-02`). `pageSize` 생략 시 20, 최대 100.
 
 ```json
 {
@@ -62,9 +64,12 @@ GET /v1/admin/products/{productId}/lots?availableOnly=true
       "availableQty": 143,
       "status": "AVAILABLE"
     }
-  ]
+  ],
+  "nextPageToken": "cDo3N3wyMDI2LTA4LTMx"
 }
 ```
+
+**`nextPageToken` 이 없으면(null) 마지막 페이지다.**
 
 | 상태 | 뜻 |
 |---|---|
@@ -75,6 +80,10 @@ GET /v1/admin/products/{productId}/lots?availableOnly=true
 
 **`AVAILABLE` 이 아니면 `availableQty` 가 0이어야 한다.** DB 가 CHECK 로 강제한다.
 그렇지 않으면 FEFO 조회가 없는 재고를 집는다.
+
+| 오류 | 코드 | 언제 |
+|---|---|---|
+| `404` | `STOCK-002` | 없거나 삭제된 상품 |
 
 ## 변동 이력
 

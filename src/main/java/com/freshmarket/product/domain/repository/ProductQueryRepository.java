@@ -4,13 +4,17 @@ import static com.freshmarket.product.domain.entity.QCategory.category;
 import static com.freshmarket.product.domain.entity.QProduct.product;
 import static com.freshmarket.product.domain.entity.QProductOption.productOption;
 
+import com.freshmarket.product.domain.dto.AdminProductListRow;
+import com.freshmarket.product.domain.dto.AdminProductSearchCondition;
 import com.freshmarket.product.domain.dto.ProductSearchCondition;
 import com.freshmarket.product.domain.dto.ProductSortType;
 import com.freshmarket.product.domain.dto.ProductWithMinPrice;
+import com.freshmarket.product.domain.dto.QAdminProductListRow;
 import com.freshmarket.product.domain.dto.QProductWithMinPrice;
 import com.freshmarket.product.domain.entity.SaleStatus;
 import com.querydsl.core.types.OrderSpecifier;
 import com.querydsl.core.types.dsl.BooleanExpression;
+import com.querydsl.core.types.dsl.CaseBuilder;
 import com.querydsl.core.types.dsl.NumberExpression;
 import com.querydsl.jpa.impl.JPAQueryFactory;
 import java.time.LocalDateTime;
@@ -33,6 +37,15 @@ public class ProductQueryRepository {
     // 품절 표시(soldOut)로 구분해야 하므로 여기서 걸러내지 않는다
     private static final NumberExpression<Integer> MIN_PRICE = productOption.price.min();
 
+    /*
+     * 상품 품절 여부. boolean 경로엔 min()/max() 집계를 바로 못 걸어 CaseBuilder로 0/1로
+     * 바꿔서 집계한다. 조인된 옵션(OFF_SALE 제외) 중 sold_out=false(0)인 옵션이 하나라도
+     * 있으면 MIN이 0이 되어 false다 — 구매 가능한 옵션이 남아있다는 뜻이다. 전부 품절(1)이어야 true.
+     */
+    private static final NumberExpression<Integer> SOLD_OUT_AS_INT =
+            new CaseBuilder().when(productOption.soldOut.isTrue()).then(1).otherwise(0);
+    private static final BooleanExpression ALL_OPTIONS_SOLD_OUT = SOLD_OUT_AS_INT.min().eq(1);
+
     private final JPAQueryFactory queryFactory;
 
     /*
@@ -49,6 +62,7 @@ public class ProductQueryRepository {
                         category.name,
                         MIN_PRICE,
                         product.saleStatus,
+                        ALL_OPTIONS_SOLD_OUT,
                         product.createdAt))
                 .from(product)
                 .join(category).on(category.id.eq(product.categoryId))
@@ -68,6 +82,59 @@ public class ProductQueryRepository {
                 .orderBy(orderOf(condition))
                 .limit(condition.pageSize() + 1L)
                 .fetch();
+    }
+
+    /*
+     * 관리자 상품 목록. 회원용과 달리 옵션과 조인하지 않는다(최저가 집계가 필요 없다) —
+     * 판매안함/품절/삭제까지 전부 보여주고, 재고 합계는 이 이슈 범위 밖이라 넣지 않는다.
+     * 카테고리 이름은 여기서 조인하지 않고, 호출부가 categoryId를 모아 한 번에 배치 조회한다.
+     * 엔티티 전체가 아니라 목록에 필요한 컬럼만 프로젝션한다(JPA-4-03).
+     *
+     * 회원용 search()와 같은 방식으로 커서 기반 페이지네이션을 쓴다(API-3-04, API-5-01) — 정렬이
+     * createdAt desc, id desc 고정이라 회원용처럼 정렬축 분기가 필요 없다. pageSize + 1건을 가져와
+     * 다음 페이지 존재 여부를 판단한다.
+     */
+    public List<AdminProductListRow> searchForAdmin(AdminProductSearchCondition condition) {
+        return queryFactory
+                .select(new QAdminProductListRow(
+                        product.id,
+                        product.productCode,
+                        product.name,
+                        product.categoryId,
+                        product.saleStatus,
+                        product.deletedAt.isNotNull(),
+                        product.createdAt))
+                .from(product)
+                .where(
+                        deletedFilter(condition.includeDeleted()),
+                        categoryIdEq(condition.categoryId()),
+                        saleStatusEq(condition.saleStatus()),
+                        nameContains(condition.query()),
+                        adminCreatedAtCursorLt(condition))
+                .orderBy(product.createdAt.desc(), product.id.desc())
+                .limit(condition.pageSize() + 1L)
+                .fetch();
+    }
+
+    // 관리자 목록 커서 조건. 정렬이 createdAt desc, id desc 고정이라 동점 처리도 id desc 하나뿐이다
+    private BooleanExpression adminCreatedAtCursorLt(AdminProductSearchCondition condition) {
+        if (condition.cursor() == null) {
+            return null;
+        }
+        LocalDateTime cursorCreatedAt = LocalDateTime.parse(condition.cursor().sortValue());
+        Long cursorId = condition.cursor().id();
+        return product.createdAt.lt(cursorCreatedAt)
+                .or(product.createdAt.eq(cursorCreatedAt).and(product.id.lt(cursorId)));
+    }
+
+    // includeDeleted가 아니면 삭제되지 않은 상품만 본다. true면 조건을 아예 안 걸어 전부 본다
+    private BooleanExpression deletedFilter(boolean includeDeleted) {
+        return includeDeleted ? null : product.deletedAt.isNull();
+    }
+
+    // 판매 상태 필터. null 이면 전체 상태를 본다
+    private BooleanExpression saleStatusEq(SaleStatus saleStatus) {
+        return saleStatus != null ? product.saleStatus.eq(saleStatus) : null;
     }
 
     // 카테고리 조건. null 이면 where 절에서 빠져 전체 카테고리를 본다

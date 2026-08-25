@@ -25,7 +25,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class KakaoUnlinkFailure extends BaseMutableTimeEntity {
 
-    private static final int MAX_RETRY_ATTEMPTS = 5;
+    public static final int MAX_RETRY_ATTEMPTS = 5;
 
     @Column(name = "member_id", nullable = false, unique = true)
     private Long memberId;
@@ -35,6 +35,9 @@ public class KakaoUnlinkFailure extends BaseMutableTimeEntity {
 
     @Column(name = "attempt_count", nullable = false)
     private int attemptCount;
+
+    @Column(name = "resolved", nullable = false)
+    private boolean resolved;
 
     private KakaoUnlinkFailure(Long memberId, String kakaoUserId) {
         this.memberId = memberId;
@@ -53,5 +56,10 @@ public class KakaoUnlinkFailure extends BaseMutableTimeEntity {
 
     public boolean shouldGiveUp() {
         return attemptCount >= MAX_RETRY_ATTEMPTS;
+    }
+
+    /** 운영자가 포기 건을 확인하고 필요한 수동 조치를 마쳤음을 표시한다. */
+    public void resolve() {
+        this.resolved = true;
     }
 }

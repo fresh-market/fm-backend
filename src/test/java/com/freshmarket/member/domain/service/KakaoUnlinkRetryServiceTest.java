@@ -77,7 +77,8 @@ class KakaoUnlinkRetryServiceTest {
     @Test
     void 재시도가_성공하면_성공_처리로_넘긴다() {
         KakaoUnlinkFailure failure = newFailure(10L, 1L, "kakao-1");
-        when(failureRepository.findAll()).thenReturn(List.of(failure));
+        when(failureRepository.findByAttemptCountLessThanAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(List.of(failure));
 
         sut.retryAllPending();
 
@@ -89,7 +90,8 @@ class KakaoUnlinkRetryServiceTest {
     @Test
     void 재시도가_또_실패하면_실패_처리로_넘긴다() {
         KakaoUnlinkFailure failure = newFailure(10L, 1L, "kakao-1");
-        when(failureRepository.findAll()).thenReturn(List.of(failure));
+        when(failureRepository.findByAttemptCountLessThanAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(List.of(failure));
         doThrow(new RuntimeException("network error")).when(kakaoUnlinkClient).unlink("kakao-1");
 
         sut.retryAllPending();
@@ -102,12 +104,25 @@ class KakaoUnlinkRetryServiceTest {
     void 미완료_건이_여러개면_전부_처리한다() {
         KakaoUnlinkFailure f1 = newFailure(10L, 1L, "kakao-1");
         KakaoUnlinkFailure f2 = newFailure(11L, 2L, "kakao-2");
-        when(failureRepository.findAll()).thenReturn(List.of(f1, f2));
+        when(failureRepository.findByAttemptCountLessThanAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(List.of(f1, f2));
 
         sut.retryAllPending();
 
         verify(kakaoUnlinkClient, times(2)).unlink(any());
         verify(outcomeService).markSucceeded(10L);
         verify(outcomeService).markSucceeded(11L);
+    }
+
+    @Test
+    void 재시도_대상만_조회한다() {
+        when(failureRepository.findByAttemptCountLessThanAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(List.of());
+
+        sut.retryAllPending();
+
+        verify(failureRepository).findByAttemptCountLessThanAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS);
+        verify(failureRepository, never()).findAll();
     }
 }

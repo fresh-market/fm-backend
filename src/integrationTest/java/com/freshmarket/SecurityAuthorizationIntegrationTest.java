@@ -6,6 +6,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.freshmarket.common.auth.jwt.JwtTokenProvider;
+import com.freshmarket.common.auth.jwt.TokenType;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +32,9 @@ class SecurityAuthorizationIntegrationTest extends IntegrationTestSupport {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private JwtTokenProvider jwtTokenProvider;
 
     @Test
     void 상품_목록은_비로그인도_연다() throws Exception {
@@ -91,6 +96,50 @@ class SecurityAuthorizationIntegrationTest extends IntegrationTestSupport {
     void 어느_도메인도_주장하지_않는_경로는_막힌다() throws Exception {
         mockMvc.perform(get("/v1/admin/categories"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    /*
+     * 관리자 경로에 로그인한 일반 회원(TYPE_MEMBER)이 들어오면 인증은 통과하지만 권한이 없어
+     * 403이어야 한다. 앞의 "어느_도메인도_주장하지_않는_경로는_막힌다"는 비로그인(401)만 확인해서,
+     * "로그인만 하면 관리자 API가 열리는" 진짜 문제는 이 테스트가 아니면 못 잡는다.
+     */
+    @Test
+    void 로그인한_일반_회원은_관리자_카테고리_조회를_할_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(get("/v1/admin/categories").header("Authorization", "Bearer " + memberToken))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void 관리자로_로그인하면_관리자_카테고리_조회를_할_수_있다() throws Exception {
+        String adminToken = jwtTokenProvider.createAccessToken(1L, TokenType.ADMIN, "ROLE_ADMIN");
+
+        mockMvc.perform(get("/v1/admin/categories").header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk());
+    }
+
+    /*
+     * hasRole("ADMIN")이 AdminSecurityConfig에 등록된 RoleHierarchy(SUPER_ADMIN implies ADMIN)를
+     * 실제로 타는지 확인한다. 이게 안 타면 role=ROLE_SUPER_ADMIN인 사람이 오히려 막히는 회귀가 난다.
+     */
+    @Test
+    void 최고관리자로_로그인해도_관리자_카테고리_조회를_할_수_있다() throws Exception {
+        String superAdminToken = jwtTokenProvider.createAccessToken(1L, TokenType.ADMIN, "ROLE_SUPER_ADMIN");
+
+        mockMvc.perform(get("/v1/admin/categories").header("Authorization", "Bearer " + superAdminToken))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void 로그인한_일반_회원은_관리자_로트_입고_등록을_할_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(post("/v1/admin/products/1/options/1/lots")
+                        .header("Authorization", "Bearer " + memberToken)
+                        .contentType("application/json")
+                        .content("{}"))
+                .andExpect(status().isForbidden());
     }
 
     @Test

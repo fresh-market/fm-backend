@@ -32,8 +32,10 @@ public class KakaoUnlinkRetryService {
                 () -> failureRepository.save(KakaoUnlinkFailure.record(memberId, kakaoUserId)));
     }
 
+    /** 포기 문턱 미만의 미해소 행만 DB에서 조회해 재시도한다. */
     public void retryAllPending() {
-        for (KakaoUnlinkFailure failure : failureRepository.findAll()) {
+        for (KakaoUnlinkFailure failure : failureRepository
+                .findByAttemptCountLessThanAndResolvedFalse(KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)) {
             retryOne(failure.getId(), failure.getKakaoUserId());
         }
     }
