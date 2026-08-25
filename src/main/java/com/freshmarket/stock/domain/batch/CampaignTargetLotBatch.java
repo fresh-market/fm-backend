@@ -24,6 +24,13 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * batch 프로필에서만 뜬다 (INF-1-10, ArchitectureTest 로 강제됨). 분산 락이 없어
  * 프로필이 유일한 방어선이라, 이게 빠지면 앱 서버 여러 대가 같은 로트를 동시에 집는다.
+ *
+ * 배치 분류: 재계산형(같은 입력이면 같은 결과, 재실행 시 당일분을 지우고 다시
+ * 계산한다). 동시 실행 방어는 KakaoUnlinkRetryScheduler 와 같은 판단이다 —
+ * 지금은 배치 전용 인스턴스가 단일이라 문제없고, 인스턴스가 여러 대로 늘어나면
+ * 그때 ShedLock 등 분산 실행 제어를 도입한다.
+ *
+ * 실행/소요시간 로그는 SchedulerLoggingAspect 가 @Scheduled 메서드마다 자동으로 남긴다.
  */
 @Component
 @Profile("batch")
