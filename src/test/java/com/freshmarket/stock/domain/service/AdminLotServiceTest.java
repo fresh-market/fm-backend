@@ -263,9 +263,10 @@ class AdminLotServiceTest {
         AdminLotCreateRequest request = new AdminLotCreateRequest(
                 "req-1", LocalDate.of(2026, 8, 17), LocalDate.of(2026, 8, 31), 200);
 
-        // when, then
+        // when, then — (CMP-4-04) 클라이언트로는 DB 메시지가 안 실리는 일반화된 StockException으로 나가야 한다
         assertThatThrownBy(() -> adminLotService.register(12L, 31L, request))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.UNKNOWN_CONSTRAINT_VIOLATION)
                 .hasCause(unknownViolation);
     }
 
@@ -561,9 +562,10 @@ class AdminLotServiceTest {
         when(stockMovementRepository.save(any())).thenThrow(unknownViolation);
         AdminLotDisposeRequest request = new AdminLotDisposeRequest("dispose-1", 30, DisposalReason.DAMAGED, null);
 
-        // when, then
+        // when, then — (CMP-4-04) 클라이언트로는 DB 메시지가 안 실리는 일반화된 StockException으로 나가야 한다
         assertThatThrownBy(() -> adminLotService.dispose(77L, 5L, request))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.UNKNOWN_CONSTRAINT_VIOLATION)
                 .hasCause(unknownViolation);
     }
 

@@ -102,12 +102,13 @@ public class AdminLotService {
                 throw new StockException(StockErrorCode.OPTION_NOT_FOUND, e);
             }
             /*
-             * 알려진 제약(uk_lot_request_id, fk_lot_option) 위반이 아니면 원인을 알 수 없는 실패다.
-             * Spring의 DataIntegrityViolationException을 그대로 던지면 저장소 계층의 예외 타입이 서비스
-             * 경계 밖으로 새어나가므로, 원인은 유지한 채(cause) 더 명확한 메시지로 감싸서 던진다.
+             * (CMP-4-04) 알려진 제약(uk_lot_request_id, fk_lot_option) 위반이 아니면 원인을 알 수
+             * 없는 실패다. DB 예외 메시지는 로그에만 남기고, 클라이언트로 나가는 예외는 고정 문구의
+             * StockException이라 GlobalExceptionHandler가 ErrorCode의 고정 문구만 응답에 싣는다.
              */
-            throw new IllegalStateException(
-                    "로트 저장 중 알 수 없는 제약 위반이 발생했다: " + e.getMostSpecificCause().getMessage(), e);
+            log.error("event=LOT_SAVE_UNKNOWN_CONSTRAINT_VIOLATION requestId={} optionId={} cause={}",
+                    request.requestId(), optionId, e.getMostSpecificCause().getMessage(), e);
+            throw new StockException(StockErrorCode.UNKNOWN_CONSTRAINT_VIOLATION, e);
         } catch (PessimisticLockingFailureException e) {
             return responseOfInProgressRetry(request.requestId(), optionId, e);
         }
@@ -227,8 +228,13 @@ public class AdminLotService {
                             return new StockException(StockErrorCode.DISPOSAL_IN_PROGRESS);
                         });
             }
-            throw new IllegalStateException(
-                    "폐기 이력 저장 중 알 수 없는 제약 위반이 발생했다: " + e.getMostSpecificCause().getMessage(), e);
+            /*
+             * (CMP-4-04) 알려진 제약(uk_movement_request_id) 위반이 아니면 원인을 알 수 없는
+             * 실패다. DB 예외 메시지는 로그에만 남기고, 응답에는 ErrorCode의 고정 문구만 나간다.
+             */
+            log.error("event=DISPOSAL_SAVE_UNKNOWN_CONSTRAINT_VIOLATION requestId={} lotId={} cause={}",
+                    request.requestId(), lotId, e.getMostSpecificCause().getMessage(), e);
+            throw new StockException(StockErrorCode.UNKNOWN_CONSTRAINT_VIOLATION, e);
         }
 
         if (qtyBefore != qtyAfter && qtyAfter == 0 && !stockLotRepository.existsByProductOptionIdAndStatus(
