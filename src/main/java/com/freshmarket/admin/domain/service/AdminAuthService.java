@@ -25,6 +25,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /*
  * 관리자 로그인만 다룬다. 로그아웃, 토큰 재발급, 비밀번호 변경은 별도 PR 이다 (auth.md 참고).
@@ -37,6 +38,10 @@ import org.springframework.stereotype.Service;
  * 로그인은 최초 발급만 담당하고, Rotation은 별도 재발급 API에서 compareAndRotate()로 처리한다.
  *
  * Redis 완전 장애 시에도 로그인이 막히지 않도록, Refresh Token은 DB에 먼저 write-through로 백업한 뒤 Redis 저장을 시도한다.
+ * DB 백업은 @Modifying UPDATE(AdminRepository.updateRefreshToken())라서 활성 트랜잭션이 없으면
+ * InvalidDataAccessApiUsageException("Executing an update/delete query")이 난다 — 그래서 login() 전체를 @Transactional로 감싼다.
+ * MemberTokenService.issue()도 같은 이유로 Redis 호출을 포함해 메서드 전체가
+ * @Transactional이다(트랜잭션 안에서 외부 I/O를 하는 대가보다, DB 백업 자체가 항상 저장되는 게 우선이라는 판단).
  */
 @Slf4j
 @Service
@@ -70,6 +75,7 @@ public class AdminAuthService {
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_SOURCE);
     }
 
+    @Transactional
     public AdminLoginResult login(AdminLoginRequest request) {
         Objects.requireNonNull(request, "request");
 
