@@ -1,5 +1,6 @@
 package com.freshmarket.product.domain.batch;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -67,6 +68,28 @@ class OptionAvailabilitySyncOutcomeServiceTest {
         // give-up 상태에서도 행 자체를 지우지는 않는다 — 사람이 보고 수동 개입할 수 있게 남겨둔다
         verify(failureRepository, never()).delete(any());
         verify(failureRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void 재시도_한도를_넘으면_exhausted로_표시해_재시도_대상에서_뺀다() {
+        // given — 이미 4회 실패한 상태(다음 실패가 5번째, MAX_RETRY_ATTEMPTS)
+        OptionAvailabilitySyncFailure failure = failureAtAttempt(4);
+        when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
+
+        sut.markFailed(1L, new RuntimeException("lock timeout"));
+
+        assertThat(failure.isExhausted()).isTrue();
+    }
+
+    @Test
+    void 재시도_한도_전이면_exhausted로_표시하지_않는다() {
+        // given
+        OptionAvailabilitySyncFailure failure = OptionAvailabilitySyncFailure.record(11L, true, OCCURRED_AT);
+        when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
+
+        sut.markFailed(1L, new RuntimeException("lock timeout"));
+
+        assertThat(failure.isExhausted()).isFalse();
     }
 
     @Test
