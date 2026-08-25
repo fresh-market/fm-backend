@@ -20,6 +20,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -28,6 +29,7 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 // 관리자 화면에서 로트를 입고 등록하고 조회하는 기능을 담당한다
+@Slf4j
 @Service
 @Transactional(readOnly = true)
 public class AdminLotService {
@@ -168,8 +170,16 @@ public class AdminLotService {
             if (isConstraintViolation(e, "uk_movement_request_id")) {
                 return stockMovementRepository.findByRequestId(request.requestId())
                         .map(existing -> responseOfExistingDisposal(existing, lotId))
-                        .orElseThrow(() -> new IllegalStateException(
-                                "request_id 유니크 위반 직후 재조회에 실패했다: " + request.requestId()));
+                        .orElseThrow(() -> {
+                            /*
+                             * (CMP-4-04) requestId는 로그에만 남긴다. 클라이언트로 나가는 예외는
+                             * StockException이라 GlobalExceptionHandler가 ErrorCode의 고정 문구만
+                             * 응답에 싣는다(요청 값을 그대로 실은 문구가 밖으로 새지 않는다).
+                             */
+                            log.error("event=DISPOSAL_REQUEST_ID_CONFLICT_NOT_FOUND requestId={}",
+                                    request.requestId());
+                            return new StockException(StockErrorCode.DISPOSAL_IN_PROGRESS);
+                        });
             }
             throw new IllegalStateException(
                     "폐기 이력 저장 중 알 수 없는 제약 위반이 발생했다: " + e.getMostSpecificCause().getMessage(), e);

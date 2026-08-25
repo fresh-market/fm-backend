@@ -470,8 +470,9 @@ class AdminLotServiceTest {
     }
 
     @Test
-    void 저장_중_요청_식별자가_동시에_중복됐는데_재조회에도_없으면_상태_오류를_던진다() {
-        // given — uk_movement_request_id 위반 직후 재조회했는데도 없는, 있을 수 없는 상황을 방어한다
+    void 저장_중_요청_식별자가_동시에_중복됐는데_재조회에도_없으면_처리중_오류를_던진다() {
+        // given — uk_movement_request_id 위반 직후 재조회했는데도 없는, 있을 수 없는 상황을 방어한다.
+        // (CMP-4-04) 클라이언트로는 requestId가 안 실리는 일반화된 StockException으로 나가야 한다
         StockLot lot = StockLot.register("req-1", 31L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31), 70);
         ReflectionTestUtils.setField(lot, "id", 77L);
         when(stockMovementRepository.findByRequestId("dispose-1")).thenReturn(Optional.empty(), Optional.empty());
@@ -482,8 +483,8 @@ class AdminLotServiceTest {
 
         // when, then
         assertThatThrownBy(() -> adminLotService.dispose(77L, 5L, request))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("dispose-1");
+                .isInstanceOf(StockException.class)
+                .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.DISPOSAL_IN_PROGRESS);
     }
 
     @Test
