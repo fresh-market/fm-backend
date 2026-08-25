@@ -35,12 +35,6 @@ class KakaoUnlinkStuckReportServiceTest {
         return failure;
     }
 
-    private static KakaoUnlinkFailure stillRetryingFailure(Long id, Long memberId) {
-        KakaoUnlinkFailure failure = KakaoUnlinkFailure.record(memberId, "kakao-" + memberId);
-        setId(failure, id);
-        return failure;
-    }
-
     private static void setId(KakaoUnlinkFailure failure, Long id) {
         try {
             Field field = failure.getClass().getSuperclass().getDeclaredField("id");
@@ -53,16 +47,8 @@ class KakaoUnlinkStuckReportServiceTest {
 
     @Test
     void 쌓인_행이_없으면_빈_목록을_돌려준다() {
-        when(failureRepository.findAll()).thenReturn(List.of());
-
-        List<Long> result = sut.reportStuck();
-
-        assertThat(result).isEmpty();
-    }
-
-    @Test
-    void 아직_포기_문턱을_안_넘은_행만_있으면_빈_목록을_돌려준다() {
-        when(failureRepository.findAll()).thenReturn(List.of(stillRetryingFailure(1L, 100L)));
+        when(failureRepository.countByAttemptCountGreaterThanEqualAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(0L);
 
         List<Long> result = sut.reportStuck();
 
@@ -73,11 +59,30 @@ class KakaoUnlinkStuckReportServiceTest {
     void 포기_문턱을_넘은_행의_memberId를_모아서_돌려준다() {
         KakaoUnlinkFailure givenUp1 = givenUpFailure(1L, 100L);
         KakaoUnlinkFailure givenUp2 = givenUpFailure(2L, 200L);
-        KakaoUnlinkFailure stillRetrying = stillRetryingFailure(3L, 300L);
-        when(failureRepository.findAll()).thenReturn(List.of(givenUp1, givenUp2, stillRetrying));
+        when(failureRepository.countByAttemptCountGreaterThanEqualAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(2L);
+        when(failureRepository.findTop50ByAttemptCountGreaterThanEqualAndResolvedFalseOrderByCreatedAtAscIdAsc(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(List.of(givenUp1, givenUp2));
 
         List<Long> result = sut.reportStuck();
 
         assertThat(result).containsExactlyInAnyOrder(100L, 200L);
+    }
+
+    @Test
+    void 포기_건의_개수와_최대_50건만_조회하고_findAll은_호출하지_않는다() {
+        when(failureRepository.countByAttemptCountGreaterThanEqualAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(51L);
+        when(failureRepository.findTop50ByAttemptCountGreaterThanEqualAndResolvedFalseOrderByCreatedAtAscIdAsc(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(List.of());
+
+        sut.reportStuck();
+
+        org.mockito.Mockito.verify(failureRepository)
+                .countByAttemptCountGreaterThanEqualAndResolvedFalse(KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS);
+        org.mockito.Mockito.verify(failureRepository)
+                .findTop50ByAttemptCountGreaterThanEqualAndResolvedFalseOrderByCreatedAtAscIdAsc(
+                        KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS);
+        org.mockito.Mockito.verify(failureRepository, org.mockito.Mockito.never()).findAll();
     }
 }
