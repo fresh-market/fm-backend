@@ -46,7 +46,7 @@ public interface ProductImageRepository extends JpaRepository<ProductImage, Long
     /*
      * (INF-11-13) 정리 배치의 대상 조회. 유예 시간을 넘긴 PENDING 행을 id 기준 keyset 페이지네이션으로
      * 나눠 가져온다(OptionAvailabilitySyncRetryService.retryAllPending()과 같은 이유 — findAll()로
-     * 한 번에 올리지 않는다). status·created_at 복합 인덱스가 필요하다(V17 마이그레이션).
+     * 한 번에 올리지 않는다). status·created_at 복합 인덱스가 필요하다(V18 마이그레이션).
      */
     List<ProductImage> findByUploadStatusAndIdGreaterThanAndCreatedAtBeforeOrderByIdAsc(
             UploadStatus uploadStatus, Long afterId, LocalDateTime cutoff, Pageable pageable);
