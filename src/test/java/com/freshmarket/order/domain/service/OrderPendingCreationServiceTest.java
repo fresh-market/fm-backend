@@ -168,7 +168,7 @@ class OrderPendingCreationServiceTest {
         when(orderRepository.findByRequestId("direct-1")).thenReturn(Optional.empty());
         when(memberApi.findAddress(10L, MEMBER_ID)).thenReturn(Optional.of(address()));
         when(productApi.findOptionInfos(List.of(20L))).thenReturn(List.of(
-                new ProductOptionInfo(20L, "감귤 1kg", "1kg", 12_900, true)));
+                new ProductOptionInfo(2L, 1L, 20L, "감귤 1kg", "1kg", 12_900, true, 3)));
         when(orderNoGenerator.generate()).thenReturn("TEMP-XYZ");
         stubSave();
 
