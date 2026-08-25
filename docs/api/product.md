@@ -256,11 +256,18 @@ DELETE /v1/admin/products/{productId}/images/{imageId}
 `HeadObject` 로 확인한 뒤 `CONFIRMED` 로 바꾼다.
 
 ```json
+{ "requestId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "contentType": "image/jpeg", "contentLength": 482913 }
+```
+
+```json
 { "productImageId": 88, "uploadId": "018f...", "uploadUrl": "https://s3...", "objectKey": "products/ab/3f9c.jpg" }
 ```
 
 **URL 을 통째로 저장하지 않는다.** 객체 키만 저장하고 도메인은 환경 설정에서 붙인다.
 확장자, MIME 타입, 크기를 검증하고 **파일명은 서버가 만든다** (`SEC-3-04`).
+
+**같은 `requestId`로 재시도하면 새로 발급하지 않고 최초 발급 결과를 그대로 돌려준다** (`API-5-07`, `AIP-155`).
+presigned URL 은 매번 새로 서명해서 돌려준다 — URL 자체엔 만료 시간이 있어, 재시도 응답도 그 자리에서 바로 쓸 수 있어야 한다.
 
 대표 이미지는 상품당 하나다. 교체할 때는 옛 대표를 먼저 내려야 한다.
 
@@ -268,10 +275,13 @@ DELETE /v1/admin/products/{productId}/images/{imageId}
 |---|---|---|
 | `422` | `PRODUCT-012` | 허용되지 않는 파일 형식 |
 | `422` | `PRODUCT-013` | 파일 크기가 상한을 넘음 |
+| `409` | `PRODUCT-016` | 이미 다른 상품에 사용된 요청 식별자 |
 | `404` | `PRODUCT-008` | 없는 이미지, 또는 남의 상품/발급 건 |
 | `409` | `PRODUCT-009` | 이미 확정된 이미지를 다시 확정하려 함 |
 | `409` | `PRODUCT-010` | 아직 업로드가 확인되지 않음(재시도 안내) |
 | `422` | `PRODUCT-011` | 업로드된 파일이 발급 조건(크기·형식)과 다름 |
+| `409` | `PRODUCT-015` | 동일한 이미지에 대한 처리가 아직 진행 중 |
+| `503` | `PRODUCT-014` | 이미지 삭제 중 S3 오브젝트 삭제에 실패(재시도 안내) |
 
 ### 벌크 등록
 

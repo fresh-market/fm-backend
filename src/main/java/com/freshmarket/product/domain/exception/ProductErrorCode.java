@@ -30,7 +30,21 @@ public enum ProductErrorCode implements ErrorCode {
     // HeadObject는 있는데 크기/Content-Type이 발급 시 신고한 값과 다르다
     IMAGE_UPLOAD_MISMATCH(HttpStatus.UNPROCESSABLE_CONTENT, "PRODUCT-011", "업로드된 파일이 신고한 조건과 다릅니다."),
     IMAGE_INVALID_CONTENT_TYPE(HttpStatus.UNPROCESSABLE_CONTENT, "PRODUCT-012", "허용되지 않는 파일 형식입니다."),
-    IMAGE_TOO_LARGE(HttpStatus.UNPROCESSABLE_CONTENT, "PRODUCT-013", "파일 크기가 상한을 넘었습니다.");
+    IMAGE_TOO_LARGE(HttpStatus.UNPROCESSABLE_CONTENT, "PRODUCT-013", "파일 크기가 상한을 넘었습니다."),
+    /*
+     * (INF-11-08) 객체를 먼저 지우고 행을 지우는 순서를 지키려면, 객체 삭제 실패가 호출부에
+     * 전달되어 행 삭제를 막아야 한다 — 그래야 고아 객체 대신 재시도 가능한 상태로 남는다.
+     */
+    IMAGE_DELETE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "PRODUCT-014", "이미지 삭제에 실패했습니다. 잠시 후 다시 시도해주세요."),
+    // 같은 이미지를 동시에 건드리는 confirm()/delete()끼리 경합해 쓰기 락 대기가 타임아웃된 경우
+    IMAGE_PROCESSING_IN_PROGRESS(HttpStatus.CONFLICT, "PRODUCT-015", "동일한 이미지에 대한 처리가 아직 진행 중입니다. 잠시 후 다시 시도해주세요."),
+    /*
+     * (API-5-07) requestId는 DB 전역에서 유일하다. save() 시점에 유니크 위반이 났는데 같은
+     * (requestId, productId) 조합으로 재조회해도 없다면, 그 requestId는 다른 상품 소속이라는
+     * 뜻이다 — 클라이언트가 같은 requestId를 서로 다른 상품에 재사용한 것(StockErrorCode.
+     * REQUEST_ID_ALREADY_USED와 같은 상황).
+     */
+    IMAGE_REQUEST_ID_ALREADY_USED(HttpStatus.CONFLICT, "PRODUCT-016", "이미 다른 상품에 사용된 요청 식별자입니다.");
 
     private final HttpStatus httpStatus;
     private final String code;

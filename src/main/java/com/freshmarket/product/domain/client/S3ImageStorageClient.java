@@ -75,7 +75,12 @@ public class S3ImageStorageClient {
         }
     }
 
-    // 확정 조건(크기·형식)을 안 지킨 업로드를 지운다. 실패해도 재시도하지 않는다 — 정리 배치가 나중에 마저 치운다
+    /*
+     * 확정 조건(크기·형식)을 안 지킨 업로드를 지운다. 실패해도 예외를 던지지 않는다 — 이 호출부
+     * (confirm()의 불일치 처리)는 행을 PENDING으로 남겨 두므로, 여기서 지우지 못해도 나중에
+     * 정리 배치가 같은 키로 다시 시도할 수 있다. 관리자가 이미지를 직접 지우는 delete()는 행 자체가
+     * 사라져 재시도 대상이 없어지므로 이 메서드가 아니라 deleteObjectOrThrow()를 쓴다(INF-11-08).
+     */
     public void deleteObject(String objectKey) {
         try {
             s3Client.deleteObject(DeleteObjectRequest.builder()
@@ -85,5 +90,17 @@ public class S3ImageStorageClient {
         } catch (S3Exception e) {
             log.warn("event=IMAGE_DELETE_OBJECT_FAILED objectKey={}", objectKey, e);
         }
+    }
+
+    /*
+     * S3 삭제가 실패하면 예외를 던진다(INF-11-08). "객체 먼저 지우고 행을 지운다"는 순서가
+     * 실제로 고아를 막으려면, 객체 삭제 실패가 호출부에 전달되어 행 삭제를 막아야 한다 —
+     * 삼키면 행만 사라지고 객체는 참조를 잃어 영영 못 찾는 고아가 된다.
+     */
+    public void deleteObjectOrThrow(String objectKey) {
+        s3Client.deleteObject(DeleteObjectRequest.builder()
+                .bucket(bucket)
+                .key(objectKey)
+                .build());
     }
 }
