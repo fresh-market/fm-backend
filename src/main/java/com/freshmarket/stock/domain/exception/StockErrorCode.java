@@ -35,7 +35,9 @@ public enum StockErrorCode implements ErrorCode {
      * 할당을 findByOrderItemId로 찾아내 멱등하게 스킵한다), findByIdForUpdate가 락 대기 타임아웃이나
      * 교착으로 실패한 경우 모두 여기로 묶는다.
      */
-    RESERVATION_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-009", "동일한 재고 요청이 아직 처리 중입니다. 잠시 후 다시 시도해주세요.");
+    RESERVATION_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-009", "동일한 재고 요청이 아직 처리 중입니다. 잠시 후 다시 시도해주세요."),
+    // 만료 배치의 조회 자체가 쓰기 락이라(StockLotRepository.findByStatusAndExpiryDateBefore) reserve()와 경합하면 여기로 묶는다
+    EXPIRE_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-010", "만료 처리 중 다른 요청과 경합했습니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus httpStatus;
     private final String code;

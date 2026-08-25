@@ -2,6 +2,7 @@ package com.freshmarket.stock.domain.controller;
 
 import com.freshmarket.common.response.ResponseEnvelope;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
+import com.freshmarket.stock.domain.dto.AdminLotExpireResponse;
 import com.freshmarket.stock.domain.dto.AdminLotListResponse;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
 import com.freshmarket.stock.domain.service.AdminLotService;
@@ -13,13 +14,11 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-// 관리자용 로트 입고 등록/조회 API
+// 관리자용 로트 입고 등록, 조회, 만료 로트 일괄 처리 API. 경로가 서로 달라 클래스 레벨 매핑 없이 메서드마다 전체 경로를 둔다
 @RestController
-@RequestMapping("/v1/admin/products/{productId}")
 class AdminLotController {
 
     private final AdminLotService adminLotService;
@@ -29,7 +28,7 @@ class AdminLotController {
     }
 
     @Operation(summary = "로트 입고 등록", description = "로트를 입고하고 INBOUND 변동 이력을 함께 남긴다.")
-    @PostMapping("/options/{optionId}/lots")
+    @PostMapping("/v1/admin/products/{productId}/options/{optionId}/lots")
     public ResponseEntity<ResponseEnvelope<AdminLotResponse>> register(
             @PathVariable Long productId, @PathVariable Long optionId,
             @Valid @RequestBody AdminLotCreateRequest request) {
@@ -38,11 +37,21 @@ class AdminLotController {
     }
 
     @Operation(summary = "로트별 조회", description = "상품의 로트 전체를 소비기한 오름차순(FEFO)으로 조회한다.")
-    @GetMapping("/lots")
+    @GetMapping("/v1/admin/products/{productId}/lots")
     public ResponseEntity<ResponseEnvelope<AdminLotListResponse>> findAllByProduct(
             @PathVariable Long productId,
             @RequestParam(defaultValue = "false") boolean availableOnly) {
         AdminLotListResponse response = adminLotService.findAllByProduct(productId, availableOnly);
+        return ResponseEntity.ok(ResponseEnvelope.success(response));
+    }
+
+    @Operation(summary = "만료 로트 일괄 처리",
+            description = "소비기한이 지난 로트를 만료 처리하고 EXPIRE 이력을 남긴다. 하루 한 번 배치로 돌며, 이 경로는 수동 실행용이다. "
+                    + "요청 전체가 원자적이지 않은 부분 성공 작업이다(API-3-10) — 중간에 실패해도 이미 처리된 로트는 그대로 남고, "
+                    + "재요청하면 남은 대상만 이어서 처리된다(멱등).")
+    @PostMapping("/v1/admin/lots:expire")
+    public ResponseEntity<ResponseEnvelope<AdminLotExpireResponse>> expire() {
+        AdminLotExpireResponse response = adminLotService.expireLots();
         return ResponseEntity.ok(ResponseEnvelope.success(response));
     }
 }
