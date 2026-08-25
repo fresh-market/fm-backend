@@ -23,7 +23,7 @@ public interface ProductOptionRepository extends JpaRepository<ProductOption, Lo
      * (DI-2-01) occurredAt이 마지막으로 반영된 사실보다 최신일 때만 갱신한다 — 동시에 도착하거나
      * 순서가 뒤바뀐 옵션 가용성 이벤트가 더 오래된 값으로 최신 값을 덮어쓰는 것을 막는다.
      * sold_out_synced_at이 NULL이면(아직 이벤트로 갱신된 적 없음) 무조건 반영한다.
-     * 대상이 없거나 이미 더 최신 값이 반영돼 있으면 0을 반환하며, 둘 다 호출부에서는 정상 케이스다.
+     * 대상이 없거나 이미 더 최신 값이 반영돼 있으면 0을 반환한다 — 둘을 구분하는 건 호출부(existsById) 몫이다.
      */
     @Modifying
     @Query("update ProductOption o set o.soldOut = :soldOut, o.soldOutSyncedAt = :occurredAt "

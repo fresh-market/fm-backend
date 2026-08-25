@@ -97,6 +97,21 @@ public class StockLot extends BaseMutableTimeEntity {
         this.availableQty += qty;
     }
 
+    // 로트를 폐기 처리한다. 가용 수량이 0이 되면 이 로트는 다 소진된 것이므로 상태를 DISPOSED로 전환한다
+    public void dispose(int quantity) {
+        if (quantity < 1) {
+            throw new IllegalArgumentException("quantity 는 1 이상이어야 한다: " + quantity);
+        }
+        if (quantity > availableQty) {
+            throw new IllegalArgumentException(
+                    "quantity 는 availableQty 를 넘을 수 없다: " + quantity + " > " + availableQty);
+        }
+        this.availableQty -= quantity;
+        if (this.availableQty == 0) {
+            this.status = LotStatus.DISPOSED;
+        }
+    }
+
     // 요청 식별자가 비어있지 않고 길이 제한을 넘지 않는지 검사한다
     private static void validateRequestId(String requestId) {
         if (requestId == null || requestId.isBlank()) {
