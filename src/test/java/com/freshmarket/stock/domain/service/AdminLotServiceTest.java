@@ -3,6 +3,8 @@ package com.freshmarket.stock.domain.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -21,6 +23,7 @@ import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.entity.StockMovement;
 import com.freshmarket.stock.domain.exception.StockErrorCode;
 import com.freshmarket.stock.domain.exception.StockException;
+import com.freshmarket.stock.domain.repository.StockLotQueryRepository;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
@@ -44,6 +47,9 @@ class AdminLotServiceTest {
 
     @Mock
     private StockLotRepository stockLotRepository;
+
+    @Mock
+    private StockLotQueryRepository stockLotQueryRepository;
 
     @Mock
     private StockMovementRepository stockMovementRepository;
@@ -333,21 +339,22 @@ class AdminLotServiceTest {
     }
 
     @Test
-    void 상품의_로트_전체를_소비기한_오름차순으로_조회한다() {
+    void 상품의_로트를_소비기한_오름차순으로_조회한다() {
         // given
         when(productApi.findOptionIds(12L)).thenReturn(List.of(31L, 45L));
         StockLot lot1 = lotOf(31L, LocalDate.of(2026, 8, 31), 77L);
         StockLot lot2 = lotOf(45L, LocalDate.of(2026, 9, 10), 78L);
-        when(stockLotRepository.findByProductOptionIdInOrderByExpiryDateAsc(List.of(31L, 45L)))
+        when(stockLotQueryRepository.findByProductOptionIds(List.of(31L, 45L), false, null, 20))
                 .thenReturn(List.of(lot1, lot2));
 
         // when
-        AdminLotListResponse result = adminLotService.findAllByProduct(12L, false);
+        AdminLotListResponse result = adminLotService.findAllByProduct(12L, false, null, 0);
 
         // then
         assertThat(result.lots()).hasSize(2);
         assertThat(result.lots().get(0).stockLotId()).isEqualTo(77L);
         assertThat(result.lots().get(1).stockLotId()).isEqualTo(78L);
+        assertThat(result.nextPageToken()).isNull();
     }
 
     @Test
@@ -355,15 +362,46 @@ class AdminLotServiceTest {
         // given
         when(productApi.findOptionIds(12L)).thenReturn(List.of(31L));
         StockLot lot = lotOf(31L, LocalDate.of(2026, 8, 31), 77L);
-        when(stockLotRepository.findByProductOptionIdInAndStatusOrderByExpiryDateAsc(
-                List.of(31L), LotStatus.AVAILABLE)).thenReturn(List.of(lot));
+        when(stockLotQueryRepository.findByProductOptionIds(List.of(31L), true, null, 20))
+                .thenReturn(List.of(lot));
 
         // when
-        AdminLotListResponse result = adminLotService.findAllByProduct(12L, true);
+        AdminLotListResponse result = adminLotService.findAllByProduct(12L, true, null, 0);
 
         // then
         assertThat(result.lots()).hasSize(1);
-        verify(stockLotRepository, never()).findByProductOptionIdInOrderByExpiryDateAsc(any());
+    }
+
+    @Test
+    void 조회_결과가_페이지_크기보다_많으면_다음_페이지_토큰을_준다() {
+        // given — pageSize + 1건이 오면 마지막 한 건은 다음 페이지 몫이라 잘라내고 토큰을 만든다
+        when(productApi.findOptionIds(12L)).thenReturn(List.of(31L));
+        StockLot lot1 = lotOf(31L, LocalDate.of(2026, 8, 31), 77L);
+        StockLot lot2 = lotOf(31L, LocalDate.of(2026, 9, 10), 78L);
+        when(stockLotQueryRepository.findByProductOptionIds(List.of(31L), false, null, 1))
+                .thenReturn(List.of(lot1, lot2));
+
+        // when
+        AdminLotListResponse result = adminLotService.findAllByProduct(12L, false, null, 1);
+
+        // then
+        assertThat(result.lots()).hasSize(1);
+        assertThat(result.lots().get(0).stockLotId()).isEqualTo(77L);
+        assertThat(result.nextPageToken()).isNotNull();
+    }
+
+    @Test
+    void 페이지_크기를_생략하면_기본값을_쓰고_상한을_넘으면_잘라낸다() {
+        // given
+        when(productApi.findOptionIds(12L)).thenReturn(List.of(31L));
+        when(stockLotQueryRepository.findByProductOptionIds(List.of(31L), false, null, 100))
+                .thenReturn(List.of());
+
+        // when
+        adminLotService.findAllByProduct(12L, false, null, 9999);
+
+        // then — 요청한 9999가 아니라 상한(100)으로 조회됐는지 확인한다
+        verify(stockLotQueryRepository).findByProductOptionIds(List.of(31L), false, null, 100);
     }
 
     @Test
@@ -372,11 +410,10 @@ class AdminLotServiceTest {
         when(productApi.findOptionIds(999L)).thenReturn(List.of());
 
         // when, then
-        assertThatThrownBy(() -> adminLotService.findAllByProduct(999L, false))
+        assertThatThrownBy(() -> adminLotService.findAllByProduct(999L, false, null, 0))
                 .isInstanceOf(StockException.class)
                 .hasFieldOrPropertyWithValue("errorCode", StockErrorCode.OPTION_NOT_FOUND);
-        verify(stockLotRepository, never()).findByProductOptionIdInOrderByExpiryDateAsc(any());
-        verify(stockLotRepository, never()).findByProductOptionIdInAndStatusOrderByExpiryDateAsc(any(), any());
+        verify(stockLotQueryRepository, never()).findByProductOptionIds(any(), anyBoolean(), any(), anyInt());
     }
 
     // ---- dispose() ----

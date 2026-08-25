@@ -76,13 +76,6 @@ public interface StockLotRepository extends JpaRepository<StockLot, Long> {
     @Query("select s from StockLot s where s.id in :ids order by s.id")
     List<StockLot> findAllByIdForUpdate(@Param("ids") List<Long> ids);
 
-    // 옵션 ID 목록에 속한 로트 전체를 소비기한 오름차순으로 조회한다 (FEFO 순서)
-    List<StockLot> findByProductOptionIdInOrderByExpiryDateAsc(List<Long> productOptionIds);
-
-    // 위와 같되 상태로도 거른다. availableOnly=true일 때 AVAILABLE만 보는 데 쓰인다
-    List<StockLot> findByProductOptionIdInAndStatusOrderByExpiryDateAsc(List<Long> productOptionIds,
-            LotStatus status);
-
     /*
      * 로트 하나에 쓰기 락을 건다(CategoryRepository/MemberRepository의 findByIdForUpdate와 같은
      * 취지). 폐기는 조회한 available_qty를 그대로 stock_movement 원장에 남기는데, 락 없는 조회 뒤에

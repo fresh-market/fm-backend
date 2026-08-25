@@ -2,6 +2,8 @@ package com.freshmarket.stock.domain.service;
 
 import static com.freshmarket.common.exception.ConstraintViolations.isConstraintViolation;
 
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.OptionAvailabilityChangedEvent;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
@@ -15,6 +17,7 @@ import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.entity.StockMovement;
 import com.freshmarket.stock.domain.exception.StockErrorCode;
 import com.freshmarket.stock.domain.exception.StockException;
+import com.freshmarket.stock.domain.repository.StockLotQueryRepository;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
@@ -40,16 +43,22 @@ public class AdminLotService {
     // 같은 패키지의 AdminLotServiceTest가 오케스트레이션(청크 반복 횟수) 검증에 그대로 참조한다
     static final int EXPIRE_CHUNK_SIZE = 1000;
 
+    // (API-3-04) 로트별 조회의 기본/최대 페이지 크기. AdminProductSearchCondition과 같은 값을 쓴다
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 100;
+
     private final StockLotRepository stockLotRepository;
+    private final StockLotQueryRepository stockLotQueryRepository;
     private final StockMovementRepository stockMovementRepository;
     private final ProductApi productApi;
     private final ApplicationEventPublisher eventPublisher;
     private final AdminLotExpireChunkService adminLotExpireChunkService;
 
-    public AdminLotService(StockLotRepository stockLotRepository,
+    public AdminLotService(StockLotRepository stockLotRepository, StockLotQueryRepository stockLotQueryRepository,
             StockMovementRepository stockMovementRepository, ProductApi productApi,
             ApplicationEventPublisher eventPublisher, AdminLotExpireChunkService adminLotExpireChunkService) {
         this.stockLotRepository = stockLotRepository;
+        this.stockLotQueryRepository = stockLotQueryRepository;
         this.stockMovementRepository = stockMovementRepository;
         this.productApi = productApi;
         this.eventPublisher = eventPublisher;
@@ -262,7 +271,7 @@ public class AdminLotService {
     }
 
     /*
-     * 상품의 로트 전체를 소비기한 오름차순(FEFO)으로 조회한다.
+     * 상품의 로트를 소비기한 오름차순(FEFO)으로 커서 기반 페이지네이션 조회한다 (API-3-04, API-5-01).
      * productId 존재 여부는 옵션 ID 목록이 비어있는지로 판정한다 — 상품 등록 시 옵션이 최소 1개
      * 필수이고(AdminProductCreateRequest.options가 @NotEmpty) 옵션 삭제 기능이 아직 없어서,
      * 지금은 "상품이 있으면 옵션도 항상 1개 이상 있다"는 불변식이 성립한다. 옵션 삭제 기능이
@@ -270,20 +279,40 @@ public class AdminLotService {
      *
      * 옵션 목록 조회와 로트 조회가 별개의 쿼리 두 번이라, 격리수준을 REPEATABLE_READ로 명시해서
      * 두 쿼리가 같은 트랜잭션 안에서 일관된 스냅샷을 보게 강제한다 — DB 기본값에 기대지 않는다.
+     * 리포지토리가 pageSize + 1건을 주므로 초과분을 잘라내고 다음 페이지 여부를 판단한다.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public AdminLotListResponse findAllByProduct(Long productId, boolean availableOnly) {
+    public AdminLotListResponse findAllByProduct(Long productId, boolean availableOnly, PageCursor cursor,
+            int pageSize) {
         List<Long> optionIds = productApi.findOptionIds(productId);
         if (optionIds.isEmpty()) {
             throw new StockException(StockErrorCode.OPTION_NOT_FOUND);
         }
 
-        List<StockLot> lots = availableOnly
-                ? stockLotRepository.findByProductOptionIdInAndStatusOrderByExpiryDateAsc(optionIds,
-                        LotStatus.AVAILABLE)
-                : stockLotRepository.findByProductOptionIdInOrderByExpiryDateAsc(optionIds);
+        int effectivePageSize = resolvePageSize(pageSize);
+        List<StockLot> found = stockLotQueryRepository.findByProductOptionIds(optionIds, availableOnly, cursor,
+                effectivePageSize);
 
-        return AdminLotListResponse.of(lots);
+        boolean hasNext = found.size() > effectivePageSize;
+        List<StockLot> page = hasNext ? found.subList(0, effectivePageSize) : found;
+
+        return AdminLotListResponse.of(page, nextTokenOf(page, hasNext));
+    }
+
+    private static int resolvePageSize(int pageSize) {
+        if (pageSize <= 0) {
+            return DEFAULT_PAGE_SIZE;
+        }
+        return Math.min(pageSize, MAX_PAGE_SIZE);
+    }
+
+    // 다음 페이지 토큰. 마지막 행의 소비기한과 id로 커서를 만든다(정렬이 expiryDate asc, id asc 고정)
+    private static String nextTokenOf(List<StockLot> page, boolean hasNext) {
+        if (!hasNext || page.isEmpty()) {
+            return null;
+        }
+        StockLot last = page.get(page.size() - 1);
+        return PageTokens.encode(new PageCursor(last.getId(), last.getExpiryDate().toString()));
     }
 
     // optionId가 productId 소속으로 실제 존재하는지 확인한다
