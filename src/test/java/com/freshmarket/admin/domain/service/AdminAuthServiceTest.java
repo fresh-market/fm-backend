@@ -20,6 +20,7 @@ import com.freshmarket.admin.domain.entity.AdminRole;
 import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminRepository;
+import com.freshmarket.admin.domain.retry.FullJitterRetryPolicy;
 import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
 import com.freshmarket.common.auth.jwt.JwtTokenProvider;
 
@@ -73,6 +74,7 @@ class AdminAuthServiceTest {
     private final AdminAuditFailureService adminAuditFailureService =
             mock(AdminAuditFailureService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-08-23T06:00:00Z"), ZoneId.of("Asia/Seoul"));
+    private final FullJitterRetryPolicy retryPolicy = new FullJitterRetryPolicy();
 
     private final AdminAuthService adminAuthService = new AdminAuthService(
             adminRepository,
@@ -85,6 +87,7 @@ class AdminAuthServiceTest {
             adminLogoutFailureService,
             adminAuditFailureService,
             clock,
+            retryPolicy,
             ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS
     );
 

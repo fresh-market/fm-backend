@@ -54,6 +54,7 @@ class AdminLogoutFailureServiceTest {
         when(failureRepository.findTop100ByResolvedFalseAndIdGreaterThanOrderByIdAsc(0L)).thenReturn(List.of(failure));
         when(failureRepository.claimForRetry(failure.getId(), CLAIMED_AT, STALE_BEFORE)).thenReturn(1);
         when(failureRepository.findById(failure.getId())).thenReturn(Optional.of(failure));
+        when(adminRepository.findAllById(any())).thenReturn(List.of(adminWithId(failure.getAdminId())));
     }
 
     // ---- recordFailure() ----
@@ -108,7 +109,7 @@ class AdminLogoutFailureServiceTest {
     void 관리자를_찾지_못하면_재시도하지_않고_선점을_반납한다() {
         AdminLogoutFailure failure = newFailure(10L, 1L, null, false, true);
         pending(failure);
-        when(adminRepository.findById(1L)).thenReturn(Optional.empty());
+        when(adminRepository.findAllById(any())).thenReturn(List.of());
 
         sut.retryAllPending();
 
@@ -122,7 +123,6 @@ class AdminLogoutFailureServiceTest {
         String storedHash = "b".repeat(64);
         AdminLogoutFailure failure = newFailure(10L, 1L, storedHash, false, true);
         pending(failure);
-        when(adminRepository.findById(1L)).thenReturn(Optional.of(adminWithId(1L)));
         when(cleanupService.revokeDbIfMatchesWithRetry(1L, storedHash)).thenReturn(true);
 
         sut.retryAllPending();
@@ -137,7 +137,6 @@ class AdminLogoutFailureServiceTest {
         String storedHash = "c".repeat(64);
         AdminLogoutFailure failure = newFailure(10L, 1L, storedHash, true, false);
         pending(failure);
-        when(adminRepository.findById(1L)).thenReturn(Optional.of(adminWithId(1L)));
         when(cleanupService.cleanupRedisWithRetry("ROLE_ADMIN", 1L, storedHash)).thenReturn(true);
 
         sut.retryAllPending();
@@ -152,7 +151,6 @@ class AdminLogoutFailureServiceTest {
         String storedHash = "d".repeat(64);
         AdminLogoutFailure failure = newFailure(10L, 1L, storedHash, false, true);
         pending(failure);
-        when(adminRepository.findById(1L)).thenReturn(Optional.of(adminWithId(1L)));
         when(cleanupService.revokeDbIfMatchesWithRetry(1L, storedHash)).thenReturn(false);
 
         sut.retryAllPending();
@@ -165,7 +163,6 @@ class AdminLogoutFailureServiceTest {
     void DB실패_기록에_과거해시가_없으면_현재_RT를_무조건_삭제하지_않는다() {
         AdminLogoutFailure failure = newFailure(10L, 1L, null, false, true);
         pending(failure);
-        when(adminRepository.findById(1L)).thenReturn(Optional.of(adminWithId(1L)));
 
         sut.retryAllPending();
 
@@ -187,6 +184,8 @@ class AdminLogoutFailureServiceTest {
         verify(failureRepository).findTop100ByResolvedFalseAndIdGreaterThanOrderByIdAsc(0L);
         verify(failureRepository).findTop100ByResolvedFalseAndIdGreaterThanOrderByIdAsc(100L);
         verify(failureRepository, times(100)).claimForRetry(any(), any(), any());
+        verify(adminRepository).findAllById(any());
+        verify(adminRepository, never()).findById(any());
     }
 
     @Test

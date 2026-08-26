@@ -1,10 +1,10 @@
 package com.freshmarket.admin.domain.service;
 
+import com.freshmarket.admin.domain.logging.SafeExceptionLog;
+import com.freshmarket.admin.domain.retry.FullJitterRetryPolicy;
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import java.time.Duration;
 import java.util.Optional;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +44,7 @@ class AdminRefreshTokenCleanupService {
 
     private final RefreshTokenRepository refreshTokenRepository;
     private final AdminLogoutTransactionService adminLogoutTransactionService;
+    private final FullJitterRetryPolicy retryPolicy;
 
     /*
      * DB의 Refresh Token 백업을 폐기한다. 실패하면(락 경합, 커넥션 순단 등) 최대 3회까지
@@ -53,23 +54,27 @@ class AdminRefreshTokenCleanupService {
      */
     AdminLogoutTransactionService.LogoutDbState revokeDbWithRetry(Long adminId) {
         DataAccessException lastFailure = null;
-        long deadlineNanos = retryDeadlineNanos();
+        long deadlineNanos = retryPolicy.deadline(RETRY_BUDGET);
 
         for (int attempt = 1; attempt <= MAX_DB_REVOKE_ATTEMPTS; attempt++) {
             try {
                 return adminLogoutTransactionService.revokeRefreshToken(adminId);
             } catch (DataAccessException e) {
                 lastFailure = e;
-                log.warn("event=ADMIN_LOGOUT_DB_REVOKE_RETRY adminId={} attempt={}", adminId, attempt, e);
+                log.warn("event=ADMIN_LOGOUT_DB_REVOKE_RETRY adminId={} attempt={} errorType={}",
+                        adminId, attempt, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
             }
 
-            if (attempt < MAX_DB_REVOKE_ATTEMPTS && !waitBeforeRetry(attempt, deadlineNanos)) {
+            if (attempt < MAX_DB_REVOKE_ATTEMPTS
+                    && !retryPolicy.waitBeforeRetry(
+                    attempt, deadlineNanos, RETRY_BASE_DELAY, RETRY_MAX_DELAY)) {
                 break;
             }
         }
 
-        log.error("event=ADMIN_LOGOUT_DB_REVOKE_GAVE_UP adminId={} attempts={}",
-                adminId, MAX_DB_REVOKE_ATTEMPTS, lastFailure);
+        log.error("event=ADMIN_LOGOUT_DB_REVOKE_GAVE_UP adminId={} attempts={} errorType={}",
+                adminId, MAX_DB_REVOKE_ATTEMPTS, SafeExceptionLog.errorType(lastFailure),
+                SafeExceptionLog.stackTrace(lastFailure));
         return null;
     }
 
@@ -79,7 +84,7 @@ class AdminRefreshTokenCleanupService {
      */
     boolean revokeDbIfMatchesWithRetry(Long adminId, String expectedRefreshTokenHash) {
         DataAccessException lastFailure = null;
-        long deadlineNanos = retryDeadlineNanos();
+        long deadlineNanos = retryPolicy.deadline(RETRY_BUDGET);
 
         for (int attempt = 1; attempt <= MAX_DB_REVOKE_ATTEMPTS; attempt++) {
             try {
@@ -87,17 +92,20 @@ class AdminRefreshTokenCleanupService {
                 return true;
             } catch (DataAccessException e) {
                 lastFailure = e;
-                log.warn("event=ADMIN_LOGOUT_DB_REVOKE_IF_MATCHES_RETRY adminId={} attempt={}",
-                        adminId, attempt, e);
+                log.warn("event=ADMIN_LOGOUT_DB_REVOKE_IF_MATCHES_RETRY adminId={} attempt={} errorType={}",
+                        adminId, attempt, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
             }
 
-            if (attempt < MAX_DB_REVOKE_ATTEMPTS && !waitBeforeRetry(attempt, deadlineNanos)) {
+            if (attempt < MAX_DB_REVOKE_ATTEMPTS
+                    && !retryPolicy.waitBeforeRetry(
+                    attempt, deadlineNanos, RETRY_BASE_DELAY, RETRY_MAX_DELAY)) {
                 break;
             }
         }
 
-        log.error("event=ADMIN_LOGOUT_DB_REVOKE_IF_MATCHES_GAVE_UP adminId={} attempts={}",
-                adminId, MAX_DB_REVOKE_ATTEMPTS, lastFailure);
+        log.error("event=ADMIN_LOGOUT_DB_REVOKE_IF_MATCHES_GAVE_UP adminId={} attempts={} errorType={}",
+                adminId, MAX_DB_REVOKE_ATTEMPTS, SafeExceptionLog.errorType(lastFailure),
+                SafeExceptionLog.stackTrace(lastFailure));
         return false;
     }
 
@@ -114,7 +122,7 @@ class AdminRefreshTokenCleanupService {
             return false;
         }
 
-        long deadlineNanos = retryDeadlineNanos();
+        long deadlineNanos = retryPolicy.deadline(RETRY_BUDGET);
         for (int attempt = 1; attempt <= MAX_REDIS_CLEANUP_ATTEMPTS; attempt++) {
             if (cleanupRefreshTokenOnce(role, adminId, tokenHash, deadlineNanos)) {
                 return true;
@@ -122,7 +130,9 @@ class AdminRefreshTokenCleanupService {
             log.warn("event=ADMIN_REFRESH_TOKEN_CLEANUP_RETRY " + LOG_FIELDS_ROLE_ADMIN_ID + " attempt={}",
                     role, adminId, attempt);
 
-            if (attempt < MAX_REDIS_CLEANUP_ATTEMPTS && !waitBeforeRetry(attempt, deadlineNanos)) {
+            if (attempt < MAX_REDIS_CLEANUP_ATTEMPTS
+                    && !retryPolicy.waitBeforeRetry(
+                    attempt, deadlineNanos, RETRY_BASE_DELAY, RETRY_MAX_DELAY)) {
                 break;
             }
         }
@@ -164,12 +174,14 @@ class AdminRefreshTokenCleanupService {
             return RedisMutationOutcome.CONFIRMED;
 
         } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_UNKNOWN " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
-                    target, role, adminId, e);
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_UNKNOWN " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID
+                            + " errorType={}",
+                    target, role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
 
         } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_FAILED " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
-                    target, role, adminId, e);
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_FAILED " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID
+                            + " errorType={}",
+                    target, role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
             return RedisMutationOutcome.FAILED;
         }
 
@@ -180,7 +192,7 @@ class AdminRefreshTokenCleanupService {
         }
 
         // 3. 아직 키가 남아 있거나 조회 결과가 미확정이면, 예산 안에서 백오프 후 한 번 더 삭제한다.
-        if (!waitBeforeRetry(1, deadlineNanos)) {
+        if (!retryPolicy.waitBeforeRetry(1, deadlineNanos, RETRY_BASE_DELAY, RETRY_MAX_DELAY)) {
             return state == RedisDeletionState.PRESENT
                     ? RedisMutationOutcome.FAILED
                     : RedisMutationOutcome.UNKNOWN;
@@ -190,12 +202,14 @@ class AdminRefreshTokenCleanupService {
             deleteAction.run();
 
         } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_UNKNOWN " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
-                    target, role, adminId, e);
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_UNKNOWN " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID
+                            + " errorType={}",
+                    target, role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
 
         } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_FAILED " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID,
-                    target, role, adminId, e);
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_FAILED " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID
+                            + " errorType={}",
+                    target, role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
             return RedisMutationOutcome.FAILED;
         }
 
@@ -221,44 +235,11 @@ class AdminRefreshTokenCleanupService {
                     : RedisDeletionState.DELETED;
 
         } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED target=recordAndActiveKey role={} adminId={}",
-                    role, adminId, e);
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED "
+                            + "target=recordAndActiveKey role={} adminId={} errorType={}",
+                    role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
             return RedisDeletionState.UNKNOWN;
         }
-    }
-
-    private long retryDeadlineNanos() {
-        long now = System.nanoTime();
-        long budgetNanos = RETRY_BUDGET.toNanos();
-        return now > Long.MAX_VALUE - budgetNanos ? Long.MAX_VALUE : now + budgetNanos;
-    }
-
-    /*
-     * retryNumber=1이면 [0, base], retryNumber=2이면 [0, base*2] 범위에서 Full Jitter를 뽑는다.
-     * 대기 상한과 남은 요청 예산 중 더 작은 값을 사용하고, 인터럽트가 걸리면 즉시 재시도를 중단한다.
-     */
-    private boolean waitBeforeRetry(int retryNumber, long deadlineNanos) {
-        if (Thread.currentThread().isInterrupted()) {
-            return false;
-        }
-
-        long remainingNanos = deadlineNanos - System.nanoTime();
-        if (remainingNanos <= 0L) {
-            return false;
-        }
-
-        long exponentialCapNanos = RETRY_BASE_DELAY.toNanos() << Math.max(0, retryNumber - 1);
-        long cappedDelayNanos = Math.min(RETRY_MAX_DELAY.toNanos(), exponentialCapNanos);
-        long jitterUpperBoundNanos = Math.min(cappedDelayNanos, remainingNanos);
-        if (jitterUpperBoundNanos <= 0L) {
-            return false;
-        }
-
-        long delayNanos = ThreadLocalRandom.current().nextLong(jitterUpperBoundNanos + 1L);
-        if (delayNanos > 0L) {
-            LockSupport.parkNanos(delayNanos);
-        }
-        return !Thread.currentThread().isInterrupted() && System.nanoTime() < deadlineNanos;
     }
 
     private void logCleanupOutcome(String target, RedisMutationOutcome outcome, String role, Long adminId) {
@@ -267,6 +248,7 @@ class AdminRefreshTokenCleanupService {
                     target, outcome, role, adminId);
         }
     }
+
 
     // Redis 변경 작업 자체의 최종 결과.
     private enum RedisMutationOutcome {

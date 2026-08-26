@@ -10,7 +10,11 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -77,9 +81,11 @@ public class AdminLogoutFailureService {
                 return;
             }
 
+            Map<Long, Admin> adminsById = loadAdmins(failures);
+
             for (AdminLogoutFailure failure : failures) {
                 lastSeenId = failure.getId();
-                retryOne(failure.getId());
+                retryOne(failure.getId(), adminsById.get(failure.getAdminId()));
             }
 
             if (failures.size() < 100) {
@@ -88,7 +94,16 @@ public class AdminLogoutFailureService {
         }
     }
 
-    private void retryOne(Long failureId) {
+    private Map<Long, Admin> loadAdmins(List<AdminLogoutFailure> failures) {
+        Set<Long> adminIds = failures.stream()
+                .map(AdminLogoutFailure::getAdminId)
+                .collect(Collectors.toSet());
+
+        return adminRepository.findAllById(adminIds).stream()
+                .collect(Collectors.toMap(Admin::getId, Function.identity()));
+    }
+
+    private void retryOne(Long failureId, Admin admin) {
         LocalDateTime claimedAt = LocalDateTime.now(clock).truncatedTo(ChronoUnit.MICROS);
         LocalDateTime staleBefore = claimedAt.minus(CLAIM_LEASE);
         if (failureRepository.claimForRetry(failureId, claimedAt, staleBefore) != 1) {
@@ -106,10 +121,7 @@ public class AdminLogoutFailureService {
         AdminLogoutFailure failure = maybeFailure.get();
         Long adminId = failure.getAdminId();
 
-        Optional<Admin> maybeAdmin =
-                adminRepository.findById(adminId);
-
-        if (maybeAdmin.isEmpty()) {
+        if (admin == null) {
             log.warn(
                     "event=ADMIN_LOGOUT_OUTBOX_ADMIN_NOT_FOUND adminId={}",
                     adminId);
@@ -118,7 +130,7 @@ public class AdminLogoutFailureService {
             return;
         }
 
-        String role = maybeAdmin.get().getRole().toAuthority();
+        String role = admin.getRole().toAuthority();
 
         String tokenHash = failure.getRefreshTokenHash();
         boolean dbOk = !failure.isDbFailed();

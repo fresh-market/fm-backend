@@ -6,7 +6,9 @@ import com.freshmarket.admin.domain.dto.AdminLoginResult;
 import com.freshmarket.admin.domain.entity.Admin;
 import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
+import com.freshmarket.admin.domain.logging.SafeExceptionLog;
 import com.freshmarket.admin.domain.repository.AdminRepository;
+import com.freshmarket.admin.domain.retry.FullJitterRetryPolicy;
 import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
 import com.freshmarket.common.auth.jwt.JwtTokenProvider;
 import com.freshmarket.common.auth.jwt.TokenType;
@@ -19,8 +21,6 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.locks.LockSupport;
 
 import com.freshmarket.common.logging.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
@@ -82,6 +82,7 @@ public class AdminAuthService {
     private final AdminLogoutFailureService adminLogoutFailureService;
     private final AdminAuditFailureService adminAuditFailureService;
     private final Clock clock;
+    private final FullJitterRetryPolicy retryPolicy;
     private final String dummyPasswordHash;
 
     public AdminAuthService(
@@ -95,6 +96,7 @@ public class AdminAuthService {
             AdminLogoutFailureService adminLogoutFailureService,
             AdminAuditFailureService adminAuditFailureService,
             Clock clock,
+            FullJitterRetryPolicy retryPolicy,
             @Value("${ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS:86400}") long refreshTokenValiditySeconds) {
         this.adminRepository = adminRepository;
         this.passwordEncoder = passwordEncoder;
@@ -106,6 +108,7 @@ public class AdminAuthService {
         this.adminLogoutFailureService = adminLogoutFailureService;
         this.adminAuditFailureService = adminAuditFailureService;
         this.clock = clock;
+        this.retryPolicy = retryPolicy;
         this.refreshTokenValiditySeconds = refreshTokenValiditySeconds;
         // 같은 인코더로 미리 만들어 둬야 진짜 비밀번호 검증과 연산 비용(코스트 팩터)이 완전히 같다
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_SOURCE);
@@ -234,7 +237,7 @@ public class AdminAuthService {
             adminLogoutTransactionService.recordSuccess(adminId);
         } catch (DataAccessException e) {
             log.warn("event=ADMIN_LOGOUT_AUDIT_LOG_FAILED adminId={} errorType={} — durable outbox에 기록",
-                    adminId, safeErrorType(e));
+                    adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
             // 이 기록까지 실패하면 예외를 숨기지 않는다. 감사 행위가 DB와 outbox 양쪽에서
             // 모두 유실된 상태로 204를 반환하는 것을 막기 위해 호출자에게 실패를 드러낸다.
             adminAuditFailureService.recordFailure(
@@ -254,7 +257,7 @@ public class AdminAuthService {
         } catch (DataAccessException e) {
             log.warn("event=ADMIN_LOGOUT_ACTIVE_REFRESH_TOKEN_LOOKUP_FAILED "
                             + LOG_FIELDS_ROLE_ADMIN_ID + LOG_FIELD_ERROR_TYPE,
-                    role, adminId, safeErrorType(e));
+                    role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
             return null;
         }
     }
@@ -270,7 +273,7 @@ public class AdminAuthService {
             LocalDateTime cutoff) {
 
         Duration ttl = Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs());
-        long deadlineNanos = accessTokenRetryDeadlineNanos();
+        long deadlineNanos = retryPolicy.deadline(ACCESS_TOKEN_RETRY_BUDGET);
         DataAccessException lastUnknownFailure = null;
 
         for (int attempt = 1; attempt <= MAX_ACCESS_TOKEN_INVALIDATION_ATTEMPTS; attempt++) {
@@ -287,7 +290,8 @@ public class AdminAuthService {
                         role,
                         adminId,
                         attempt,
-                        safeErrorType(e));
+                        SafeExceptionLog.errorType(e),
+                        SafeExceptionLog.stackTrace(e));
 
                 // timeout/연결 단절은 명령이 Redis에 반영된 뒤 응답만 잃었을 수도 있으므로 먼저 확인한다.
                 if (isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
@@ -299,7 +303,9 @@ public class AdminAuthService {
             }
 
             if (attempt < MAX_ACCESS_TOKEN_INVALIDATION_ATTEMPTS
-                    && !waitBeforeAccessTokenRetry(attempt, deadlineNanos)) {
+                    && !retryPolicy.waitBeforeRetry(
+                    attempt, deadlineNanos,
+                    ACCESS_TOKEN_RETRY_BASE_DELAY, ACCESS_TOKEN_RETRY_MAX_DELAY)) {
                 break;
             }
         }
@@ -308,43 +314,6 @@ public class AdminAuthService {
         if (!isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
             throw logoutFailed(role, adminId, lastUnknownFailure);
         }
-    }
-
-    private long accessTokenRetryDeadlineNanos() {
-        long now = System.nanoTime();
-        long budgetNanos = ACCESS_TOKEN_RETRY_BUDGET.toNanos();
-        return now > Long.MAX_VALUE - budgetNanos ? Long.MAX_VALUE : now + budgetNanos;
-    }
-
-    /*
-     * retryNumber=1이면 [0, base], retryNumber=2이면 [0, base*2] 범위에서 Full Jitter를 뽑는다.
-     * 남은 요청 예산을 넘기지 않고, 인터럽트가 걸리면 즉시 재시도를 중단한다.
-     */
-    private boolean waitBeforeAccessTokenRetry(int retryNumber, long deadlineNanos) {
-        if (Thread.currentThread().isInterrupted()) {
-            return false;
-        }
-
-        long remainingNanos = deadlineNanos - System.nanoTime();
-        if (remainingNanos <= 0L) {
-            return false;
-        }
-
-        long exponentialCapNanos =
-                ACCESS_TOKEN_RETRY_BASE_DELAY.toNanos() << Math.max(0, retryNumber - 1);
-        long cappedDelayNanos =
-                Math.min(ACCESS_TOKEN_RETRY_MAX_DELAY.toNanos(), exponentialCapNanos);
-        long jitterUpperBoundNanos = Math.min(cappedDelayNanos, remainingNanos);
-        if (jitterUpperBoundNanos <= 0L) {
-            return false;
-        }
-
-        long delayNanos = ThreadLocalRandom.current().nextLong(jitterUpperBoundNanos + 1L);
-        if (delayNanos > 0L) {
-            LockSupport.parkNanos(delayNanos);
-        }
-
-        return !Thread.currentThread().isInterrupted() && System.nanoTime() < deadlineNanos;
     }
 
     /*
@@ -372,7 +341,8 @@ public class AdminAuthService {
                             + LOG_FIELD_ERROR_TYPE,
                     role,
                     adminId,
-                    safeErrorType(e));
+                    SafeExceptionLog.errorType(e),
+                    SafeExceptionLog.stackTrace(e));
 
             return false;
         }
@@ -390,15 +360,12 @@ public class AdminAuthService {
                         + LOG_FIELD_ERROR_TYPE,
                 role,
                 adminId,
-                safeErrorType(cause));
+                SafeExceptionLog.errorType(cause),
+                SafeExceptionLog.stackTrace(cause));
 
         // DataAccessException을 cause로 연결하면 GlobalExceptionHandler가 BusinessException의
         // 전체 스택을 남길 때 공급자 SQL/상세 메시지가 함께 기록될 수 있으므로 외부 도메인 예외에는 싣지 않는다.
         return new AdminException(AdminErrorCode.LOGOUT_FAILED);
-    }
-
-    private String safeErrorType(Throwable error) {
-        return error == null ? "UNCONFIRMED" : error.getClass().getSimpleName();
     }
 
     private String maskLoginId(String loginId) { return PiiMasker.maskGeneric(loginId, 2, 1); }

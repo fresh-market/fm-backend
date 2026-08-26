@@ -7,6 +7,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.freshmarket.admin.domain.retry.FullJitterRetryPolicy;
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -24,8 +25,10 @@ class AdminRefreshTokenCleanupServiceTest {
     private final AdminLogoutTransactionService adminLogoutTransactionService =
             mock(AdminLogoutTransactionService.class);
 
+    private final FullJitterRetryPolicy retryPolicy = new FullJitterRetryPolicy();
+
     private final AdminRefreshTokenCleanupService sut =
-            new AdminRefreshTokenCleanupService(refreshTokenRepository, adminLogoutTransactionService);
+            new AdminRefreshTokenCleanupService(refreshTokenRepository, adminLogoutTransactionService, retryPolicy);
 
     // ---- revokeDbWithRetry() ----
 

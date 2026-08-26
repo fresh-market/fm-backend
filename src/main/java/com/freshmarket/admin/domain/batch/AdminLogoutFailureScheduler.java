@@ -1,4 +1,4 @@
-package com.freshmarket.admin.domain;
+package com.freshmarket.admin.domain.batch;
 
 import com.freshmarket.admin.domain.service.AdminLogoutFailureService;
 import lombok.RequiredArgsConstructor;
@@ -8,8 +8,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * admin_logout_failure에 쌓인 미해결 건을 10분 간격으로 재시도한다.
- * 스케줄러 어댑터라 서비스가 아니고, domain.service 패키지(커버리지 100% 대상)에 있으면 안 된다 —
- * KakaoUnlinkRetryScheduler와 같은 이유. 실행/소요시간 로그는 SchedulerLoggingAspect가
+ * 스케줄러 어댑터이므로 구현 컴포넌트를 도메인 루트에 두지 않고 domain.batch에 둔다.
+ * 재실행 안전성은 실패 행의 claim/lease와 해시 조건부 삭제로 보장한다. 실행/소요시간 로그는 SchedulerLoggingAspect가
  * @Scheduled 메서드마다 자동으로 남긴다.
  */
 @Component
