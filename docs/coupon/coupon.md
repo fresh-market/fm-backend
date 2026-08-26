@@ -111,6 +111,8 @@ CREATE TABLE coupon_issue_1234 (
 
 Redis 카운터도 트랜잭션 밖이라 성질은 같지만, 그쪽은 실패한 번호를 따로 담아 다시 배정할 수 있다(3장). `AUTO_INCREMENT` 에는 그 자리가 없다.
 
+**발급마다 `AUTO_INCREMENT` 를 쓰는 것이 문제이지 컬럼 자체가 문제는 아니다.** 미리 넣어두고 update 로 잡으면 발급 경로에서 `AUTO_INCREMENT` 가 빠지고 이 문제도 사라진다. 그것이 7장의 v7 이다.
+
 ### 이것이 뜻하는 바
 
 **순번 발급기가 어디에 있든 초과 발급은 나지 않는다.** 카운터가 앱 메모리에 있든 DB 행이든 Redis 든, 그 값이 틀리면 두 제약 중 하나에 걸려 insert 가 실패한다.
@@ -360,15 +362,16 @@ db.t4g.micro 의 max_connections 약 60 (예측, OPS-1-11 로 실측)
 | **v4** | 가상 스레드 | 대기 중 캐리어 스레드 반납 | pinning 확인이 필요하다. 백프레셔가 커넥션 풀로 밀려 응답 지연 최대값이 는다 |
 | **v5** | Bulk INSERT 를 배치 서버로 + Redis 대기열 | **DB 커넥션이 인스턴스 수와 무관해진다** | 분산 요청-응답이 필요하다 |
 | **v6** | 미리 넣은 행을 update 로 잡는다 | **과소 발급이 구조적으로 닫힌다** | 스키마가 달라진다 |
+| **v7** | 쿠폰별 테이블에 미리 넣고 update | **PK 가 순번을 겸한다** | 이벤트마다 DDL. 쓰기가 두 번 |
 
 ```
 v1 -> v2 -> v3 -> v4 -> v5
-       └─ v6            사다리 밖이다
+       └─ v6 -> v7      사다리 밖이다
 ```
 
 **한 단계에 변수 하나**다. v4 는 v3 위에서 설정 한 줄만 바꾸고, v5 는 v4 에서 배치 위치만 옮긴다.
 
-**v6 만 예외다.** 순번은 v2 처럼 Redis 가 주지만 스키마를 바꾸므로 사다리를 잇지 않고 v2 에서 갈라진다.
+**v6 과 v7 만 예외다.** 순번은 v2 처럼 Redis 가 주지만 스키마를 바꾸므로 사다리를 잇지 않고 v2 에서 갈라진다. v7 은 v6 의 변형이다.
 
 ### v1 만 정산이 필요 없다
 
@@ -491,6 +494,42 @@ member_id 가 남    카운터가 되밀렸다   -> 다음 순번을 받아 재�
 0행일 때만 그 행을 한 번 더 읽으면 갈린다. 정상 경로는 UPDATE 한 번 그대로다.
 
 **성능은 v6 의 근거가 아니다.** 고정된 우측 말단 핫 페이지가 사라지는 것은 맞으나, 커밋 하나가 2~4ms(Multi-AZ 동기 복제)인데 행 하나의 쓰기 작업은 50~100us 다. 요청마다 커밋하면 그 차이가 묻히고, 배치로 커밋을 줄이면 이번에는 동시에 쓰는 주체가 줄어 다툴 상대가 없어진다. `undo` 는 오히려 v6 이 크다. **1만 장 규모에서는 차이의 부호도 확신할 수 없다.** 10만 이상에서 재볼 값이다.
+
+---
+
+### v7 은 쿠폰별 테이블을 쓴다
+
+v6 의 변형이다. 미리 넣고 update 로 잡는 것은 같은데, 그 행을 `member_coupon` 이 아니라 **쿠폰 전용 테이블**에 둔다.
+
+```sql
+CREATE TABLE coupon_issue_1234 (
+    id        INT    NOT NULL AUTO_INCREMENT,
+    coupon_id BIGINT NOT NULL,
+    member_id BIGINT NULL,
+    issued_at DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ci1234_coupon_member (coupon_id, member_id),
+    CONSTRAINT fk_ci1234_coupon FOREIGN KEY (coupon_id) REFERENCES coupon (coupon_id),
+    CONSTRAINT chk_ci1234_one   CHECK (coupon_id = 1234),
+    CONSTRAINT chk_ci1234_limit CHECK (id <= 10000)
+);
+-- 이벤트 전에 1..10000 을 미리 넣는다
+```
+
+**PK 가 순번을 겸하므로 순번 컬럼이 필요 없다.** 테이블이 쿠폰 전용이라 `id` 가 그 쿠폰 안에서 1부터 시작하기 때문이다. 공용 `member_coupon` 은 PK 가 전역이라 이렇게 못 한다.
+
+상한은 두 겹이다. 1..10000 이 이미 차 있어 명시 INSERT 는 PK 중복에 걸리고, `AUTO_INCREMENT` 가 주는 10001 은 `chk_ci1234_limit` 에 걸린다.
+
+| | |
+|---|---|
+| **얻는 것** | 순번 컬럼이 필요 없다. PK 가 겸한다 |
+| | 발급 경로에 `AUTO_INCREMENT` 가 없어 구멍이 안 생긴다 |
+| **내는 것** | **이벤트마다 DDL.** Flyway 소유권, `ddl-auto: validate`, JPA 매핑과 부딪힌다 |
+| | **쓰기가 두 번이다.** 쿠폰함과 주문은 `member_coupon` 을 보므로 옮기는 단계가 붙는다 |
+| | 순서 근거가 없다. PK 가 사전 삽입 순서라 발급 순서를 못 알려준다 |
+| | 상한이 DDL 리터럴이라 이벤트마다 수량이 다르면 슬롯을 용량별로 나눠야 한다 |
+
+DDL 부담은 Flyway 로 슬롯 테이블을 미리 만들어두고 `TRUNCATE` 로 재사용하면 준다. `TRUNCATE` 는 `AUTO_INCREMENT` 도 1 로 되돌린다.
 
 ---
 
