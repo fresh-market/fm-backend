@@ -297,6 +297,10 @@ Access Token 차단은 기존 공용 `JwtAuthenticationFilter`의 Redis 장애 �
 | `401` | `ADMIN-001` | 인증 주체에 해당하는 관리자 계정을 찾을 수 없음 |
 | `503` | `ADMIN-010` | Access Token 차단 상태를 끝까지 확정할 수 없음 |
 
+`ADMIN-010`은 Redis의 일시적인 타임아웃·연결 단절 등으로 Access Token 차단 상태를 확정하지 못한 경우의 **재시도 가능한 오류**다.
+클라이언트는 `503 ADMIN-010`일 때만 로그아웃 요청을 재시도하며, 즉시 연속 호출하지 않고 1초부터 시작하는 지수 백오프(1초 → 2초 → 4초)로 최대 3회까지 재시도한다.
+재시도 후에도 `ADMIN-010`이 계속되면 자동 재시도를 중단하고 일시적인 서비스 장애로 처리한다.
+
 ```
 Set-Cookie: refreshToken=...; HttpOnly; Secure; SameSite=Strict;
             Path=/v1/admin/auth/; Max-Age=86400

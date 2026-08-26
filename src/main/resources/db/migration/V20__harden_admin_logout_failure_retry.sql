@@ -4,4 +4,5 @@
 ALTER TABLE admin_logout_failure
     ADD COLUMN processing BOOLEAN NOT NULL DEFAULT FALSE AFTER resolved,
     ADD COLUMN processing_started_at DATETIME(6) NULL AFTER processing,
-    ADD KEY idx_admin_logout_failure_pending (resolved, admin_logout_failure_id);
+    ADD KEY idx_admin_logout_failure_pending (resolved, admin_logout_failure_id),
+    ADD CONSTRAINT chk_admin_logout_failure_attempt_count CHECK (attempt_count >= 1);
