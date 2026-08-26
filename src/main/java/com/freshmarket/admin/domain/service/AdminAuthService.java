@@ -38,11 +38,10 @@ import org.springframework.transaction.TransactionException;
  * 리프레시 토큰은 member와 같은 공통 RefreshTokenRepository(Redis)에 저장한다.
  * 로그인은 최초 발급만 담당하고, Rotation은 별도 재발급 API에서 compareAndRotate()로 처리한다.
  *
- * Refresh Token은 DB와 Redis 두 저장소에 기록한다. DB 갱신은 AdminLoginTransactionService의 짧은
- * 트랜잭션에서 처리하고 Redis I/O는 트랜잭션 밖에서 수행한다. Redis 장애 시 DB 백업이 있으면
- * 로그인은 성공시키며, DB 장애 시에도 Redis 저장이 성공하면 로그인은 가능하다. 둘 다 저장하지
- * 못한 경우에만 로그인 실패로 처리한다. 이 구조는 feat/admin-logout의 로그인 트랜잭션 분리 방식과
- * 맞춰 두 브랜치 병합 시 충돌 범위를 줄인다.
+ * Refresh Token은 DB를 필수 백업 저장소로 사용하고 Redis에도 기록한다.
+ * DB 갱신은 AdminLoginTransactionService의 짧은 트랜잭션에서 처리하고 Redis I/O는 트랜잭션 밖에서 수행한다.
+ * DB 백업이 확정된 뒤에만 Redis 저장과 로그인 응답을 진행하므로 Redis 전용 부분 성공 상태를 만들지 않는다.
+ * Redis 장애 시에는 이미 확정된 DB 백업을 fallback으로 사용해 로그인은 성공시킨다.
  */
 @Slf4j
 @Service
@@ -120,25 +119,24 @@ public class AdminAuthService {
         Duration refreshTtl = Duration.ofSeconds(refreshTokenValiditySeconds);
         LocalDateTime refreshTokenExpiresAt = LocalDateTime.now(clock).plus(refreshTtl);
 
-        AdminLoginTransactionService.LoginDbState dbState = null;
-        boolean dbSaved = false;
+        AdminLoginTransactionService.LoginDbState dbState;
         try {
             dbState = adminLoginTransactionService.issueRefreshToken(
                     admin.getId(),
                     refreshTokenHash,
                     refreshTokenExpiresAt);
-            dbSaved = true;
         } catch (DataAccessException | TransactionException e) {
-            log.warn(
-                    "event=ADMIN_LOGIN_DB_BACKUP_SAVE_FAILED adminId={} — Redis 저장으로 계속 진행",
+            log.error(
+                    "event=ADMIN_LOGIN_DB_BACKUP_SAVE_FAILED adminId={} — DB 백업 미확정으로 로그인 중단",
                     admin.getId(),
                     e);
+            throw new AdminException(CommonErrorCode.INTERNAL_ERROR, e);
         }
 
-        Long adminId = dbSaved ? dbState.adminId() : admin.getId();
-        String loginId = dbSaved ? dbState.loginId() : admin.getLoginId();
-        String name = dbSaved ? dbState.name() : admin.getName();
-        var roleValue = dbSaved ? dbState.role() : admin.getRole();
+        Long adminId = dbState.adminId();
+        String loginId = dbState.loginId();
+        String name = dbState.name();
+        var roleValue = dbState.role();
         String role = roleValue.toAuthority();
 
         String accessToken = jwtTokenProvider.createAccessToken(
@@ -153,14 +151,7 @@ public class AdminAuthService {
                     false,
                     refreshTtl);
         } catch (DataAccessException e) {
-            if (!dbSaved) {
-                // 어느 저장소에도 RT 상태를 남기지 못했다면 발급한 RT는 곧바로 쓸 수 없으므로 로그인 실패가 맞다.
-                log.error("event=ADMIN_LOGIN_REFRESH_TOKEN_SAVE_FAILED adminId={} — DB와 Redis 모두 저장 실패",
-                        adminId, e);
-                throw new AdminException(CommonErrorCode.INTERNAL_ERROR, e);
-            }
-
-            // 핵심 fallback: Redis가 죽어 있어도 DB 백업이 있으므로 로그인 자체는 성공시킨다.
+            // DB 백업은 이미 확정됐으므로 Redis 장애 시에도 DB fallback으로 로그인은 유지한다.
             log.warn("event=ADMIN_LOGIN_REDIS_SAVE_FAILED adminId={} — DB fallback으로 로그인 유지",
                     adminId, e);
         }

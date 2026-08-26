@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.freshmarket.admin.domain.dto.AdminLoginRequest;
@@ -148,7 +149,7 @@ class AdminAuthServiceTest {
     }
 
     @Test
-    void DB_백업_저장이_실패해도_로그인은_성공하고_Redis에는_반영된다() {
+    void DB_백업_저장이_실패하면_Redis를_호출하지_않고_로그인도_실패한다() {
         // given
         Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
         when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
@@ -158,41 +159,14 @@ class AdminAuthServiceTest {
 
         AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
-        // when
-        AdminLoginResult result = adminAuthService.login(request);
-
-        // then: DB 백업 저장은 실패했지만 로그인 응답 자체는 정상적으로 토큰을 담아 나간다.
-        assertThat(result.accessToken()).isNotBlank();
-        assertThat(result.refreshToken()).isNotBlank();
-
-        // Redis 저장은 DB 백업 실패와 무관하게 이어서 시도된다.
-        verify(refreshTokenRepository).save(
-                result.refreshToken(),
-                admin.getId(),
-                "ROLE_ADMIN",
-                TokenType.ADMIN,
-                false,
-                Duration.ofSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
-    }
-
-    @Test
-    void DB와_Redis_저장이_모두_실패하면_로그인도_실패한다() {
-        Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
-        when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
-        doThrow(new DataAccessResourceFailureException("db down"))
-                .when(adminLoginTransactionService)
-                .issueRefreshToken(eq(admin.getId()), anyString(), any(LocalDateTime.class));
-        doThrow(new DataAccessResourceFailureException("redis down"))
-                .when(refreshTokenRepository)
-                .save(anyString(), eq(admin.getId()), anyString(), any(TokenType.class), anyBoolean(), any(Duration.class));
-
-        AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
-
+        // when, then: DB 백업을 확정하지 못하면 Redis 전용 부분 성공 상태를 만들지 않고 즉시 실패한다.
         assertThatThrownBy(() -> adminAuthService.login(request))
                 .isInstanceOf(AdminException.class)
                 .hasCauseInstanceOf(DataAccessResourceFailureException.class)
                 .extracting(e -> ((AdminException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.INTERNAL_ERROR);
+
+        verifyNoInteractions(refreshTokenRepository);
     }
 
     @Test
@@ -302,7 +276,7 @@ class AdminAuthServiceTest {
     }
 
     @Test
-    void DB_트랜잭션_시작이_실패해도_Redis가_성공하면_로그인은_성공한다() {
+    void DB_트랜잭션_시작이_실패하면_Redis를_호출하지_않고_로그인도_실패한다() {
         // given
         Admin admin = AdminFixture.active(
                 "admin.kim",
@@ -322,21 +296,14 @@ class AdminAuthServiceTest {
         AdminLoginRequest request =
                 new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
-        // when
-        AdminLoginResult result = adminAuthService.login(request);
+        // when, then
+        assertThatThrownBy(() -> adminAuthService.login(request))
+                .isInstanceOf(AdminException.class)
+                .hasCauseInstanceOf(CannotCreateTransactionException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INTERNAL_ERROR);
 
-        // then
-        assertThat(result.accessToken()).isNotBlank();
-        assertThat(result.refreshToken()).isNotBlank();
-
-        // DB 트랜잭션은 실패했지만 Redis 저장은 계속 시도되어야 한다.
-        verify(refreshTokenRepository).save(
-                result.refreshToken(),
-                admin.getId(),
-                "ROLE_ADMIN",
-                TokenType.ADMIN,
-                false,
-                Duration.ofSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
+        verifyNoInteractions(refreshTokenRepository);
     }
 
     private void stubDbBackupSuccess(Admin admin) {
