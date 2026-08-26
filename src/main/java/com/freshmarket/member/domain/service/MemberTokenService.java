@@ -220,13 +220,17 @@ public class MemberTokenService {
         Optional<String> hash;
         try {
             hash = refreshTokenRepository.findActiveHash(role, memberId);
-            if (hash.isEmpty()) {
-                hash = memberRepository.findById(memberId).map(Member::getRefreshTokenHash);
-                hash.ifPresent(h -> log.warn("event=ACTIVE_KEY_MISSING_DB_FALLBACK_USED role={} id={}", role, memberId));
-            }
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_LOOKUP_FAILED role={} id={} — 지울 해시를 못 구함", role, memberId, e);
+            log.warn("event=REDIS_LOOKUP_FAILED role={} id={} — 활성 해시 조회 실패, DB 백업 해시로 폴백 시도", role, memberId, e);
             hash = Optional.empty();
+        }
+        // (2026-08-26 수정) Redis 조회가 "값 없음"이 아니라 예외로 실패한 경우에도 DB 백업
+        // 해시(Member.refreshTokenHash)로 폴백해야 한다 — 그러지 않으면 dbCleared/redisCleared 중
+        // 하나가 실패해도 hash가 비어 있어 recordFailure()가 호출되지 않고, Redis의
+        // refreshToken:{hash} 레코드가 안 지워진 채 재시도 아웃박스에도 안 남는 구멍이 생긴다.
+        if (hash.isEmpty()) {
+            hash = memberRepository.findById(memberId).map(Member::getRefreshTokenHash);
+            hash.ifPresent(h -> log.warn("event=ACTIVE_KEY_MISSING_DB_FALLBACK_USED role={} id={}", role, memberId));
         }
 
         boolean dbCleared = true;

@@ -331,16 +331,40 @@ class MemberTokenServiceTest {
     }
 
     @Test
-    void 지울_해시를_모르면_db_삭제가_실패해도_아웃박스에_기록하지_않는다() {
-        // Redis 조회 자체가 실패해서(activeKey 못 구함) hash 확보 시도 전체가 catch로 빠지는 경우 —
-        // 어느 해시를 조건으로 재시도할지 몰라 안전하게 남길 방법이 없다
+    void activeKey_조회_자체가_예외로_실패해도_db_백업_해시로_폴백해서_아웃박스에_기록한다() {
+        // (2026-08-26) Redis 조회가 "값 없음"이 아니라 예외로 실패한 경우에도 DB 백업 해시로
+        // 폴백해야 한다 — 안 그러면 하필 Redis가 흔들리는 그 순간에 recordFailure()가 스킵돼서
+        // Redis의 refreshToken:{hash} 레코드가 안 지워진 채 재시도 아웃박스에도 안 남는다.
+        Member member = newMember(1L);
+        try {
+            Field field = Member.class.getDeclaredField("refreshTokenHash");
+            field.setAccessible(true);
+            field.set(member, "db-backed-up-hash");
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
         doThrow(new DataAccessResourceFailureException("redis down"))
                 .when(refreshTokenRepository).findActiveHash("ROLE_USER", 1L);
+        when(memberRepository.findById(1L)).thenReturn(Optional.of(member));
         doThrow(new DataAccessResourceFailureException("db down")).when(memberRepository).clearRefreshToken(1L);
 
         sut.revoke(1L, "ROLE_USER", false);
 
-        verify(memberRepository, never()).findById(any());
+        verify(refreshTokenRepository).deleteByHash("db-backed-up-hash");
+        verify(refreshTokenRevokeRetryService).recordFailure(1L, "ROLE_USER", "db-backed-up-hash");
+    }
+
+    @Test
+    void db에도_해시가_없으면_그래도_아웃박스에_기록하지_않는다() {
+        // activeKey 조회도 실패하고 DB 백업 해시도 없으면(발급 이력이 없거나 이미 지워졌으면)
+        // 어느 해시를 조건으로 재시도할지 몰라 안전하게 남길 방법이 없다
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).findActiveHash("ROLE_USER", 1L);
+        when(memberRepository.findById(1L)).thenReturn(Optional.of(newMember(1L)));
+        doThrow(new DataAccessResourceFailureException("db down")).when(memberRepository).clearRefreshToken(1L);
+
+        sut.revoke(1L, "ROLE_USER", false);
+
         verify(refreshTokenRevokeRetryService, never()).recordFailure(any(), any(), any());
     }
 
