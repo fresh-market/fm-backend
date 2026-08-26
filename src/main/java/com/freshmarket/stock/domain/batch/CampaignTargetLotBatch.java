@@ -49,9 +49,13 @@ public class CampaignTargetLotBatch {
      * 판매 마감 기한 = 소비기한 - 10일, 그 앞 3일이 임박 구간이다(팀 통일 규칙).
      * Product.saleAvailableDaysFromExpiry 가 전 상품 10 으로 통일된 것에 기대는 값이라,
      * 카테고리별로 값이 갈리면 여기도 함께 바뀌어야 한다.
+     *
+     * long 으로 두는 이유는 LocalDate.plusDays(long) 에 그대로 넘기기 때문이다.
+     * int 로 두면 둘을 더하는 시점에 int 덧셈이 일어난 뒤 long 으로 넓혀져
+     * 오버플로 가능성을 지적받는다 (S2184).
      */
-    private static final int SALE_CLOSE_DAYS = 10;
-    private static final int EXPIRING_SOON_DAYS = 3;
+    private static final long SALE_CLOSE_DAYS = 10;
+    private static final long EXPIRING_SOON_DAYS = 3;
     private static final int MIN_AVAILABLE_QTY = 30;
     // 하위 10% = 1/10. double 0.1 곱셈은 부동소수점 오차로 ceil() 결과가 하나 더 잘릴 수 있어
     // 정수 나눗셈으로 대신한다 (EJ-8-04)

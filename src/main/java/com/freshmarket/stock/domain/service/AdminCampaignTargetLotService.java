@@ -1,5 +1,7 @@
 package com.freshmarket.stock.domain.service;
 
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.product.ProductOptionInfo;
 import com.freshmarket.stock.domain.dto.AdminCampaignTargetLotListResponse;
@@ -14,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 /*
@@ -23,7 +26,11 @@ import org.springframework.stereotype.Service;
  * 그대로 읽기만 한다. "동일 기준일로 재조회 시 항상 동일 결과 반환" 요구사항이
  * 여기가 아니라 배치의 확정 시점에 이미 보장돼 있기 때문이다.
  *
- * 클래스에 @Transactional 을 걸지 않는다 — findToday() 중간에 productApi 호출이
+ * 대상 건수에 상한이 없어(소진율 하위 10% 전체) 커서 페이지네이션을 둔다
+ * (API-3-04, API-5-01, FUN-3-03). target_rank 는 기준일 안에서 1부터 순차라
+ * 커서 축으로 그대로 쓴다. 페이지 크기 상한은 서버가 강제한다 (FUN-3-04, SEC-3-03).
+ *
+ * 클래스에 @Transactional 을 걸지 않는다 — find() 중간에 productApi 호출이
  * 끼어 있어, 감싸면 그 호출이 읽기 트랜잭션 안에 들어간다(DI-4-02, domain-package-
  * boundary-guideline.md 7장과 같은 문제). 여기서 쓰는 조회 메서드들은 전부 Spring
  * Data JPA 리포지토리가 기본으로 제공하는 것이라, 감싸지 않아도 각자 자기 트랜잭션
@@ -31,6 +38,10 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class AdminCampaignTargetLotService {
+
+    // AdminLotService 와 같은 값·같은 근거
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 100;
 
     private final CampaignTargetLotRepository campaignTargetLotRepository;
     private final StockLotRepository stockLotRepository;
@@ -46,39 +57,71 @@ public class AdminCampaignTargetLotService {
     }
 
     /*
+     * 오늘 확정된 대상을 순위대로 한 페이지 조회한다.
+     * 리포지토리가 pageSize + 1건을 주므로 초과분을 잘라내고 다음 페이지 여부를 판단한다.
+     *
      * CampaignTargetLot 은 stockLotId 만 갖고 있어, 상품/옵션 정보를 보여주려면
      * StockLot 을 한 번 더 조회해 productOptionId 를 얻고, 그걸로 ProductApi 를 불러야 한다.
-     * 두 단계 조회가 되지만 각 단계가 IN 조회 한 번씩이라 대상 수와 무관하게 쿼리는 세 번이다.
-     * 다만 대상이 하위 10% 전체라 건수 상한이 없어, 후보가 크게 늘면 ProductApi 로 넘기는
-     * 옵션 ID 목록도 함께 커진다. 페이지네이션이 필요해지는 지점이 여기다.
+     * 두 단계 모두 IN 조회 한 번씩이라 페이지 크기와 무관하게 쿼리는 세 번이다.
      */
-    public AdminCampaignTargetLotListResponse findToday() {
+    public AdminCampaignTargetLotListResponse find(PageCursor cursor, int pageSize) {
         LocalDate today = LocalDate.now(clock);
-        List<CampaignTargetLot> targetLots =
-                campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(today);
+        int effectivePageSize = resolvePageSize(pageSize);
+        int afterRank = cursor != null ? cursor.id().intValue() : 0;
 
-        if (targetLots.isEmpty()) {
-            return new AdminCampaignTargetLotListResponse(today, List.of());
+        List<CampaignTargetLot> found = campaignTargetLotRepository
+                .findByTargetDateAndTargetRankGreaterThanOrderByTargetRankAsc(
+                        today, afterRank, PageRequest.of(0, effectivePageSize + 1));
+
+        boolean hasNext = found.size() > effectivePageSize;
+        List<CampaignTargetLot> page = hasNext ? found.subList(0, effectivePageSize) : found;
+
+        if (page.isEmpty()) {
+            return new AdminCampaignTargetLotListResponse(today, List.of(), null);
         }
 
-        List<Long> stockLotIds = targetLots.stream().map(CampaignTargetLot::getStockLotId).toList();
-        Map<Long, StockLot> stockLotById = stockLotRepository.findAllById(stockLotIds).stream()
-                .collect(Collectors.toMap(StockLot::getId, Function.identity()));
+        Map<Long, ProductOptionInfo> infoByStockLotId = findProductInfoByStockLotId(page);
 
-        List<Long> productOptionIds = stockLotById.values().stream()
+        List<AdminCampaignTargetLotResponse> targets = page.stream()
+                .filter(lot -> infoByStockLotId.containsKey(lot.getStockLotId()))
+                .map(lot -> AdminCampaignTargetLotResponse.of(lot, infoByStockLotId.get(lot.getStockLotId())))
+                .toList();
+
+        return new AdminCampaignTargetLotListResponse(today, targets, nextTokenOf(page, hasNext));
+    }
+
+    private static int resolvePageSize(int pageSize) {
+        if (pageSize <= 0) {
+            return DEFAULT_PAGE_SIZE;
+        }
+        return Math.min(pageSize, MAX_PAGE_SIZE);
+    }
+
+    // 다음 페이지 토큰. 마지막 행의 순위를 커서로 쓴다(정렬이 targetRank asc 고정이라 축이 하나다)
+    private static String nextTokenOf(List<CampaignTargetLot> page, boolean hasNext) {
+        if (!hasNext || page.isEmpty()) {
+            return null;
+        }
+        return PageTokens.encode(new PageCursor((long) page.get(page.size() - 1).getTargetRank(), null));
+    }
+
+    // 대상 로트마다 상품 정보를 붙인다. 각 단계가 IN 조회 한 번이라 대상 수와 무관하게 쿼리 수가 일정하다
+    private Map<Long, ProductOptionInfo> findProductInfoByStockLotId(List<CampaignTargetLot> targetLots) {
+        List<Long> stockLotIds = targetLots.stream()
+                .map(CampaignTargetLot::getStockLotId)
+                .toList();
+        List<StockLot> stockLots = stockLotRepository.findAllById(stockLotIds);
+
+        List<Long> productOptionIds = stockLots.stream()
                 .map(StockLot::getProductOptionId)
+                .distinct()
                 .toList();
         Map<Long, ProductOptionInfo> infoByOptionId = productApi.findOptionInfos(productOptionIds).stream()
                 .collect(Collectors.toMap(ProductOptionInfo::productOptionId, Function.identity()));
 
-        List<AdminCampaignTargetLotResponse> targets = targetLots.stream()
-                .map(lot -> {
-                    StockLot stockLot = stockLotById.get(lot.getStockLotId());
-                    ProductOptionInfo info = infoByOptionId.get(stockLot.getProductOptionId());
-                    return AdminCampaignTargetLotResponse.of(lot, info);
-                })
-                .toList();
-
-        return new AdminCampaignTargetLotListResponse(today, targets);
+        return stockLots.stream()
+                .filter(lot -> infoByOptionId.containsKey(lot.getProductOptionId()))
+                .collect(Collectors.toMap(
+                        StockLot::getId, lot -> infoByOptionId.get(lot.getProductOptionId())));
     }
 }
