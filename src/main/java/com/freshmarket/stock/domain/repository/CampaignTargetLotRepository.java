@@ -3,6 +3,7 @@ package com.freshmarket.stock.domain.repository;
 import com.freshmarket.stock.domain.entity.CampaignTargetLot;
 import java.time.LocalDate;
 import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -12,6 +13,14 @@ public interface CampaignTargetLotRepository extends JpaRepository<CampaignTarge
 
     // 특정 기준일의 캠페인 대상을 순위대로 조회한다
     List<CampaignTargetLot> findByTargetDateOrderByTargetRankAsc(LocalDate targetDate);
+
+    /*
+     * 회원용 조회의 커서 페이지네이션. target_rank 는 기준일 안에서 1부터 순차라 커서 축으로 쓴다
+     * (idx_campaign_target_date(target_date, target_rank) 를 그대로 탄다).
+     * 첫 페이지는 afterRank=0 으로 부른다.
+     */
+    List<CampaignTargetLot> findByTargetDateAndTargetRankGreaterThanOrderByTargetRankAsc(
+            LocalDate targetDate, int afterRank, Pageable pageable);
 
     /*
      * 재실행 시 동일 일자 집계를 덮어쓰기 위해, 먼저 그날 것을 지운다 (daily_sales 와 같은 원칙).
