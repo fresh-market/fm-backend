@@ -7,7 +7,6 @@ import com.freshmarket.member.domain.repository.RefreshTokenRevokeFailureReposit
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,23 +44,14 @@ public class RefreshTokenRevokeRetryService {
      * 무관하게 독립적으로 커밋되게 한다(MemberWithdrawalCompletionService를 별도 빈으로 뺀 것과
      * 같은 종류의 이유).
      *
-     * member_id + refresh_token_hash에 유니크 제약이 있어서, 같은 토큰의 실패 기록이 거의 동시에
-     * 두 번 들어오면 두 트랜잭션이 둘 다 없음을 보고 save()를 시도해 유니크 위반이 날 수 있다.
-     * 서로 다른 해시는 각각 별도 행으로 남긴다. 그래야 이전 토큰의 Redis 폐기가 실패한 뒤
-     * 재로그인/재폐기 실패가 발생해도 먼저 실패한 토큰의 정리 작업이 유실되지 않는다.
-     * MemberLoginService.registerNewMember()와 같은 패턴으로 처리한다 — 위반이 나면 그 사이
-     * 먼저 커밋된 행을 다시 찾아 이어서 쓴다.
+     * member_id + refresh_token_hash에 유니크 제약이 있다. 이 메서드는 MySQL upsert를 써서 같은
+     * 토큰의 동시 실패 기록을 한 SQL 안에서 attempt_count 증가로 합친다. 서로 다른 해시는 각각
+     * 별도 행으로 남겨, 이전 토큰의 Redis 폐기가 실패한 뒤 재로그인/재폐기 실패가 발생해도 먼저
+     * 실패한 토큰의 정리 작업이 유실되지 않게 한다.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordFailure(Long memberId, String role, String refreshTokenHash) {
-        try {
-            failureRepository.findByMemberIdAndRefreshTokenHash(memberId, refreshTokenHash).ifPresentOrElse(
-                    RefreshTokenRevokeFailure::markRetryFailed,
-                    () -> failureRepository.save(RefreshTokenRevokeFailure.record(memberId, role, refreshTokenHash)));
-        } catch (DataIntegrityViolationException e) {
-            failureRepository.findByMemberIdAndRefreshTokenHash(memberId, refreshTokenHash)
-                    .ifPresent(RefreshTokenRevokeFailure::markRetryFailed);
-        }
+        failureRepository.upsertFailure(memberId, role, refreshTokenHash);
     }
 
     /**

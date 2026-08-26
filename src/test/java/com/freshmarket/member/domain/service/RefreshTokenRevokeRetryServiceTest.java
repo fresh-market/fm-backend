@@ -1,6 +1,5 @@
 package com.freshmarket.member.domain.service;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -14,14 +13,12 @@ import com.freshmarket.member.domain.repository.MemberRepository;
 import com.freshmarket.member.domain.repository.RefreshTokenRevokeFailureRepository;
 import java.lang.reflect.Field;
 import java.util.List;
-import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.dao.DataIntegrityViolationException;
 
 @ExtendWith(MockitoExtension.class)
 class RefreshTokenRevokeRetryServiceTest {
@@ -60,49 +57,24 @@ class RefreshTokenRevokeRetryServiceTest {
     // ---- recordFailure() ----
 
     @Test
-    void 처음_실패한_토큰이면_새_행을_만든다() {
-        when(failureRepository.findByMemberIdAndRefreshTokenHash(1L, "hash-1")).thenReturn(Optional.empty());
-
+    void 처음_실패한_토큰은_upsert로_새_행을_만든다() {
         sut.recordFailure(1L, "ROLE_USER", "hash-1");
 
-        verify(failureRepository).save(any(RefreshTokenRevokeFailure.class));
+        verify(failureRepository).upsertFailure(1L, "ROLE_USER", "hash-1");
     }
 
     @Test
-    void 같은_토큰의_실패_기록이_있으면_새로_만들지_않는다() {
-        RefreshTokenRevokeFailure existing = newFailure(10L, 1L, "ROLE_USER", "hash-1");
-        when(failureRepository.findByMemberIdAndRefreshTokenHash(1L, "hash-1"))
-                .thenReturn(Optional.of(existing));
-
+    void 같은_토큰의_실패가_반복되면_upsert가_시도횟수를_증가시킨다() {
         sut.recordFailure(1L, "ROLE_USER", "hash-1");
 
-        verify(failureRepository, never()).save(any());
+        verify(failureRepository).upsertFailure(1L, "ROLE_USER", "hash-1");
     }
 
     @Test
     void 같은_회원의_다른_토큰_실패는_별도_행으로_남긴다() {
-        when(failureRepository.findByMemberIdAndRefreshTokenHash(1L, "hash-2"))
-                .thenReturn(Optional.empty());
-
         sut.recordFailure(1L, "ROLE_USER", "hash-2");
 
-        verify(failureRepository).save(any(RefreshTokenRevokeFailure.class));
-    }
-
-    @Test
-    void 동시에_같은_토큰이_실패로_기록되면_유니크_위반을_잡고_기존_행에_이어_쓴다() {
-        RefreshTokenRevokeFailure existing = newFailure(10L, 1L, "ROLE_USER", "hash-1");
-        // 첫 조회는 아직 다른 트랜잭션이 커밋 전이라 없음 → save() 시도 → 유니크 위반.
-        // 재조회하면 그 사이 먼저 커밋된 행이 보인다.
-        when(failureRepository.findByMemberIdAndRefreshTokenHash(1L, "hash-1"))
-                .thenReturn(Optional.empty())
-                .thenReturn(Optional.of(existing));
-        doThrow(new DataIntegrityViolationException("duplicate member_id"))
-                .when(failureRepository).save(any(RefreshTokenRevokeFailure.class));
-
-        sut.recordFailure(1L, "ROLE_USER", "hash-1");
-
-        assertThat(existing.getAttemptCount()).isEqualTo(2);
+        verify(failureRepository).upsertFailure(1L, "ROLE_USER", "hash-2");
     }
 
     // ---- retryAllPending() ----
