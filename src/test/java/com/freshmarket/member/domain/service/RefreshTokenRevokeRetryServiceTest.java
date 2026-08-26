@@ -8,7 +8,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.freshmarket.common.auth.jwt.RefreshTokenRepository;
+import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import com.freshmarket.member.domain.entity.RefreshTokenRevokeFailure;
 import com.freshmarket.member.domain.repository.MemberRepository;
 import com.freshmarket.member.domain.repository.RefreshTokenRevokeFailureRepository;
