@@ -102,15 +102,15 @@ class AdminRefreshTokenCleanupServiceTest {
     }
 
     @Test
-    void tokenHash가_없으면_record_삭제는_건너뛰고_activeKey만_정리한다() {
+    void tokenHash가_없으면_새_activeKey를_보호하기_위해_Redis를_삭제하지_않고_false를_반환한다() {
         boolean result = sut.cleanupRedisWithRetry("ROLE_ADMIN", 1L, null);
 
-        assertThat(result).isTrue();
+        assertThat(result).isFalse();
         verify(refreshTokenRepository, times(0)).revokeIfActiveHashMatches(
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any());
-        verify(refreshTokenRepository).deleteActiveKey("ROLE_ADMIN", 1L);
+        verify(refreshTokenRepository, times(0)).deleteActiveKey("ROLE_ADMIN", 1L);
     }
 
     @Test
@@ -158,18 +158,6 @@ class AdminRefreshTokenCleanupServiceTest {
 
         verify(refreshTokenRepository)
                 .findActiveHash("ROLE_ADMIN", 1L);
-    }
-
-    @Test
-    void activeKey_삭제가_연결실패면_후속조회로_삭제를_확정한다() {
-        doThrow(new DataAccessResourceFailureException("redis disconnected"))
-                .when(refreshTokenRepository).deleteActiveKey("ROLE_ADMIN", 1L);
-        when(refreshTokenRepository.findActiveHash("ROLE_ADMIN", 1L)).thenReturn(Optional.empty());
-
-        boolean result = sut.cleanupRedisWithRetry("ROLE_ADMIN", 1L, null);
-
-        assertThat(result).isTrue();
-        verify(refreshTokenRepository).findActiveHash("ROLE_ADMIN", 1L);
     }
 
     @Test
