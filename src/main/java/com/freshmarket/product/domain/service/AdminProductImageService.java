@@ -150,7 +150,17 @@ public class AdminProductImageService {
         S3ObjectMetadata metadata = headObject(image.getObjectKey())
                 .orElseThrow(() -> new ProductException(ProductErrorCode.IMAGE_UPLOAD_NOT_FOUND));
 
-        // 발급 시 신고한 조건과 실제 업로드가 다르면(서명되지 않은 조건이라 S3가 막지 못한다) 지우고 거절한다
+        /*
+         * (INF-11-10) 발급 시 신고한 contentType·contentLength는 이미 presigned PUT 서명 조건에
+         * 들어가 있다(S3ImageStorageClient.createPresignedPutUrl) — 신고와 다른 값으로 올리면 S3가
+         * 서명 불일치로 업로드 자체를 403으로 거부한다. 그래서 이 객체가 존재한다는 것 자체가 이미
+         * "신고값과 정확히 일치"를 증명하고, ProductImage에 신고값을 저장해 재대조할 필요가 없다
+         * (백엔드공통_이미지저장소_설계.md 6.2절 "확정 | 서명이 이미 강제했다. 대조할 것이 없다").
+         *
+         * 여기서 하는 비교는 신고값 재확인이 아니라 "지금" 설정(maxSizeBytes, allowedContentTypes)과의
+         * 대조다 — 발급과 확정 사이에 관리자가 설정을 좁혔다면, 발급 시점엔 유효했던 값이 지금은
+         * 더 이상 허용되지 않을 수 있다. 그 경우만 여기서 걸러진다.
+         */
         if (metadata.contentLength() > maxSizeBytes || !allowedContentTypes.contains(metadata.contentType())) {
             imageStorageClient.deleteObject(image.getObjectKey());
             throw new ProductException(ProductErrorCode.IMAGE_UPLOAD_MISMATCH);
