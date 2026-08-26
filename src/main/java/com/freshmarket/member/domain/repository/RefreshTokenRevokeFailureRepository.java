@@ -1,10 +1,12 @@
 package com.freshmarket.member.domain.repository;
 
 import com.freshmarket.member.domain.entity.RefreshTokenRevokeFailure;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
@@ -14,6 +16,8 @@ public interface RefreshTokenRevokeFailureRepository extends JpaRepository<Refre
     Optional<RefreshTokenRevokeFailure> findByMemberIdAndRefreshTokenHash(Long memberId, String refreshTokenHash);
 
     Optional<RefreshTokenRevokeFailure> findByIdAndRefreshTokenHash(Long id, String refreshTokenHash);
+
+    List<RefreshTokenRevokeFailure> findByOrderByUpdatedAtAscIdAsc(Pageable pageable);
 
     @Modifying
     @Query("""

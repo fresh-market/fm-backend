@@ -19,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.data.domain.PageRequest;
 
 @ExtendWith(MockitoExtension.class)
 class RefreshTokenRevokeRetryServiceTest {
@@ -82,11 +83,12 @@ class RefreshTokenRevokeRetryServiceTest {
     @Test
     void db_redis_둘_다_성공하면_성공_처리로_넘긴다() {
         RefreshTokenRevokeFailure failure = newFailure(10L, 1L, "ROLE_USER", "hash-1");
-        when(failureRepository.findAll()).thenReturn(List.of(failure));
+        when(failureRepository.findByOrderByUpdatedAtAscIdAsc(any())).thenReturn(List.of(failure));
 
         sut.retryAllPending();
 
         verify(memberRepository).clearRefreshTokenIfMatches(1L, "hash-1");
+        verify(failureRepository).findByOrderByUpdatedAtAscIdAsc(PageRequest.of(0, 100));
         verify(refreshTokenRepository).revokeIfActiveHashMatches("hash-1", "ROLE_USER", 1L);
         verify(outcomeService).markSucceeded(10L, "hash-1");
         verify(outcomeService, never()).markFailed(any(), any());
@@ -95,7 +97,7 @@ class RefreshTokenRevokeRetryServiceTest {
     @Test
     void db_정리만_실패해도_실패_처리로_넘긴다() {
         RefreshTokenRevokeFailure failure = newFailure(10L, 1L, "ROLE_USER", "hash-1");
-        when(failureRepository.findAll()).thenReturn(List.of(failure));
+        when(failureRepository.findByOrderByUpdatedAtAscIdAsc(any())).thenReturn(List.of(failure));
         doThrow(new DataAccessResourceFailureException("db down"))
                 .when(memberRepository).clearRefreshTokenIfMatches(1L, "hash-1");
 
@@ -110,7 +112,7 @@ class RefreshTokenRevokeRetryServiceTest {
     @Test
     void redis_정리만_실패해도_실패_처리로_넘긴다() {
         RefreshTokenRevokeFailure failure = newFailure(10L, 1L, "ROLE_USER", "hash-1");
-        when(failureRepository.findAll()).thenReturn(List.of(failure));
+        when(failureRepository.findByOrderByUpdatedAtAscIdAsc(any())).thenReturn(List.of(failure));
         doThrow(new DataAccessResourceFailureException("redis down"))
                 .when(refreshTokenRepository).revokeIfActiveHashMatches("hash-1", "ROLE_USER", 1L);
 
@@ -125,7 +127,7 @@ class RefreshTokenRevokeRetryServiceTest {
     void 미완료_건이_여러개면_전부_처리한다() {
         RefreshTokenRevokeFailure f1 = newFailure(10L, 1L, "ROLE_USER", "hash-1");
         RefreshTokenRevokeFailure f2 = newFailure(11L, 2L, "ROLE_USER", "hash-2");
-        when(failureRepository.findAll()).thenReturn(List.of(f1, f2));
+        when(failureRepository.findByOrderByUpdatedAtAscIdAsc(any())).thenReturn(List.of(f1, f2));
 
         sut.retryAllPending();
 
@@ -142,7 +144,7 @@ class RefreshTokenRevokeRetryServiceTest {
         for (int i = 0; i < 10; i++) {
             failure.markRetryFailed();
         }
-        when(failureRepository.findAll()).thenReturn(List.of(failure));
+        when(failureRepository.findByOrderByUpdatedAtAscIdAsc(any())).thenReturn(List.of(failure));
 
         sut.retryAllPending();
 

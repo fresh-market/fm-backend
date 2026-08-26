@@ -4,9 +4,11 @@ import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import com.freshmarket.member.domain.entity.RefreshTokenRevokeFailure;
 import com.freshmarket.member.domain.repository.MemberRepository;
 import com.freshmarket.member.domain.repository.RefreshTokenRevokeFailureRepository;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +33,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class RefreshTokenRevokeRetryService {
+
+    private static final int MAX_RETRIES_PER_RUN = 100;
 
     private final RefreshTokenRevokeFailureRepository failureRepository;
     private final MemberRepository memberRepository;
@@ -62,7 +66,11 @@ public class RefreshTokenRevokeRetryService {
      * 찍도록 억제한다.
      */
     public void retryAllPending() {
-        for (RefreshTokenRevokeFailure failure : failureRepository.findAll()) {
+        // 한 번의 스케줄 실행이 미완료 행 전체를 메모리에 올리거나 외부 저장소를 무제한 호출하지
+        // 않도록 상한을 둔다. updatedAt이 같으면 PK 순서로 안정적으로 끊는다.
+        List<RefreshTokenRevokeFailure> failures = failureRepository.findByOrderByUpdatedAtAscIdAsc(
+                PageRequest.of(0, MAX_RETRIES_PER_RUN));
+        for (RefreshTokenRevokeFailure failure : failures) {
             retryOne(failure);
         }
     }
