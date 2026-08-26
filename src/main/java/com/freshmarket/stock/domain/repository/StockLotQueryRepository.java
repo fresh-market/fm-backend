@@ -25,12 +25,23 @@ import org.springframework.stereotype.Repository;
  * findAvailableLots()는 정렬 축이 productOptionId 하나뿐이라 목록 조회(ProductQueryRepository)처럼
  * "정렬 축과 커서 축 불일치" 문제가 생기지 않아 단순 오름차순 + 커서 비교면 충분하다.
  * findByProductOptionIds()는 정렬이 expiryDate(FEFO)라 축이 갈려, id를 동점 처리 키로 함께 쓴다.
- * 옵션이 여러 개면 단일 쿼리로 안 묶고 옵션별로 나눠 물은 뒤 K-way 병합한다 — 이유는 그 메서드
- * 주석 참고.
+ * 옵션이 MAX_OPTIONS_FOR_PER_OPTION_QUERY 이하면 단일 쿼리로 안 묶고 옵션별로 나눠 물은 뒤
+ * K-way 병합한다 — 이유는 그 메서드 주석 참고. 넘으면 쿼리 개수 상한(PERF-2-01) 때문에
+ * IN(...) 한 방 쿼리로 되돌아간다.
  */
 @Repository
 @RequiredArgsConstructor
 public class StockLotQueryRepository {
+
+    /*
+     * (PERF-2-01) 요청당 쿼리 수 10개 이하가 팀 기준이다. 옵션별로 쿼리를 나누면 옵션 수만큼
+     * 쿼리가 늘어나므로, 이 상한을 넘는 상품은 옵션별 병합을 포기하고 IN(...) 한 방 쿼리로
+     * 되돌아간다 — filesort를 감수하더라도 쿼리 개수 상한을 넘기지 않는 쪽을 택한다. 지금
+     * 도메인에서 상품 하나가 옵션을 이만큼 가질 일은 없지만(1kg/500g/200g 수준), 방어적으로 둔다.
+     * findAllByProduct()가 이 조회 앞에 옵션 ID 목록 조회를 한 번 더 하므로, 여유를 두고
+     * 8로 잡는다(8 + 옵션 목록 조회 1 = 9, 상한 10 이내).
+     */
+    static final int MAX_OPTIONS_FOR_PER_OPTION_QUERY = 8;
 
     private final JPAQueryFactory queryFactory;
 
@@ -73,6 +84,9 @@ public class StockLotQueryRepository {
     public List<StockLot> findByProductOptionIds(List<Long> productOptionIds, boolean availableOnly,
             PageCursor cursor, int pageSize) {
         int limit = pageSize + 1;
+        if (productOptionIds.size() > MAX_OPTIONS_FOR_PER_OPTION_QUERY) {
+            return findByProductOptionIdsInOneQuery(productOptionIds, availableOnly, cursor, limit);
+        }
         List<List<StockLot>> perOption = productOptionIds.stream()
                 .map(optionId -> findByProductOptionId(optionId, availableOnly, cursor, limit))
                 .toList();
@@ -87,6 +101,21 @@ public class StockLotQueryRepository {
                 .selectFrom(stockLot)
                 .where(
                         stockLot.productOptionId.eq(productOptionId),
+                        availableOnlyFilter(availableOnly),
+                        expiryDateCursorAfter(cursor))
+                .orderBy(stockLot.expiryDate.asc(), stockLot.id.asc())
+                .limit(limit)
+                .fetch();
+    }
+
+    // MAX_OPTIONS_FOR_PER_OPTION_QUERY를 넘는 옵션 수일 때의 대체 경로. 쿼리 1개로 끝나지만
+    // idx_lot_fefo가 전역 expiry_date 정렬을 못 줘 filesort가 붙는다(클래스 주석 참고)
+    private List<StockLot> findByProductOptionIdsInOneQuery(List<Long> productOptionIds, boolean availableOnly,
+            PageCursor cursor, int limit) {
+        return queryFactory
+                .selectFrom(stockLot)
+                .where(
+                        stockLot.productOptionId.in(productOptionIds),
                         availableOnlyFilter(availableOnly),
                         expiryDateCursorAfter(cursor))
                 .orderBy(stockLot.expiryDate.asc(), stockLot.id.asc())
