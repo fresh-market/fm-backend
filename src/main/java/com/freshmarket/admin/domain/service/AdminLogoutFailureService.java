@@ -18,7 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 /*
  * 관리자 로그아웃의 Refresh Token 정리(Redis/DB) 아웃박스. AdminAuthService.logout()의 즉시
  * 재시도(각 3회)가 다 실패하면 recordFailure()로 여기 남고, AdminLogoutFailureScheduler가
- * 매일 00:00에 retryAllPending()을 불러 재시도한다.
+ * 10분 간격으로 retryAllPending()을 불러 재시도한다.
  *
  * retryAllPending() 전체를 @Transactional로 묶지 않는다 — 그 안에서 Redis 호출(네트워크 대기)이
  * 일어나는데, 트랜잭션 안에서 동기 외부 호출을 하면 그 대기 동안 DB 커넥션이 묶인다(DI-4-02와

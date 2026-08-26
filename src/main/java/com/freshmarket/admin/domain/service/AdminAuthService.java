@@ -42,7 +42,7 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * Refresh Token의 Redis 정리와 DB 폐기(재시도 포함)는 AdminRefreshTokenCleanupService에 있다.
  * logout()에서 그 즉시 재시도(각 3회)까지 실패하면 AdminLogoutFailureService에 기록해두고,
- * AdminLogoutFailureScheduler가 매일 00:00에 재시도한다.
+ * AdminLogoutFailureScheduler가 10분 간격으로 재시도한다.
  */
 @Slf4j
 @Service

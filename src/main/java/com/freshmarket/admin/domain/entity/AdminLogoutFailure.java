@@ -14,7 +14,7 @@ import java.util.Objects;
 
 /**
  * 관리자 로그아웃의 Refresh Token 정리(Redis 삭제 + DB 폐기)가 즉시 재시도(3회)까지 실패하면
- * 이 행으로 남는다 — AdminLogoutFailureScheduler가 매일 00:00에 미해결 건을 재시도한다.
+ * 이 행으로 남는다 — AdminLogoutFailureScheduler가 10분 간격으로 미해결 건을 재시도한다.
  *
  * kakao_unlink_failure(KakaoUnlinkFailure)와 같은 아웃박스 패턴이지만, 성공해도 행을 지우지
  * 않는다는 점이 다르다. 로그아웃 실패 중 DB에 Refresh Token이 남는 경우는 보안 이력으로 남겨두는
