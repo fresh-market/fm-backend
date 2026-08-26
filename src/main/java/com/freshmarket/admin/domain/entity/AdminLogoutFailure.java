@@ -31,7 +31,7 @@ import java.util.Objects;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class AdminLogoutFailure extends BaseMutableTimeEntity {
 
-    @Column(name = "admin_id", nullable = false, unique = true)
+    @Column(name = "admin_id", nullable = false)
     private Long adminId;
 
     @Column(name = "refresh_token_hash", length = 64)
@@ -76,9 +76,9 @@ public class AdminLogoutFailure extends BaseMutableTimeEntity {
     }
 
     /**
-     * 이미 해결(resolved=true)된 행에 같은 관리자가 다시 실패하면, 새 행 대신 이 행을 재오픈한다.
-     * admin_id에 UNIQUE 제약이 있어 새 행을 만들 수 없기도 하고, 같은 관리자의 실패 이력을
-     * 한 행에서 계속 추적하는 게 조회하기도 더 쉽다.
+     * 이미 해결(resolved=true)된 동일 관리자·동일 Refresh Token 실패가 다시 기록되면 이 행을 재오픈한다.
+     * 서로 다른 Refresh Token 실패는 (admin_id, refresh_token_hash) 복합 UNIQUE 기준으로 별도 행에
+     * 보존하므로, 재로그인 뒤 발생한 새 RT 실패가 이전 RT 정리 작업을 덮어쓰지 않는다.
      */
     public void reopen(String refreshTokenHash, boolean redisFailed, boolean dbFailed) {
         validateFailureState(redisFailed, dbFailed);

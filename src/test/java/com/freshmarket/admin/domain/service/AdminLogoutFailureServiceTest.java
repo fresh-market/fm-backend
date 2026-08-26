@@ -59,7 +59,7 @@ class AdminLogoutFailureServiceTest {
     // ---- recordFailure() ----
 
     @Test
-    void 실패기록은_admin_id_기준_원자적_upsert로_저장한다() {
+    void 실패기록은_admin_id와_RT해시_기준_원자적_upsert로_저장한다() {
         sut.recordFailure(1L, "hash", true, false);
 
         verify(failureRepository).upsertFailure(
@@ -68,7 +68,7 @@ class AdminLogoutFailureServiceTest {
     }
 
     @Test
-    void 같은_관리자의_연속_실패도_조회후_insert가_아닌_upsert로_처리한다() {
+    void 같은_관리자라도_RT해시가_다르면_각_실패해시를_그대로_upsert에_전달한다() {
         sut.recordFailure(1L, "first-hash", true, false);
         sut.recordFailure(1L, "latest-hash", false, true);
 
@@ -178,10 +178,8 @@ class AdminLogoutFailureServiceTest {
         List<AdminLogoutFailure> firstBatch = LongStream.rangeClosed(1, 100)
                 .mapToObj(id -> newFailure(id, id, "hash", true, false))
                 .toList();
-        when(failureRepository.findTop100ByResolvedFalseAndIdGreaterThanOrderByIdAsc(0L))
-                .thenReturn(firstBatch);
-        when(failureRepository.findTop100ByResolvedFalseAndIdGreaterThanOrderByIdAsc(100L))
-                .thenReturn(List.of());
+        when(failureRepository.findTop100ByResolvedFalseAndIdGreaterThanOrderByIdAsc(0L)).thenReturn(firstBatch);
+        when(failureRepository.findTop100ByResolvedFalseAndIdGreaterThanOrderByIdAsc(100L)).thenReturn(List.of());
         when(failureRepository.claimForRetry(any(), any(), any())).thenReturn(0);
 
         sut.retryAllPending();
@@ -206,18 +204,14 @@ class AdminLogoutFailureServiceTest {
                 STALE_BEFORE))
                 .thenReturn(1);
 
-        when(failureRepository.findById(10L))
-                .thenReturn(Optional.empty());
+        when(failureRepository.findById(10L)).thenReturn(Optional.empty());
 
         sut.retryAllPending();
 
-        verify(cleanupService, never())
-                .revokeDbIfMatchesWithRetry(any(), any());
+        verify(cleanupService, never()).revokeDbIfMatchesWithRetry(any(), any());
 
-        verify(cleanupService, never())
-                .cleanupRedisWithRetry(any(), any(), any());
+        verify(cleanupService, never()).cleanupRedisWithRetry(any(), any(), any());
 
-        verify(outcomeService, never())
-                .applyOutcome(any(), any(LocalDateTime.class), anyBoolean(), anyBoolean(), any());
+        verify(outcomeService, never()).applyOutcome(any(), any(LocalDateTime.class), anyBoolean(), anyBoolean(), any());
     }
 }

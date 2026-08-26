@@ -81,19 +81,57 @@ class AdminLogoutIntegrationTest extends RedisIntegrationTestSupport {
     }
 
     @Test
-    void 실패행_upsert_선점_결과반영이_실제_MySQL에서_동작하고_옛_lease는_덮어쓰지_못한다() {
-        long adminId = insertAdmin("integration.admin.failure", "Password!2026");
+    void 같은_관리자와_같은_RT해시는_실제_MySQL에서_한_행으로_upsert된다() {
+        long adminId = insertAdmin("integration.admin.failure.same-hash", "Password!2026");
         LocalDateTime now = LocalDateTime.of(2026, 8, 26, 12, 0);
         String hash = "a".repeat(64);
 
         failureRepository.upsertFailure(adminId, hash, true, false, now);
-        failureRepository.upsertFailure(adminId, null, false, true, now.plusSeconds(1));
+        failureRepository.upsertFailure(adminId, hash, false, true, now.plusSeconds(1));
 
-        AdminLogoutFailure failure = failureRepository.findTop100ByResolvedFalseAndIdGreaterThanOrderByIdAsc(0L)
-                .stream().filter(row -> row.getAdminId().equals(adminId)).findFirst().orElseThrow();
+        List<AdminLogoutFailure> failures = failureRepository.findAll().stream()
+                .filter(row -> row.getAdminId().equals(adminId))
+                .toList();
+
+        assertThat(failures).hasSize(1);
+        AdminLogoutFailure failure = failures.getFirst();
+        assertThat(failure.getRefreshTokenHash()).isEqualTo(hash);
         assertThat(failure.isRedisFailed()).isTrue();
         assertThat(failure.isDbFailed()).isTrue();
-        assertThat(failure.getRefreshTokenHash()).isEqualTo(hash);
+    }
+
+    @Test
+    void 같은_관리자라도_서로_다른_RT해시는_실제_MySQL에서_별도_행으로_저장된다() {
+        long adminId = insertAdmin("integration.admin.failure.different-hash", "Password!2026");
+        LocalDateTime now = LocalDateTime.of(2026, 8, 26, 12, 0);
+        String firstHash = "b".repeat(64);
+        String secondHash = "c".repeat(64);
+
+        failureRepository.upsertFailure(adminId, firstHash, true, false, now);
+        failureRepository.upsertFailure(adminId, secondHash, false, true, now.plusSeconds(1));
+
+        List<AdminLogoutFailure> failures = failureRepository.findAll().stream()
+                .filter(row -> row.getAdminId().equals(adminId))
+                .toList();
+
+        assertThat(failures).hasSize(2);
+        assertThat(failures)
+                .extracting(AdminLogoutFailure::getRefreshTokenHash)
+                .containsExactlyInAnyOrder(firstHash, secondHash);
+    }
+
+    @Test
+    void 실패행_선점_결과반영이_실제_MySQL에서_동작하고_옛_lease는_덮어쓰지_못한다() {
+        long adminId = insertAdmin("integration.admin.failure.lease", "Password!2026");
+        LocalDateTime now = LocalDateTime.of(2026, 8, 26, 12, 0);
+        String hash = "d".repeat(64);
+
+        failureRepository.upsertFailure(adminId, hash, true, false, now);
+
+        AdminLogoutFailure failure = failureRepository.findAll().stream()
+                .filter(row -> row.getAdminId().equals(adminId))
+                .findFirst()
+                .orElseThrow();
 
         LocalDateTime firstClaim = LocalDateTime.of(2026, 8, 26, 12, 1);
         assertThat(failureRepository.claimForRetry(
