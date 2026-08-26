@@ -60,8 +60,8 @@ class RefreshTokenRevokeRetryServiceTest {
     // ---- recordFailure() ----
 
     @Test
-    void 처음_실패한_회원이면_새_행을_만든다() {
-        when(failureRepository.findByMemberId(1L)).thenReturn(Optional.empty());
+    void 처음_실패한_토큰이면_새_행을_만든다() {
+        when(failureRepository.findByMemberIdAndRefreshTokenHash(1L, "hash-1")).thenReturn(Optional.empty());
 
         sut.recordFailure(1L, "ROLE_USER", "hash-1");
 
@@ -69,29 +69,40 @@ class RefreshTokenRevokeRetryServiceTest {
     }
 
     @Test
-    void 이미_실패_기록이_있으면_해시를_최신값으로_갱신하고_새로_만들지_않는다() {
-        RefreshTokenRevokeFailure existing = newFailure(10L, 1L, "ROLE_USER", "old-hash");
-        when(failureRepository.findByMemberId(1L)).thenReturn(Optional.of(existing));
+    void 같은_토큰의_실패_기록이_있으면_새로_만들지_않는다() {
+        RefreshTokenRevokeFailure existing = newFailure(10L, 1L, "ROLE_USER", "hash-1");
+        when(failureRepository.findByMemberIdAndRefreshTokenHash(1L, "hash-1"))
+                .thenReturn(Optional.of(existing));
 
-        sut.recordFailure(1L, "ROLE_USER", "new-hash");
+        sut.recordFailure(1L, "ROLE_USER", "hash-1");
 
         verify(failureRepository, never()).save(any());
     }
 
     @Test
-    void 동시에_같은_회원이_실패로_기록되면_유니크_위반을_잡고_기존_행에_이어_쓴다() {
-        RefreshTokenRevokeFailure existing = newFailure(10L, 1L, "ROLE_USER", "old-hash");
+    void 같은_회원의_다른_토큰_실패는_별도_행으로_남긴다() {
+        when(failureRepository.findByMemberIdAndRefreshTokenHash(1L, "hash-2"))
+                .thenReturn(Optional.empty());
+
+        sut.recordFailure(1L, "ROLE_USER", "hash-2");
+
+        verify(failureRepository).save(any(RefreshTokenRevokeFailure.class));
+    }
+
+    @Test
+    void 동시에_같은_토큰이_실패로_기록되면_유니크_위반을_잡고_기존_행에_이어_쓴다() {
+        RefreshTokenRevokeFailure existing = newFailure(10L, 1L, "ROLE_USER", "hash-1");
         // 첫 조회는 아직 다른 트랜잭션이 커밋 전이라 없음 → save() 시도 → 유니크 위반.
         // 재조회하면 그 사이 먼저 커밋된 행이 보인다.
-        when(failureRepository.findByMemberId(1L))
+        when(failureRepository.findByMemberIdAndRefreshTokenHash(1L, "hash-1"))
                 .thenReturn(Optional.empty())
                 .thenReturn(Optional.of(existing));
         doThrow(new DataIntegrityViolationException("duplicate member_id"))
                 .when(failureRepository).save(any(RefreshTokenRevokeFailure.class));
 
-        sut.recordFailure(1L, "ROLE_USER", "new-hash");
+        sut.recordFailure(1L, "ROLE_USER", "hash-1");
 
-        assertThat(existing.getRefreshTokenHash()).isEqualTo("new-hash");
+        assertThat(existing.getAttemptCount()).isEqualTo(2);
     }
 
     // ---- retryAllPending() ----
@@ -104,10 +115,9 @@ class RefreshTokenRevokeRetryServiceTest {
         sut.retryAllPending();
 
         verify(memberRepository).clearRefreshTokenIfMatches(1L, "hash-1");
-        verify(refreshTokenRepository).deleteByHash("hash-1");
-        verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
-        verify(outcomeService).markSucceeded(10L);
-        verify(outcomeService, never()).markFailed(any());
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("hash-1", "ROLE_USER", 1L);
+        verify(outcomeService).markSucceeded(10L, "hash-1");
+        verify(outcomeService, never()).markFailed(any(), any());
     }
 
     @Test
@@ -120,9 +130,9 @@ class RefreshTokenRevokeRetryServiceTest {
         sut.retryAllPending();
 
         // redis 쪽은 그대로 시도한다 — 이미 성공했더라도 다시 지우는 건 멱등이라 해롭지 않다
-        verify(refreshTokenRepository).deleteByHash("hash-1");
-        verify(outcomeService).markFailed(10L);
-        verify(outcomeService, never()).markSucceeded(any());
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("hash-1", "ROLE_USER", 1L);
+        verify(outcomeService).markFailed(10L, "hash-1");
+        verify(outcomeService, never()).markSucceeded(any(), any());
     }
 
     @Test
@@ -130,13 +140,13 @@ class RefreshTokenRevokeRetryServiceTest {
         RefreshTokenRevokeFailure failure = newFailure(10L, 1L, "ROLE_USER", "hash-1");
         when(failureRepository.findAll()).thenReturn(List.of(failure));
         doThrow(new DataAccessResourceFailureException("redis down"))
-                .when(refreshTokenRepository).deleteByHash("hash-1");
+                .when(refreshTokenRepository).revokeIfActiveHashMatches("hash-1", "ROLE_USER", 1L);
 
         sut.retryAllPending();
 
         verify(memberRepository).clearRefreshTokenIfMatches(1L, "hash-1");
-        verify(outcomeService).markFailed(10L);
-        verify(outcomeService, never()).markSucceeded(any());
+        verify(outcomeService).markFailed(10L, "hash-1");
+        verify(outcomeService, never()).markSucceeded(any(), any());
     }
 
     @Test
@@ -148,8 +158,8 @@ class RefreshTokenRevokeRetryServiceTest {
         sut.retryAllPending();
 
         verify(memberRepository, times(2)).clearRefreshTokenIfMatches(any(), any());
-        verify(outcomeService).markSucceeded(10L);
-        verify(outcomeService).markSucceeded(11L);
+        verify(outcomeService).markSucceeded(10L, "hash-1");
+        verify(outcomeService).markSucceeded(11L, "hash-2");
     }
 
     @Test
@@ -165,7 +175,7 @@ class RefreshTokenRevokeRetryServiceTest {
         sut.retryAllPending();
 
         verify(memberRepository).clearRefreshTokenIfMatches(1L, "hash-1");
-        verify(refreshTokenRepository).deleteByHash("hash-1");
-        verify(outcomeService).markSucceeded(10L);
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("hash-1", "ROLE_USER", 1L);
+        verify(outcomeService).markSucceeded(10L, "hash-1");
     }
 }

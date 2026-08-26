@@ -29,20 +29,20 @@ class RefreshTokenRevokeRetryOutcomeServiceTest {
 
     @Test
     void 성공하면_기록을_지운다() {
-        sut.markSucceeded(1L);
+        sut.markSucceeded(1L, "hash-1");
 
-        verify(failureRepository).deleteById(1L);
+        verify(failureRepository).deleteByIdAndRefreshTokenHash(1L, "hash-1");
     }
 
     @Test
     void 재시도_한도_전이면_카운트만_늘리고_유지한다() {
         RefreshTokenRevokeFailure failure = RefreshTokenRevokeFailure.record(1L, "ROLE_USER", "hash-1");
-        when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
+        when(failureRepository.findByIdAndRefreshTokenHash(1L, "hash-1")).thenReturn(Optional.of(failure));
 
-        sut.markFailed(1L);
+        sut.markFailed(1L, "hash-1");
 
         verify(failureRepository, never()).delete(any());
-        verify(failureRepository, never()).deleteById(any());
+        verify(failureRepository, never()).deleteByIdAndRefreshTokenHash(any(), any());
     }
 
     @Test
@@ -52,21 +52,21 @@ class RefreshTokenRevokeRetryOutcomeServiceTest {
         for (int i = 0; i < 4; i++) {
             failure.markRetryFailed();
         }
-        when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
+        when(failureRepository.findByIdAndRefreshTokenHash(1L, "hash-1")).thenReturn(Optional.of(failure));
 
-        sut.markFailed(1L);
+        sut.markFailed(1L, "hash-1");
 
         // give-up 상태에서도 행 자체를 지우지는 않는다 — 사람이 보고 수동 개입할 수 있게
         // 남겨둔다(ERROR 로그로 승격되는 것으로 갈음).
         verify(failureRepository, never()).delete(any());
-        verify(failureRepository, never()).deleteById(any());
+        verify(failureRepository, never()).deleteByIdAndRefreshTokenHash(any(), any());
     }
 
     @Test
     void 존재하지_않는_기록이면_아무_일도_하지_않는다() {
-        when(failureRepository.findById(1L)).thenReturn(Optional.empty());
+        when(failureRepository.findByIdAndRefreshTokenHash(1L, "hash-1")).thenReturn(Optional.empty());
 
-        sut.markFailed(1L);
+        sut.markFailed(1L, "hash-1");
 
         verify(failureRepository, never()).delete(any());
     }

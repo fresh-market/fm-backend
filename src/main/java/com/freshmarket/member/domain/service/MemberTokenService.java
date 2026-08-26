@@ -243,8 +243,11 @@ public class MemberTokenService {
 
         boolean redisCleared = true;
         try {
-            hash.ifPresent(refreshTokenRepository::deleteByHash);
-            refreshTokenRepository.deleteActiveKey(role, memberId);
+            if (hash.isPresent()) {
+                refreshTokenRepository.revokeIfActiveHashMatches(hash.get(), role, memberId);
+            } else {
+                refreshTokenRepository.deleteActiveKey(role, memberId);
+            }
         } catch (DataAccessException e) {
             redisCleared = false;
             log.warn("event=REDIS_DELETE_FAILED role={} id={} — 재시도 아웃박스로 넘김", role, memberId, e);

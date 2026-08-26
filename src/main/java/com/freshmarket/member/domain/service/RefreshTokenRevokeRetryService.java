@@ -45,21 +45,22 @@ public class RefreshTokenRevokeRetryService {
      * 무관하게 독립적으로 커밋되게 한다(MemberWithdrawalCompletionService를 별도 빈으로 뺀 것과
      * 같은 종류의 이유).
      *
-     * member_id에 유니크 제약이 있어서, 같은 회원에 대해 recordFailure()가 거의 동시에 두 번
-     * 들어오면(예: Redis 전체 장애로 여러 세션이 한꺼번에 실패하는 상황) 두 트랜잭션이 둘 다
-     * findByMemberId()에서 없음을 보고 둘 다 save()를 시도해 유니크 위반이 날 수 있다.
+     * member_id + refresh_token_hash에 유니크 제약이 있어서, 같은 토큰의 실패 기록이 거의 동시에
+     * 두 번 들어오면 두 트랜잭션이 둘 다 없음을 보고 save()를 시도해 유니크 위반이 날 수 있다.
+     * 서로 다른 해시는 각각 별도 행으로 남긴다. 그래야 이전 토큰의 Redis 폐기가 실패한 뒤
+     * 재로그인/재폐기 실패가 발생해도 먼저 실패한 토큰의 정리 작업이 유실되지 않는다.
      * MemberLoginService.registerNewMember()와 같은 패턴으로 처리한다 — 위반이 나면 그 사이
      * 먼저 커밋된 행을 다시 찾아 이어서 쓴다.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordFailure(Long memberId, String role, String refreshTokenHash) {
         try {
-            failureRepository.findByMemberId(memberId).ifPresentOrElse(
-                    existing -> existing.reopen(refreshTokenHash),
+            failureRepository.findByMemberIdAndRefreshTokenHash(memberId, refreshTokenHash).ifPresentOrElse(
+                    RefreshTokenRevokeFailure::markRetryFailed,
                     () -> failureRepository.save(RefreshTokenRevokeFailure.record(memberId, role, refreshTokenHash)));
         } catch (DataIntegrityViolationException e) {
-            failureRepository.findByMemberId(memberId)
-                    .ifPresent(existing -> existing.reopen(refreshTokenHash));
+            failureRepository.findByMemberIdAndRefreshTokenHash(memberId, refreshTokenHash)
+                    .ifPresent(RefreshTokenRevokeFailure::markRetryFailed);
         }
     }
 
@@ -80,9 +81,9 @@ public class RefreshTokenRevokeRetryService {
         boolean dbOk = tryClearDb(failure);
         boolean redisOk = tryClearRedis(failure);
         if (dbOk && redisOk) {
-            outcomeService.markSucceeded(failure.getId());
+            outcomeService.markSucceeded(failure.getId(), failure.getRefreshTokenHash());
         } else {
-            outcomeService.markFailed(failure.getId());
+            outcomeService.markFailed(failure.getId(), failure.getRefreshTokenHash());
         }
     }
 
@@ -98,8 +99,8 @@ public class RefreshTokenRevokeRetryService {
 
     private boolean tryClearRedis(RefreshTokenRevokeFailure failure) {
         try {
-            refreshTokenRepository.deleteByHash(failure.getRefreshTokenHash());
-            refreshTokenRepository.deleteActiveKey(failure.getRole(), failure.getMemberId());
+            refreshTokenRepository.revokeIfActiveHashMatches(
+                    failure.getRefreshTokenHash(), failure.getRole(), failure.getMemberId());
             return true;
         } catch (DataAccessException e) {
             log.warn("event=REFRESH_TOKEN_REVOKE_RETRY_REDIS_FAILED memberId={}", failure.getMemberId(), e);

@@ -22,8 +22,8 @@ public class RefreshTokenRevokeRetryOutcomeService {
     private final RefreshTokenRevokeFailureRepository failureRepository;
 
     @Transactional
-    public void markSucceeded(Long failureId) {
-        failureRepository.deleteById(failureId);
+    public void markSucceeded(Long failureId, String refreshTokenHash) {
+        failureRepository.deleteByIdAndRefreshTokenHash(failureId, refreshTokenHash);
     }
 
     /**
@@ -34,8 +34,8 @@ public class RefreshTokenRevokeRetryOutcomeService {
      * 그 뒤로 계속 실패해도 더 이상 로그를 남기지 않는다(사람이 이미 한 번 통보받았으므로).
      */
     @Transactional
-    public void markFailed(Long failureId) {
-        failureRepository.findById(failureId).ifPresent(failure -> {
+    public void markFailed(Long failureId, String refreshTokenHash) {
+        failureRepository.findByIdAndRefreshTokenHash(failureId, refreshTokenHash).ifPresent(failure -> {
             boolean belowThresholdBefore = !failure.shouldGiveUp();
             failure.markRetryFailed();
             if (belowThresholdBefore && failure.shouldGiveUp()) {

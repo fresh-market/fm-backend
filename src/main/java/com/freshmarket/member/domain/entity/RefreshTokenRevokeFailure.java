@@ -5,6 +5,7 @@ import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -29,14 +30,16 @@ import lombok.NoArgsConstructor;
  */
 @Entity
 @Getter
-@Table(name = "refresh_token_revoke_failure")
+@Table(name = "refresh_token_revoke_failure", uniqueConstraints =
+        @UniqueConstraint(name = "uk_refresh_token_revoke_failure_member_hash",
+                columnNames = {"member_id", "refresh_token_hash"}))
 @AttributeOverride(name = "id", column = @Column(name = "refresh_token_revoke_failure_id"))
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class RefreshTokenRevokeFailure extends BaseMutableTimeEntity {
 
     private static final int MAX_RETRY_ATTEMPTS = 5;
 
-    @Column(name = "member_id", nullable = false, unique = true)
+    @Column(name = "member_id", nullable = false)
     private Long memberId;
 
     @Column(name = "role", nullable = false, length = 30)
@@ -58,16 +61,6 @@ public class RefreshTokenRevokeFailure extends BaseMutableTimeEntity {
     /** revoke() 정리가 처음 실패했을 때만 쓰는 유일한 생성 진입점. */
     public static RefreshTokenRevokeFailure record(Long memberId, String role, String refreshTokenHash) {
         return new RefreshTokenRevokeFailure(memberId, role, refreshTokenHash);
-    }
-
-    /**
-     * 같은 회원이 다시 실패로 기록될 때 부른다. 해시를 최신 값으로 갈아끼운다 — 이전 실패
-     * 이후 재로그인이 있었다면 예전 해시는 이미 의미가 없어졌으므로, 지금 지워야 할 최신
-     * 해시만 쫓으면 된다.
-     */
-    public void reopen(String refreshTokenHash) {
-        this.refreshTokenHash = refreshTokenHash;
-        markRetryFailed();
     }
 
     public void markRetryFailed() {

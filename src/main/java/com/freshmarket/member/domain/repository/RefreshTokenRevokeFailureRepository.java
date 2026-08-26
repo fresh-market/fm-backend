@@ -8,5 +8,16 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface RefreshTokenRevokeFailureRepository extends JpaRepository<RefreshTokenRevokeFailure, Long> {
 
-    Optional<RefreshTokenRevokeFailure> findByMemberId(Long memberId);
+    Optional<RefreshTokenRevokeFailure> findByMemberIdAndRefreshTokenHash(Long memberId, String refreshTokenHash);
+
+    Optional<RefreshTokenRevokeFailure> findByIdAndRefreshTokenHash(Long id, String refreshTokenHash);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("""
+            delete from RefreshTokenRevokeFailure f
+            where f.id = :id and f.refreshTokenHash = :refreshTokenHash
+            """)
+    int deleteByIdAndRefreshTokenHash(
+            @org.springframework.data.repository.query.Param("id") Long id,
+            @org.springframework.data.repository.query.Param("refreshTokenHash") String refreshTokenHash);
 }
