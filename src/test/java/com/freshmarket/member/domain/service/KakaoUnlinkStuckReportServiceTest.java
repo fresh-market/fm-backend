@@ -7,6 +7,8 @@ import com.freshmarket.member.domain.entity.KakaoUnlinkFailure;
 import com.freshmarket.member.domain.repository.KakaoUnlinkFailureRepository;
 import java.lang.reflect.Field;
 import java.util.List;
+
+import com.freshmarket.member.domain.service.kakao.KakaoUnlinkStuckReportService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

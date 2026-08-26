@@ -1,6 +1,6 @@
 package com.freshmarket.member.domain.service;
 
-import com.freshmarket.member.domain.MemberWithdrawalEvent;
+import com.freshmarket.member.domain.event.MemberWithdrawalEvent;
 import com.freshmarket.member.domain.repository.MemberRepository;
 import java.time.LocalDateTime;
 import lombok.RequiredArgsConstructor;

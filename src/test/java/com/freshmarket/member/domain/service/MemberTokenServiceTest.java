@@ -21,7 +21,7 @@ import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository.RefreshTokenData;
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository.RotateOutcome;
 import com.freshmarket.common.auth.jwt.TokenType;
-import com.freshmarket.member.domain.MemberLogoutEvent;
+import com.freshmarket.member.domain.event.MemberLogoutEvent;
 import com.freshmarket.member.domain.entity.Member;
 import com.freshmarket.member.domain.entity.SocialType;
 import com.freshmarket.member.domain.repository.MemberRepository;

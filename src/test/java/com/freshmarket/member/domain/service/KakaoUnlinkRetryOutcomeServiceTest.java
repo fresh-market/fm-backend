@@ -8,6 +8,8 @@ import static org.mockito.Mockito.when;
 import com.freshmarket.member.domain.entity.KakaoUnlinkFailure;
 import com.freshmarket.member.domain.repository.KakaoUnlinkFailureRepository;
 import java.util.Optional;
+
+import com.freshmarket.member.domain.service.kakao.KakaoUnlinkRetryOutcomeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

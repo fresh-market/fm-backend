@@ -4,10 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 import com.freshmarket.config.SchedulingConfig;
-import com.freshmarket.member.domain.KakaoUnlinkRetryScheduler;
-import com.freshmarket.member.domain.KakaoUnlinkStuckReportScheduler;
-import com.freshmarket.member.domain.service.KakaoUnlinkRetryService;
-import com.freshmarket.member.domain.service.KakaoUnlinkStuckReportService;
+import com.freshmarket.member.domain.scheduler.KakaoUnlinkRetryScheduler;
+import com.freshmarket.member.domain.scheduler.KakaoUnlinkStuckReportScheduler;
+import com.freshmarket.member.domain.service.kakao.KakaoUnlinkRetryService;
+import com.freshmarket.member.domain.service.kakao.KakaoUnlinkStuckReportService;
 import com.freshmarket.product.domain.batch.OptionAvailabilitySyncRetryService;
 import com.freshmarket.product.domain.batch.OptionAvailabilitySyncScheduler;
 import com.freshmarket.stock.domain.AdminLotExpireScheduler;

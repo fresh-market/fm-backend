@@ -1,4 +1,4 @@
-package com.freshmarket.member.domain;
+package com.freshmarket.member.domain.event;
 
 import com.freshmarket.member.domain.client.KakaoLogoutClient;
 import lombok.RequiredArgsConstructor;

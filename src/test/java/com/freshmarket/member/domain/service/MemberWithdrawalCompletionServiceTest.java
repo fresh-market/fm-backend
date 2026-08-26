@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 
-import com.freshmarket.member.domain.MemberWithdrawalEvent;
+import com.freshmarket.member.domain.event.MemberWithdrawalEvent;
 import com.freshmarket.member.domain.repository.MemberRepository;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.BeforeEach;

@@ -1,4 +1,4 @@
-package com.freshmarket.member.domain;
+package com.freshmarket.member.domain.event;
 
 /**
  * 로그아웃 트랜잭션 커밋 후에만 카카오 세션 종료(logout)를 호출하기 위한 이벤트.

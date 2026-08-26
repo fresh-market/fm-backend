@@ -1,4 +1,4 @@
-package com.freshmarket.member.domain;
+package com.freshmarket.member.domain.event;
 
 /**
  * DB 탈퇴 커밋 후에만 카카오 unlink를 호출하기 위한 이벤트.

@@ -1,6 +1,6 @@
-package com.freshmarket.member.domain;
+package com.freshmarket.member.domain.scheduler;
 
-import com.freshmarket.member.domain.service.KakaoUnlinkRetryService;
+import com.freshmarket.member.domain.service.kakao.KakaoUnlinkRetryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;

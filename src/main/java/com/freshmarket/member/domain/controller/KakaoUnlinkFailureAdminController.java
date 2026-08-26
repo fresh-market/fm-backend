@@ -3,7 +3,7 @@ package com.freshmarket.member.domain.controller;
 import com.freshmarket.common.response.PageResponse;
 import com.freshmarket.common.response.ResponseEnvelope;
 import com.freshmarket.member.domain.dto.KakaoUnlinkFailureResponse;
-import com.freshmarket.member.domain.service.KakaoUnlinkFailureResolutionService;
+import com.freshmarket.member.domain.service.kakao.KakaoUnlinkFailureResolutionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;

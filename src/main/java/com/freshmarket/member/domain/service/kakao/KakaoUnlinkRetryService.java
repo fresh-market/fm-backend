@@ -1,4 +1,4 @@
-package com.freshmarket.member.domain.service;
+package com.freshmarket.member.domain.service.kakao;
 
 import com.freshmarket.member.domain.client.KakaoUnlinkClient;
 import com.freshmarket.member.domain.entity.KakaoUnlinkFailure;
