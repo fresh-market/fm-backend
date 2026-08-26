@@ -97,8 +97,8 @@ class AdminRefreshTokenCleanupServiceTest {
         boolean result = sut.cleanupRedisWithRetry("ROLE_ADMIN", 1L, tokenHash);
 
         assertThat(result).isTrue();
-        verify(refreshTokenRepository).deleteByHash(tokenHash);
-        verify(refreshTokenRepository).deleteActiveKey("ROLE_ADMIN", 1L);
+        verify(refreshTokenRepository)
+                .revokeIfActiveHashMatches(tokenHash, "ROLE_ADMIN", 1L);
     }
 
     @Test
@@ -106,7 +106,10 @@ class AdminRefreshTokenCleanupServiceTest {
         boolean result = sut.cleanupRedisWithRetry("ROLE_ADMIN", 1L, null);
 
         assertThat(result).isTrue();
-        verify(refreshTokenRepository, times(0)).deleteByHash(org.mockito.ArgumentMatchers.any());
+        verify(refreshTokenRepository, times(0)).revokeIfActiveHashMatches(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any());
         verify(refreshTokenRepository).deleteActiveKey("ROLE_ADMIN", 1L);
     }
 
@@ -114,13 +117,47 @@ class AdminRefreshTokenCleanupServiceTest {
     void record_삭제가_타임아웃이면_후속조회로_삭제를_확정한다() {
         String tokenHash = "a".repeat(64);
         doThrow(new QueryTimeoutException("redis timeout"))
-                .when(refreshTokenRepository).deleteByHash(tokenHash);
+                .when(refreshTokenRepository)
+                .revokeIfActiveHashMatches(tokenHash, "ROLE_ADMIN", 1L);
         when(refreshTokenRepository.existsByHash(tokenHash)).thenReturn(false);
 
         boolean result = sut.cleanupRedisWithRetry("ROLE_ADMIN", 1L, tokenHash);
 
         assertThat(result).isTrue();
         verify(refreshTokenRepository).existsByHash(tokenHash);
+    }
+
+    @Test
+    void timeout_후_기존_RT는_삭제되고_activeKey가_새_RT를_가리키면_삭제완료로_판단한다() {
+        String oldTokenHash = "a".repeat(64);
+        String newTokenHash = "b".repeat(64);
+
+        doThrow(new QueryTimeoutException("redis timeout"))
+                .when(refreshTokenRepository)
+                .revokeIfActiveHashMatches(
+                        oldTokenHash,
+                        "ROLE_ADMIN",
+                        1L);
+
+        when(refreshTokenRepository.existsByHash(oldTokenHash))
+                .thenReturn(false);
+
+        when(refreshTokenRepository.findActiveHash("ROLE_ADMIN", 1L))
+                .thenReturn(Optional.of(newTokenHash));
+
+        boolean result =
+                sut.cleanupRedisWithRetry(
+                        "ROLE_ADMIN",
+                        1L,
+                        oldTokenHash);
+
+        assertThat(result).isTrue();
+
+        verify(refreshTokenRepository)
+                .existsByHash(oldTokenHash);
+
+        verify(refreshTokenRepository)
+                .findActiveHash("ROLE_ADMIN", 1L);
     }
 
     @Test
@@ -147,7 +184,7 @@ class AdminRefreshTokenCleanupServiceTest {
         doThrow(confirmedFailure)
                 .doNothing()
                 .when(refreshTokenRepository)
-                .deleteByHash(tokenHash);
+                .revokeIfActiveHashMatches(tokenHash, "ROLE_ADMIN", 1L);
 
         boolean result =
                 sut.cleanupRedisWithRetry("ROLE_ADMIN", 1L, tokenHash);
@@ -155,7 +192,7 @@ class AdminRefreshTokenCleanupServiceTest {
         assertThat(result).isTrue();
 
         verify(refreshTokenRepository, times(2))
-                .deleteByHash(tokenHash);
+                .revokeIfActiveHashMatches(tokenHash, "ROLE_ADMIN", 1L);
     }
 
     @Test
@@ -167,7 +204,7 @@ class AdminRefreshTokenCleanupServiceTest {
 
         doThrow(confirmedFailure)
                 .when(refreshTokenRepository)
-                .deleteByHash(tokenHash);
+                .revokeIfActiveHashMatches(tokenHash, "ROLE_ADMIN", 1L);
 
         boolean result =
                 sut.cleanupRedisWithRetry("ROLE_ADMIN", 1L, tokenHash);
@@ -175,6 +212,6 @@ class AdminRefreshTokenCleanupServiceTest {
         assertThat(result).isFalse();
 
         verify(refreshTokenRepository, times(3))
-                .deleteByHash(tokenHash);
+                .revokeIfActiveHashMatches(tokenHash, "ROLE_ADMIN", 1L);
     }
 }

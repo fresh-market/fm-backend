@@ -1,6 +1,7 @@
 package com.freshmarket.admin.domain.service;
 
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
+import java.util.Optional;
 import java.util.function.Supplier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -85,10 +86,11 @@ class AdminRefreshTokenCleanupService {
     }
 
     /*
-     * Refresh Token의 Redis 기본 레코드(tokenHash가 있을 때만)와 active key를 정리한다.
-     * 둘 다 확정(CONFIRMED)돼야 true를 반환한다 — 하나라도 아니면 전체를 다시 시도할 대상이다.
-     * 최대 3회까지 전체를 다시 시도한다. Redis DELETE는 멱등적이라 이미 지워진 걸 다시 지워도
-     * 결과는 같으므로, 부분적으로 성공한 부분을 다시 시도해도 문제없다.
+     * Refresh Token의 Redis 기본 레코드(tokenHash가 있을 때)와 active key를 정리한다.
+     * tokenHash를 아는 경우 공용 RefreshTokenRepository.revokeIfActiveHashMatches()를 사용한다.
+     * 이 Lua 연산은 옛 토큰의 기본 레코드는 지우되 active key는 아직도 같은 해시를 가리킬 때만
+     * 지우므로, 지연 재시도 사이 새 로그인이 생겨도 새 세션의 active key를 잘못 삭제하지 않는다.
+     * 최대 3회까지 전체를 다시 시도한다.
      */
     boolean cleanupRedisWithRetry(String role, Long adminId, String tokenHash) {
         for (int attempt = 1; attempt <= MAX_REDIS_CLEANUP_ATTEMPTS; attempt++) {
@@ -103,19 +105,21 @@ class AdminRefreshTokenCleanupService {
 
     /*
      * Refresh Token의 Redis 기본 레코드와 active key를 한 번(내부적으로 "삭제 -> 확인 -> 필요 시
-     * 1회 재시도 -> 최종 확인"까지 포함) 정리한다. 두 대상 다 확정돼야 true를 반환한다.
+     * 1회 재시도 -> 최종 확인"까지 포함) 정리한다.
+     *
+     * tokenHash가 있으면 회원 쪽과 공유하는 원자적 revoke Lua를 사용해 기본 레코드 삭제와
+     * "active key가 아직 같은 해시일 때만 삭제"를 한 번에 처리한다. tokenHash가 없는 예외적인
+     * 즉시 로그아웃 경로에서만 active key를 단독 정리한다.
      */
     private boolean cleanupRefreshTokenOnce(String role, Long adminId, String tokenHash) {
-        boolean primaryOk = true;
-
         if (tokenHash != null) {
-            RedisMutationOutcome primaryOutcome = deleteRedisEntryWithConfirmation(
-                    "record", role, adminId,
-                    () -> refreshTokenRepository.deleteByHash(tokenHash),
-                    () -> checkRefreshTokenRecordDeleted(tokenHash));
+            RedisMutationOutcome revokeOutcome = deleteRedisEntryWithConfirmation(
+                    "recordAndActiveKey", role, adminId,
+                    () -> refreshTokenRepository.revokeIfActiveHashMatches(tokenHash, role, adminId),
+                    () -> checkRefreshTokenRevoked(tokenHash, role, adminId));
 
-            logCleanupOutcome("RECORD", primaryOutcome, role, adminId);
-            primaryOk = primaryOutcome == RedisMutationOutcome.CONFIRMED;
+            logCleanupOutcome("RECORD_AND_ACTIVE_KEY", revokeOutcome, role, adminId);
+            return revokeOutcome == RedisMutationOutcome.CONFIRMED;
         }
 
         RedisMutationOutcome activeKeyOutcome = deleteRedisEntryWithConfirmation(
@@ -124,9 +128,7 @@ class AdminRefreshTokenCleanupService {
                 () -> checkRefreshTokenActiveKeyDeleted(role, adminId));
 
         logCleanupOutcome("ACTIVE_KEY", activeKeyOutcome, role, adminId);
-        boolean activeKeyOk = activeKeyOutcome == RedisMutationOutcome.CONFIRMED;
-
-        return primaryOk && activeKeyOk;
+        return activeKeyOutcome == RedisMutationOutcome.CONFIRMED;
     }
 
     /*
@@ -184,14 +186,20 @@ class AdminRefreshTokenCleanupService {
         };
     }
 
-    private RedisDeletionState checkRefreshTokenRecordDeleted(String tokenHash) {
+    private RedisDeletionState checkRefreshTokenRevoked(String tokenHash, String role, Long adminId) {
         try {
-            return refreshTokenRepository.existsByHash(tokenHash)
+            if (refreshTokenRepository.existsByHash(tokenHash)) {
+                return RedisDeletionState.PRESENT;
+            }
+
+            Optional<String> activeHash = refreshTokenRepository.findActiveHash(role, adminId);
+            return activeHash.filter(tokenHash::equals).isPresent()
                     ? RedisDeletionState.PRESENT
                     : RedisDeletionState.DELETED;
 
         } catch (DataAccessException e) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED target=record", e);
+            log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED target=recordAndActiveKey role={} adminId={}",
+                    role, adminId, e);
             return RedisDeletionState.UNKNOWN;
         }
     }
