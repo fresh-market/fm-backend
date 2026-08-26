@@ -256,6 +256,24 @@ ZADD coupon:{id}:free 6 6         실패한 번호를 담는다. 같은 값은 �
 
 **리스트가 아니라 정렬 집합을 쓴다.** 리스트는 같은 번호가 두 번 들어갈 수 있고 그러면 두 사람이 같은 번호를 받는다. `ZADD` 는 같은 값을 하나로 유지하므로 조건부 반납이 실패해도 중복이 안 생긴다. 낮은 번호부터 회수되어 `MAX(issue_seq)` 가 덜 벌어지는 것도 이득이다.
 
+**순번 확보는 한 스크립트로 끝낸다.** 나눠 부르면 `ZPOPMIN` 과 `INCR` 사이에 남이 끼어들 수 있고 왕복도 두 번이 된다.
+
+```lua
+-- KEYS[1]=free, KEYS[2]=counter, ARGV[1]=issue_limit
+local f = redis.call('ZPOPMIN', KEYS[1])
+if f[1] then return tonumber(f[1]) end
+local n = redis.call('INCR', KEYS[2])
+if n > tonumber(ARGV[1]) then
+  redis.call('DECR', KEYS[2])
+  return -1
+end
+return n
+```
+
+**왕복은 `INCR` 만 부를 때와 같은 1회다.** 빈 정렬 집합에 `ZPOPMIN` 은 O(1) 이고 Redis 안에서 도는 시간은 왕복에 묻힌다. `free` 를 두는 값이 정상 경로를 느리게 하지 않는다. `-1` 이면 소진이라 DB 를 거치지 않고 그 자리에서 거절한다.
+
+**여기의 `DECR` 은 안전하다.** 위에서 `DECR` 로는 못 고친다고 한 것은 DB 를 갔다 온 뒤의 얘기다. 그 사이에 남들이 `INCR` 해서 맨 위가 내가 아니게 된다. 이 자리는 스크립트 안이라 `INCR` 과 `DECR` 사이에 아무도 끼어들 수 없어 **맨 위가 나인 것이 확실하다.** `DECR` 이 성립하는 조건은 "아직 아무도 지나가지 않았다" 이고, 원자 스크립트 안이 그것을 만족하는 유일한 자리다.
+
 **실패 종류를 갈라야 한다.** 전부 반납하면 남이 쓰는 번호를 다시 내주게 된다.
 
 | 실패 | 그 번호는 | 처리 |
