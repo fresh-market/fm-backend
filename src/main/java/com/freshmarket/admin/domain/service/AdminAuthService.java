@@ -19,6 +19,8 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.locks.LockSupport;
 
 import com.freshmarket.common.logging.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
@@ -53,6 +55,12 @@ public class AdminAuthService {
 
     // Access Token 차단 커트라인 반영 여부를 확인할 때 사용하는 최소 시간 오프셋
     private static final long CUTOFF_CONFIRMATION_OFFSET_NANOS = 1L;
+
+    // Access Token 차단 Redis 재시도도 요청 예산 안에서 Full Jitter 지수 백오프를 적용한다.
+    private static final int MAX_ACCESS_TOKEN_INVALIDATION_ATTEMPTS = 3;
+    private static final Duration ACCESS_TOKEN_RETRY_BUDGET = Duration.ofMillis(500);
+    private static final Duration ACCESS_TOKEN_RETRY_BASE_DELAY = Duration.ofMillis(25);
+    private static final Duration ACCESS_TOKEN_RETRY_MAX_DELAY = Duration.ofMillis(100);
 
     // 로그인 실패 로그 포맷
     private static final String LOG_ADMIN_LOGIN_FAILED = "event=ADMIN_LOGIN success=false loginId={}";
@@ -222,7 +230,8 @@ public class AdminAuthService {
         try {
             adminLogoutTransactionService.recordSuccess(adminId);
         } catch (DataAccessException e) {
-            log.warn("event=ADMIN_LOGOUT_AUDIT_LOG_FAILED adminId={} — durable outbox에 기록", adminId, e);
+            log.warn("event=ADMIN_LOGOUT_AUDIT_LOG_FAILED adminId={} errorType={} — durable outbox에 기록",
+                    adminId, safeErrorType(e));
             // 이 기록까지 실패하면 예외를 숨기지 않는다. 감사 행위가 DB와 outbox 양쪽에서
             // 모두 유실된 상태로 204를 반환하는 것을 막기 위해 호출자에게 실패를 드러낸다.
             adminAuditFailureService.recordFailure(
@@ -241,106 +250,98 @@ public class AdminAuthService {
             return refreshTokenRepository.findActiveHash(role, adminId).orElse(null);
         } catch (DataAccessException e) {
             log.warn("event=ADMIN_LOGOUT_ACTIVE_REFRESH_TOKEN_LOOKUP_FAILED "
-                    + LOG_FIELDS_ROLE_ADMIN_ID, role, adminId, e);
+                            + LOG_FIELDS_ROLE_ADMIN_ID + " errorType={}",
+                    role, adminId, safeErrorType(e));
             return null;
         }
     }
 
     /*
      * 로그아웃 이전에 발급된 Access Token을 사용할 수 없도록 Redis에 valid-after 커트라인을 저장한다.
-     * timeout/연결 실패의 경우 Redis가 실제로 반영했을 가능성이 있으므로 후속 조회로 확인하고 필요한 경우 한 번 더 저장한다.
+     * timeout/연결 실패의 경우 Redis가 실제로 반영했을 가능성이 있으므로 후속 조회로 확인하고,
+     * 아직 미반영이면 요청 예산 안에서 Full Jitter 지수 백오프를 두고 최대 3회까지 저장을 시도한다.
      */
     private void invalidateAccessTokenOrThrow(
             String role,
             Long adminId,
             LocalDateTime cutoff) {
 
-        Duration ttl =
-                Duration.ofMillis(
-                        jwtTokenProvider
-                                .getAccessTokenValidityMs());
+        Duration ttl = Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs());
+        long deadlineNanos = accessTokenRetryDeadlineNanos();
+        DataAccessException lastUnknownFailure = null;
 
-        // 1. 최초 커트라인 저장
-        try {
-            accessTokenValidAfterRepository
-                    .invalidateBefore(
-                            role,
-                            adminId,
-                            cutoff,
-                            ttl);
+        for (int attempt = 1; attempt <= MAX_ACCESS_TOKEN_INVALIDATION_ATTEMPTS; attempt++) {
+            try {
+                accessTokenValidAfterRepository.invalidateBefore(role, adminId, cutoff, ttl);
+                return;
 
-            return;
+            } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
+                lastUnknownFailure = e;
+                log.warn(
+                        "event=ADMIN_ACCESS_TOKEN_INVALIDATION_UNKNOWN "
+                                + LOG_FIELDS_ROLE_ADMIN_ID
+                                + " attempt={} errorType={}",
+                        role,
+                        adminId,
+                        attempt,
+                        safeErrorType(e));
 
-        } catch (
-                QueryTimeoutException
-                | DataAccessResourceFailureException e) {
+                // timeout/연결 단절은 명령이 Redis에 반영된 뒤 응답만 잃었을 수도 있으므로 먼저 확인한다.
+                if (isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
+                    return;
+                }
 
-            log.warn(
-                    "event=ADMIN_ACCESS_TOKEN_INVALIDATION_UNKNOWN "
-                            + LOG_FIELDS_ROLE_ADMIN_ID,
-                    role,
-                    adminId,
-                    e);
+            } catch (DataAccessException e) {
+                throw logoutFailed(role, adminId, e);
+            }
 
-        } catch (DataAccessException e) {
-
-            throw logoutFailed(
-                    role,
-                    adminId,
-                    e);
+            if (attempt < MAX_ACCESS_TOKEN_INVALIDATION_ATTEMPTS
+                    && !waitBeforeAccessTokenRetry(attempt, deadlineNanos)) {
+                break;
+            }
         }
 
-        // 2. timeout이 발생했더라도 실제로 Redis에 반영됐는지 확인한다.
-        if (isAccessTokenInvalidationConfirmed(
-                role,
-                adminId,
-                cutoff)) {
+        // 재시도 예산 또는 횟수를 다 썼더라도 마지막 상태 확인에서 반영이 확인되면 성공으로 본다.
+        if (!isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
+            throw logoutFailed(role, adminId, lastUnknownFailure);
+        }
+    }
 
-            return;
+    private long accessTokenRetryDeadlineNanos() {
+        long now = System.nanoTime();
+        long budgetNanos = ACCESS_TOKEN_RETRY_BUDGET.toNanos();
+        return now > Long.MAX_VALUE - budgetNanos ? Long.MAX_VALUE : now + budgetNanos;
+    }
+
+    /*
+     * retryNumber=1이면 [0, base], retryNumber=2이면 [0, base*2] 범위에서 Full Jitter를 뽑는다.
+     * 남은 요청 예산을 넘기지 않고, 인터럽트가 걸리면 즉시 재시도를 중단한다.
+     */
+    private boolean waitBeforeAccessTokenRetry(int retryNumber, long deadlineNanos) {
+        if (Thread.currentThread().isInterrupted()) {
+            return false;
         }
 
-        // 3. 아직 반영 여부를 확인하지 못했다면 한 번 재시도한다.
-        try {
-            accessTokenValidAfterRepository
-                    .invalidateBefore(
-                            role,
-                            adminId,
-                            cutoff,
-                            ttl);
-
-            return;
-
-        } catch (
-                QueryTimeoutException
-                | DataAccessResourceFailureException e) {
-
-            log.warn(
-                    "event=ADMIN_ACCESS_TOKEN_INVALIDATION_RETRY_UNKNOWN "
-                            + LOG_FIELDS_ROLE_ADMIN_ID,
-                    role,
-                    adminId,
-                    e);
-
-        } catch (DataAccessException e) {
-
-            throw logoutFailed(
-                    role,
-                    adminId,
-                    e);
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0L) {
+            return false;
         }
 
-        // 4. 재시도까지 결과가 미확정이면 마지막으로 확인한다.
-        // 끝까지 확인할 수 없다면 204 성공으로 응답하지 않는다.
-        if (!isAccessTokenInvalidationConfirmed(
-                role,
-                adminId,
-                cutoff)) {
-
-            throw logoutFailed(
-                    role,
-                    adminId,
-                    null);
+        long exponentialCapNanos =
+                ACCESS_TOKEN_RETRY_BASE_DELAY.toNanos() << Math.max(0, retryNumber - 1);
+        long cappedDelayNanos =
+                Math.min(ACCESS_TOKEN_RETRY_MAX_DELAY.toNanos(), exponentialCapNanos);
+        long jitterUpperBoundNanos = Math.min(cappedDelayNanos, remainingNanos);
+        if (jitterUpperBoundNanos <= 0L) {
+            return false;
         }
+
+        long delayNanos = ThreadLocalRandom.current().nextLong(jitterUpperBoundNanos + 1L);
+        if (delayNanos > 0L) {
+            LockSupport.parkNanos(delayNanos);
+        }
+
+        return !Thread.currentThread().isInterrupted() && System.nanoTime() < deadlineNanos;
     }
 
     /*
@@ -364,10 +365,11 @@ public class AdminAuthService {
 
             log.warn(
                     "event=ADMIN_ACCESS_TOKEN_INVALIDATION_CONFIRM_FAILED "
-                            + LOG_FIELDS_ROLE_ADMIN_ID,
+                            + LOG_FIELDS_ROLE_ADMIN_ID
+                            + " errorType={}",
                     role,
                     adminId,
-                    e);
+                    safeErrorType(e));
 
             return false;
         }
@@ -381,17 +383,19 @@ public class AdminAuthService {
 
         log.error(
                 "event=ADMIN_ACCESS_TOKEN_INVALIDATION_FAILED "
-                        + LOG_FIELDS_ROLE_ADMIN_ID,
+                        + LOG_FIELDS_ROLE_ADMIN_ID
+                        + " errorType={}",
                 role,
                 adminId,
-                cause);
+                safeErrorType(cause));
 
-        return cause == null
-                ? new AdminException(
-                AdminErrorCode.LOGOUT_FAILED)
-                : new AdminException(
-                AdminErrorCode.LOGOUT_FAILED,
-                cause);
+        // DataAccessException을 cause로 연결하면 GlobalExceptionHandler가 BusinessException의
+        // 전체 스택을 남길 때 공급자 SQL/상세 메시지가 함께 기록될 수 있으므로 외부 도메인 예외에는 싣지 않는다.
+        return new AdminException(AdminErrorCode.LOGOUT_FAILED);
+    }
+
+    private String safeErrorType(Throwable error) {
+        return error == null ? "UNCONFIRMED" : error.getClass().getSimpleName();
     }
 
     private String maskLoginId(String loginId) { return PiiMasker.maskGeneric(loginId, 2, 1); }

@@ -1,18 +1,14 @@
 package com.freshmarket.admin.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.freshmarket.IntegrationTestSupport;
+import com.freshmarket.RedisIntegrationTestSupport;
 import com.freshmarket.admin.domain.entity.AdminLogoutFailure;
 import com.freshmarket.admin.domain.repository.AdminLogoutFailureRepository;
-import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import jakarta.servlet.http.Cookie;
 import java.time.LocalDateTime;
@@ -25,27 +21,24 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
-/** Controller -> Service -> Repository -> MySQL까지 관리자 로그아웃 전체 경로와 native/조건부 쿼리를 검증한다. */
+/** Controller -> Service -> Repository -> MySQL/Valkey까지 관리자 로그아웃 전체 경로와 native/Lua/조건부 쿼리를 검증한다. */
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("integrationTest")
-class AdminLogoutIntegrationTest extends IntegrationTestSupport {
+class AdminLogoutIntegrationTest extends RedisIntegrationTestSupport {
 
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PasswordEncoder passwordEncoder;
     @Autowired AdminLogoutFailureRepository failureRepository;
 
-    // Redis는 관리 의존성(DB) 통합 테스트의 범위 밖이므로 네트워크 경계만 대체한다.
-    @MockitoBean RefreshTokenRepository refreshTokenRepository;
-    @MockitoBean AccessTokenValidAfterRepository accessTokenValidAfterRepository;
+    @Autowired RefreshTokenRepository refreshTokenRepository;
 
     @Test
-    void 관리자_로그인부터_로그아웃까지_Controller_Service_Repository_DB가_연결된다() throws Exception {
+    void 관리자_로그인부터_로그아웃까지_Controller_Service_Repository_MySQL_Valkey가_연결된다() throws Exception {
         String loginId = "integration.admin.logout";
         long adminId = insertAdmin(loginId, "Password!2026");
 
@@ -58,9 +51,8 @@ class AdminLogoutIntegrationTest extends IntegrationTestSupport {
                 .andReturn();
 
         String accessToken = cookieValue(login.getResponse().getHeaders(HttpHeaders.SET_COOKIE), "accessToken");
-        when(accessTokenValidAfterRepository.isValidAfter(eq("ROLE_ADMIN"), eq(adminId), any()))
-                .thenReturn(true);
-        when(refreshTokenRepository.findActiveHash("ROLE_ADMIN", adminId)).thenReturn(java.util.Optional.empty());
+        String refreshTokenHash = refreshTokenRepository.findActiveHash("ROLE_ADMIN", adminId).orElseThrow();
+        assertThat(refreshTokenRepository.existsByHash(refreshTokenHash)).isTrue();
 
         mockMvc.perform(delete("/v1/admin/auth/tokens")
                         .cookie(new Cookie("accessToken", accessToken))
@@ -76,6 +68,16 @@ class AdminLogoutIntegrationTest extends IntegrationTestSupport {
 
         assertThat(remainingRt).isZero();
         assertThat(auditCount).isEqualTo(1);
+
+        // 실제 refresh_token_revoke.lua가 기본 레코드와 현재 active key를 함께 정리했는지 검증한다.
+        assertThat(refreshTokenRepository.existsByHash(refreshTokenHash)).isFalse();
+        assertThat(refreshTokenRepository.findActiveHash("ROLE_ADMIN", adminId)).isEmpty();
+
+        // logout에서 저장한 실제 Redis cutoff 때문에 같은 Access Token은 더 이상 인증되지 않아야 한다.
+        mockMvc.perform(delete("/v1/admin/auth/tokens")
+                        .cookie(new Cookie("accessToken", accessToken))
+                        .with(csrf()))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
