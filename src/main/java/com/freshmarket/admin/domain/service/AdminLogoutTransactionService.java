@@ -27,7 +27,7 @@ class AdminLogoutTransactionService {
      * 같은 관리자에 대한 로그인/로그아웃 갱신이 겹쳐 토큰 상태를 덮어쓰지 않도록 관리자 행을 잠근다.
      * Redis 정리에 사용할 기존 해시는 트랜잭션이 끝난 뒤 호출자가 사용할 수 있도록 반환한다.
      */
-    @Transactional(timeout = 5)
+    @Transactional(timeout = 1)
     LogoutDbState revokeRefreshToken(Long adminId) {
         Objects.requireNonNull(adminId, "adminId");
 
@@ -44,7 +44,7 @@ class AdminLogoutTransactionService {
      * 지연 재시도에서는 실패 당시 Refresh Token과 현재 DB 토큰이 같은 경우에만 폐기한다.
      * 0건 수정은 이미 폐기됐거나 재로그인으로 새 토큰으로 교체됐다는 뜻이므로 정상 완료로 본다.
      */
-    @Transactional(timeout = 5)
+    @Transactional(timeout = 1)
     void revokeRefreshTokenIfMatches(Long adminId, String expectedRefreshTokenHash) {
         Objects.requireNonNull(adminId, "adminId");
         Objects.requireNonNull(expectedRefreshTokenHash, "expectedRefreshTokenHash");
@@ -53,7 +53,7 @@ class AdminLogoutTransactionService {
     }
 
     /** Access Token 차단까지 확정된 뒤 성공 감사 로그를 별도 짧은 트랜잭션으로 기록한다. */
-    @Transactional(timeout = 5)
+    @Transactional(timeout = 1)
     void recordSuccess(Long adminId) {
         adminAuditLogRepository.save(
                 AdminAuditLog.of(adminId, "ADMIN_LOGOUT", String.valueOf(adminId), null));

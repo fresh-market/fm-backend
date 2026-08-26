@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.QueryTimeoutException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.stereotype.Service;
 
 /*
@@ -59,10 +60,14 @@ class AdminRefreshTokenCleanupService {
         for (int attempt = 1; attempt <= MAX_DB_REVOKE_ATTEMPTS; attempt++) {
             try {
                 return adminLogoutTransactionService.revokeRefreshToken(adminId);
-            } catch (DataAccessException e) {
+            } catch (TransientDataAccessException | DataAccessResourceFailureException e) {
                 lastFailure = e;
                 log.warn("event=ADMIN_LOGOUT_DB_REVOKE_RETRY adminId={} attempt={} errorType={}",
-                        adminId, attempt, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
+                        adminId, attempt, SafeExceptionLog.errorType(e));
+            } catch (DataAccessException e) {
+                log.error("event=ADMIN_LOGOUT_DB_REVOKE_NON_RETRYABLE adminId={} errorType={}",
+                        adminId, SafeExceptionLog.errorType(e));
+                return null;
             }
 
             if (attempt < MAX_DB_REVOKE_ATTEMPTS
@@ -73,8 +78,7 @@ class AdminRefreshTokenCleanupService {
         }
 
         log.error("event=ADMIN_LOGOUT_DB_REVOKE_GAVE_UP adminId={} attempts={} errorType={}",
-                adminId, MAX_DB_REVOKE_ATTEMPTS, SafeExceptionLog.errorType(lastFailure),
-                SafeExceptionLog.stackTrace(lastFailure));
+                adminId, MAX_DB_REVOKE_ATTEMPTS, SafeExceptionLog.errorType(lastFailure));
         return null;
     }
 
@@ -90,10 +94,14 @@ class AdminRefreshTokenCleanupService {
             try {
                 adminLogoutTransactionService.revokeRefreshTokenIfMatches(adminId, expectedRefreshTokenHash);
                 return true;
-            } catch (DataAccessException e) {
+            } catch (TransientDataAccessException | DataAccessResourceFailureException e) {
                 lastFailure = e;
                 log.warn("event=ADMIN_LOGOUT_DB_REVOKE_IF_MATCHES_RETRY adminId={} attempt={} errorType={}",
-                        adminId, attempt, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
+                        adminId, attempt, SafeExceptionLog.errorType(e));
+            } catch (DataAccessException e) {
+                log.error("event=ADMIN_LOGOUT_DB_REVOKE_IF_MATCHES_NON_RETRYABLE adminId={} errorType={}",
+                        adminId, SafeExceptionLog.errorType(e));
+                return false;
             }
 
             if (attempt < MAX_DB_REVOKE_ATTEMPTS
@@ -104,8 +112,7 @@ class AdminRefreshTokenCleanupService {
         }
 
         log.error("event=ADMIN_LOGOUT_DB_REVOKE_IF_MATCHES_GAVE_UP adminId={} attempts={} errorType={}",
-                adminId, MAX_DB_REVOKE_ATTEMPTS, SafeExceptionLog.errorType(lastFailure),
-                SafeExceptionLog.stackTrace(lastFailure));
+                adminId, MAX_DB_REVOKE_ATTEMPTS, SafeExceptionLog.errorType(lastFailure));
         return false;
     }
 
@@ -176,12 +183,12 @@ class AdminRefreshTokenCleanupService {
         } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
             log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_UNKNOWN " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID
                             + " errorType={}",
-                    target, role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
+                    target, role, adminId, SafeExceptionLog.errorType(e));
 
         } catch (DataAccessException e) {
             log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_FAILED " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID
                             + " errorType={}",
-                    target, role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
+                    target, role, adminId, SafeExceptionLog.errorType(e));
             return RedisMutationOutcome.FAILED;
         }
 
@@ -204,12 +211,12 @@ class AdminRefreshTokenCleanupService {
         } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
             log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_UNKNOWN " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID
                             + " errorType={}",
-                    target, role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
+                    target, role, adminId, SafeExceptionLog.errorType(e));
 
         } catch (DataAccessException e) {
             log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_RETRY_FAILED " + LOG_FIELDS_TARGET_ROLE_ADMIN_ID
                             + " errorType={}",
-                    target, role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
+                    target, role, adminId, SafeExceptionLog.errorType(e));
             return RedisMutationOutcome.FAILED;
         }
 
@@ -237,7 +244,7 @@ class AdminRefreshTokenCleanupService {
         } catch (DataAccessException e) {
             log.warn("event=ADMIN_REFRESH_TOKEN_DELETE_CONFIRM_FAILED "
                             + "target=recordAndActiveKey role={} adminId={} errorType={}",
-                    role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
+                    role, adminId, SafeExceptionLog.errorType(e));
             return RedisDeletionState.UNKNOWN;
         }
     }

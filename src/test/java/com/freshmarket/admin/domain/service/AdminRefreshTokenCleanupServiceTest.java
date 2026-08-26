@@ -58,6 +58,19 @@ class AdminRefreshTokenCleanupServiceTest {
     }
 
     @Test
+    void DB_폐기에서_재시도_불가능한_오류가_발생하면_즉시_null을_반환한다() {
+        DataAccessException nonRetryableFailure =
+                new DataAccessException("constraint violation") {};
+        when(adminLogoutTransactionService.revokeRefreshToken(1L))
+                .thenThrow(nonRetryableFailure);
+
+        AdminLogoutTransactionService.LogoutDbState result = sut.revokeDbWithRetry(1L);
+
+        assertThat(result).isNull();
+        verify(adminLogoutTransactionService, times(1)).revokeRefreshToken(1L);
+    }
+
+    @Test
     void DB_폐기가_3회_모두_실패하면_null을_반환한다() {
         when(adminLogoutTransactionService.revokeRefreshToken(1L))
                 .thenThrow(new DataAccessResourceFailureException("db down"));
@@ -76,6 +89,20 @@ class AdminRefreshTokenCleanupServiceTest {
 
         assertThat(result).isTrue();
         verify(adminLogoutTransactionService).revokeRefreshTokenIfMatches(1L, tokenHash);
+    }
+
+    @Test
+    void 조건부_DB폐기에서_재시도_불가능한_오류가_발생하면_즉시_false를_반환한다() {
+        String tokenHash = "a".repeat(64);
+        DataAccessException nonRetryableFailure =
+                new DataAccessException("constraint violation") {};
+        doThrow(nonRetryableFailure)
+                .when(adminLogoutTransactionService).revokeRefreshTokenIfMatches(1L, tokenHash);
+
+        boolean result = sut.revokeDbIfMatchesWithRetry(1L, tokenHash);
+
+        assertThat(result).isFalse();
+        verify(adminLogoutTransactionService, times(1)).revokeRefreshTokenIfMatches(1L, tokenHash);
     }
 
     @Test

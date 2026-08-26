@@ -27,7 +27,7 @@ class AdminLogoutFailureScheduler {
      *  허용해 만료된 옛 실행자가 새 실행자의 결과를 덮어쓰지 못한다.
      */
     @Scheduled(fixedDelay = RETRY_DELAY_MS)
-    public void retryPendingLogoutFailures() {
+    void retryPendingLogoutFailures() {
         adminLogoutFailureService.retryAllPending();
     }
 }
