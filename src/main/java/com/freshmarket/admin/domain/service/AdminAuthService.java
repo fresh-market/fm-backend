@@ -68,6 +68,9 @@ public class AdminAuthService {
     // Access Token 차단 로그에서 반복되는 필드 포맷
     private static final String LOG_FIELDS_ROLE_ADMIN_ID = "role={} adminId={}";
 
+    // 예외 타입 로그에서 반복되는 필드 포맷
+    private static final String LOG_FIELD_ERROR_TYPE = " errorType={}";
+
     private final AdminRepository adminRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
@@ -250,7 +253,7 @@ public class AdminAuthService {
             return refreshTokenRepository.findActiveHash(role, adminId).orElse(null);
         } catch (DataAccessException e) {
             log.warn("event=ADMIN_LOGOUT_ACTIVE_REFRESH_TOKEN_LOOKUP_FAILED "
-                            + LOG_FIELDS_ROLE_ADMIN_ID + " errorType={}",
+                            + LOG_FIELDS_ROLE_ADMIN_ID + LOG_FIELD_ERROR_TYPE,
                     role, adminId, safeErrorType(e));
             return null;
         }
@@ -366,7 +369,7 @@ public class AdminAuthService {
             log.warn(
                     "event=ADMIN_ACCESS_TOKEN_INVALIDATION_CONFIRM_FAILED "
                             + LOG_FIELDS_ROLE_ADMIN_ID
-                            + " errorType={}",
+                            + LOG_FIELD_ERROR_TYPE,
                     role,
                     adminId,
                     safeErrorType(e));
@@ -384,7 +387,7 @@ public class AdminAuthService {
         log.error(
                 "event=ADMIN_ACCESS_TOKEN_INVALIDATION_FAILED "
                         + LOG_FIELDS_ROLE_ADMIN_ID
-                        + " errorType={}",
+                        + LOG_FIELD_ERROR_TYPE,
                 role,
                 adminId,
                 safeErrorType(cause));
