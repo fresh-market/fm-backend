@@ -10,6 +10,7 @@ import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
@@ -89,6 +90,10 @@ public class S3ImageStorageClient implements ImageStorageClient {
      * (confirm()의 불일치 처리)는 행을 PENDING으로 남겨 두므로, 여기서 지우지 못해도 나중에
      * 정리 배치가 같은 키로 다시 시도할 수 있다. 관리자가 이미지를 직접 지우는 delete()는 행 자체가
      * 사라져 재시도 대상이 없어지므로 이 메서드가 아니라 deleteObjectOrThrow()를 쓴다(INF-11-08).
+     *
+     * (FUN-2-01) S3Exception만이 아니라 SdkException을 잡는다 — 연결 실패·타임아웃으로 던져지는
+     * SdkClientException은 S3Exception의 형제 타입이라(둘 다 SdkException 하위) 좁게 잡으면 여기서
+     * 못 잡고 새어나가, "실패해도 예외를 던지지 않는다"는 이 메서드의 계약이 깨진다.
      */
     @Override
     public void deleteObject(String objectKey) {
@@ -97,7 +102,7 @@ public class S3ImageStorageClient implements ImageStorageClient {
                     .bucket(bucket)
                     .key(objectKey)
                     .build());
-        } catch (S3Exception e) {
+        } catch (SdkException e) {
             log.warn("event=IMAGE_DELETE_OBJECT_FAILED objectKey={}", objectKey, e);
         }
     }
