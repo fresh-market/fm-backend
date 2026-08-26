@@ -525,9 +525,19 @@ SELECT 1 FROM member_coupon WHERE coupon_id = ? AND status = 'PENDING' LIMIT 1;
 
 | | |
 |---|---|
-| 스키마 | `member_id` NULL 허용, `status` CHECK 3곳에 `PENDING` 추가 |
+| 스키마 | `member_id` NULL 허용 + 조건부 CHECK, `status` CHECK 3곳에 `PENDING` 추가 |
 | 스냅샷 시점 | 발급 시점이 아니라 사전 삽입 시점의 쿠폰 조건이 박힌다 |
 | 집계 | 회원을 안 끼는 집계에 `member_id IS NOT NULL` 이 붙는다 |
+
+**`NOT NULL` 을 그냥 풀면 안 된다.** `member_coupon` 은 선착순만 담는 테이블이 아니다. 일반 쿠폰 발급 경로에서도 주인 없는 행이 들어갈 수 있게 된다.
+
+```sql
+CONSTRAINT chk_mc_pending_member CHECK (
+    (status =  'PENDING' AND member_id IS NULL AND issued_at IS NULL)
+ OR (status <> 'PENDING' AND member_id IS NOT NULL AND issued_at IS NOT NULL))
+```
+
+**`PENDING` 일 때만 NULL 을 허용하면 그 보호가 대부분 돌아온다.** `issued_at` 도 함께 묶어, 발급됐는데 시각이 없거나 그 반대인 행을 막는다.
 
 **0행을 세 경우로 갈라야 한다.** insert 는 위반한 제약 이름이 원인을 알려주지만, update 는 서로 다른 상황을 0행 하나로 뭉갠다.
 
