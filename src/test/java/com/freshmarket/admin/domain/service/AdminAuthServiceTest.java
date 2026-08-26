@@ -67,6 +67,8 @@ class AdminAuthServiceTest {
             mock(AccessTokenValidAfterRepository.class);
     private final AdminLogoutTransactionService adminLogoutTransactionService =
             mock(AdminLogoutTransactionService.class);
+    private final AdminLoginTransactionService adminLoginTransactionService =
+            mock(AdminLoginTransactionService.class);
     private final AdminRefreshTokenCleanupService adminRefreshTokenCleanupService =
             mock(AdminRefreshTokenCleanupService.class);
     private final AdminLogoutFailureService adminLogoutFailureService =
@@ -83,6 +85,7 @@ class AdminAuthServiceTest {
             refreshTokenRepository,
             accessTokenValidAfterRepository,
             adminLogoutTransactionService,
+            adminLoginTransactionService,
             adminRefreshTokenCleanupService,
             adminLogoutFailureService,
             adminAuditFailureService,
@@ -108,7 +111,10 @@ class AdminAuthServiceTest {
         );
 
         when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
-        when(adminRepository.findByIdForUpdate(admin.getId())).thenReturn(Optional.of(admin));
+        when(adminLoginTransactionService.issueRefreshToken(
+                eq(admin.getId()), any(), any(LocalDateTime.class)))
+                .thenReturn(new AdminLoginTransactionService.LoginDbState(
+                        admin.getId(), admin.getLoginId(), admin.getName(), admin.getRole()));
 
         AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
@@ -135,10 +141,35 @@ class AdminAuthServiceTest {
                 false,
                 Duration.ofSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
 
-        // Redis active key 유실 시 로그아웃이 사용할 DB 백업도 함께 남긴다.
-        assertThat(admin.getRefreshTokenHash()).isNotBlank();
-        assertThat(admin.getRefreshTokenExpiresAt())
-                .isEqualTo(LocalDateTime.now(clock).plusDays(1));
+        // Redis active key 유실 시 로그아웃이 사용할 DB 백업은 짧은 별도 트랜잭션에서 기록한다.
+        verify(adminLoginTransactionService).issueRefreshToken(
+                eq(admin.getId()), any(), eq(LocalDateTime.now(clock).plusDays(1)));
+    }
+
+    @Test
+    void 로그인_Redis_저장이_실패하면_이번_RT의_Redis와_DB_상태를_보상한다() {
+        Admin admin = AdminFixture.active(
+                "admin.kim",
+                passwordEncoder.encode(RAW_PASSWORD),
+                AdminRole.ADMIN
+        );
+        when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
+        when(adminLoginTransactionService.issueRefreshToken(
+                eq(admin.getId()), any(), any(LocalDateTime.class)))
+                .thenAnswer(invocation -> new AdminLoginTransactionService.LoginDbState(
+                        admin.getId(), admin.getLoginId(), admin.getName(), admin.getRole()));
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository)
+                .save(any(), eq(admin.getId()), eq("ROLE_ADMIN"), eq(TokenType.ADMIN), eq(false), any());
+
+        AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
+
+        assertThatThrownBy(() -> adminAuthService.login(request))
+                .isInstanceOf(DataAccessResourceFailureException.class);
+
+        verify(refreshTokenRepository).revokeIfActiveHashMatches(
+                any(), eq("ROLE_ADMIN"), eq(admin.getId()));
+        verify(adminLoginTransactionService).clearRefreshTokenIfMatches(eq(admin.getId()), any());
     }
 
     @Test
@@ -421,8 +452,11 @@ class AdminAuthServiceTest {
         when(adminRepository.findByLoginId("admin.kim"))
                 .thenReturn(Optional.of(admin));
 
-        when(adminRepository.findByIdForUpdate(admin.getId()))
-                .thenReturn(Optional.empty());
+        when(adminLoginTransactionService.issueRefreshToken(
+                eq(admin.getId()),
+                any(),
+                any(LocalDateTime.class)))
+                .thenThrow(new AdminException(AdminErrorCode.LOGIN_FAILED));
 
         AdminLoginRequest request =
                 new AdminLoginRequest("admin.kim", RAW_PASSWORD);
@@ -452,8 +486,11 @@ class AdminAuthServiceTest {
         when(adminRepository.findByLoginId("admin.kim"))
                 .thenReturn(Optional.of(admin));
 
-        when(adminRepository.findByIdForUpdate(admin.getId()))
-                .thenReturn(Optional.of(lockedAdmin));
+        when(adminLoginTransactionService.issueRefreshToken(
+                eq(admin.getId()),
+                any(),
+                any(LocalDateTime.class)))
+                .thenThrow(new AdminException(AdminErrorCode.LOGIN_FAILED));
 
         AdminLoginRequest request =
                 new AdminLoginRequest("admin.kim", RAW_PASSWORD);
@@ -476,9 +513,17 @@ class AdminAuthServiceTest {
         // given
         Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
         when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
-        when(adminRepository.findByIdForUpdate(admin.getId())).thenReturn(Optional.of(admin));
-        AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
+        AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
+        when(adminLoginTransactionService.issueRefreshToken(
+                eq(admin.getId()),
+                any(),
+                any(LocalDateTime.class)))
+                .thenReturn(new AdminLoginTransactionService.LoginDbState(
+                        admin.getId(),
+                        admin.getLoginId(),
+                        admin.getName(),
+                        admin.getRole()));
         // when
         AdminLoginResult result = adminAuthService.login(request);
 

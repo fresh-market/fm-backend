@@ -30,7 +30,6 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.QueryTimeoutException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /*
  * 관리자 로그인과 로그아웃을 다룬다.
@@ -78,6 +77,7 @@ public class AdminAuthService {
     private final long refreshTokenValiditySeconds;
     private final AccessTokenValidAfterRepository accessTokenValidAfterRepository;
     private final AdminLogoutTransactionService adminLogoutTransactionService;
+    private final AdminLoginTransactionService adminLoginTransactionService;
     private final AdminRefreshTokenCleanupService adminRefreshTokenCleanupService;
     private final AdminLogoutFailureService adminLogoutFailureService;
     private final AdminAuditFailureService adminAuditFailureService;
@@ -92,6 +92,7 @@ public class AdminAuthService {
             RefreshTokenRepository refreshTokenRepository,
             AccessTokenValidAfterRepository accessTokenValidAfterRepository,
             AdminLogoutTransactionService adminLogoutTransactionService,
+            AdminLoginTransactionService adminLoginTransactionService,
             AdminRefreshTokenCleanupService adminRefreshTokenCleanupService,
             AdminLogoutFailureService adminLogoutFailureService,
             AdminAuditFailureService adminAuditFailureService,
@@ -104,6 +105,7 @@ public class AdminAuthService {
         this.refreshTokenRepository = refreshTokenRepository;
         this.accessTokenValidAfterRepository = accessTokenValidAfterRepository;
         this.adminLogoutTransactionService = adminLogoutTransactionService;
+        this.adminLoginTransactionService = adminLoginTransactionService;
         this.adminRefreshTokenCleanupService = adminRefreshTokenCleanupService;
         this.adminLogoutFailureService = adminLogoutFailureService;
         this.adminAuditFailureService = adminAuditFailureService;
@@ -114,7 +116,6 @@ public class AdminAuthService {
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_SOURCE);
     }
 
-    @Transactional(timeout = 5)
     public AdminLoginResult login(AdminLoginRequest request) {
         Objects.requireNonNull(request, "request");
 
@@ -147,48 +148,85 @@ public class AdminAuthService {
         }
 
         /*
-         * 비밀번호 검증이 끝난 성공 후보에 대해서만 관리자 행을 잠근다.
-         * findByLoginId 자체에 PESSIMISTIC_WRITE를 걸면 존재하는 계정에 대한 비밀번호 실패 요청도
-         * 느린 BCrypt 비교 동안 쓰기 잠금을 점유하므로, 실제 Refresh Token 상태를 갱신하기 직전에만 잠근다.
-         * 잠금을 얻는 사이 계정 상태가 바뀔 수 있으므로 잠금 조회 뒤 활성 상태도 다시 확인한다.
+         * JWT/opaque 토큰 생성과 Redis I/O를 DB 트랜잭션 밖에 둔다.
+         * 짧은 DB 트랜잭션은 AdminLoginTransactionService가 관리자 행 잠금, 활성 상태 재확인,
+         * Refresh Token 백업 갱신까지만 담당한다 (DI-4-02 / DI-4-03).
          */
-        Admin lockedAdmin = adminRepository.findByIdForUpdate(admin.getId())
-                .orElseThrow(() -> new AdminException(AdminErrorCode.LOGIN_FAILED));
-        if (!lockedAdmin.isActive()) {
-            log.warn(LOG_ADMIN_LOGIN_FAILED, maskLoginId(request.loginId()));
-            throw new AdminException(AdminErrorCode.LOGIN_FAILED);
+        String rawRefreshToken = OpaqueTokenGenerator.generate();
+        String refreshTokenHash = TokenHasher.sha256(rawRefreshToken);
+        Duration refreshTtl = Duration.ofSeconds(refreshTokenValiditySeconds);
+        LocalDateTime refreshTokenExpiresAt = LocalDateTime.now(clock).plus(refreshTtl);
+
+        AdminLoginTransactionService.LoginDbState dbState =
+                adminLoginTransactionService.issueRefreshToken(
+                        admin.getId(), refreshTokenHash, refreshTokenExpiresAt);
+
+        String role = dbState.role().toAuthority();
+        String accessToken;
+        try {
+            accessToken = jwtTokenProvider.createAccessToken(
+                    dbState.adminId(), TokenType.ADMIN, role);
+        } catch (RuntimeException e) {
+            // DB 백업을 먼저 쓴 뒤 JWT 생성이 실패하면 이번 로그인 해시만 조건부 보상한다.
+            adminLoginTransactionService.clearRefreshTokenIfMatches(dbState.adminId(), refreshTokenHash);
+            throw e;
         }
 
-        String accessToken = jwtTokenProvider.createAccessToken(
-                lockedAdmin.getId(), TokenType.ADMIN, lockedAdmin.getRole().toAuthority());
-
-        String rawRefreshToken = OpaqueTokenGenerator.generate();
-        Duration refreshTtl = Duration.ofSeconds(refreshTokenValiditySeconds);
-        refreshTokenRepository.save(
-                rawRefreshToken,
-                lockedAdmin.getId(),
-                lockedAdmin.getRole().toAuthority(),
-                TokenType.ADMIN,
-                false,
-                refreshTtl);
-
-        /* Redis의 active key가 유실돼도 로그아웃 시 실제 Refresh Token 레코드를 찾을 수 있도록 DB에도 해시와 만료시각을 백업한다.
-         * 평문 토큰은 DB에 저장하지 않는다.
-         */
-        lockedAdmin.issueRefreshToken(
-                TokenHasher.sha256(rawRefreshToken),
-                LocalDateTime.now(clock).plus(refreshTtl));
+        try {
+            refreshTokenRepository.save(
+                    rawRefreshToken,
+                    dbState.adminId(),
+                    role,
+                    TokenType.ADMIN,
+                    false,
+                    refreshTtl);
+        } catch (DataAccessException e) {
+            compensateFailedRefreshTokenSave(dbState.adminId(), role, refreshTokenHash);
+            throw e;
+        }
 
         AdminLoginResponse response = new AdminLoginResponse(
                 jwtTokenProvider.getAccessTokenValidityMs() / 1000,
                 new AdminLoginResponse.AdminSummary(
-                        lockedAdmin.getLoginId(), lockedAdmin.getName(), lockedAdmin.getRole()));
+                        dbState.loginId(), dbState.name(), dbState.role()));
 
         log.info("event=ADMIN_LOGIN success=true adminId={} loginId={}",
-                lockedAdmin.getId(), maskLoginId(lockedAdmin.getLoginId()));
+                dbState.adminId(), maskLoginId(dbState.loginId()));
 
         // 두 토큰 원문은 응답 본문이 아니라 컨트롤러가 만드는 HttpOnly 쿠키로만 나간다
         return new AdminLoginResult(response, accessToken, rawRefreshToken, refreshTokenValiditySeconds);
+    }
+
+    /*
+     * Redis save()는 기본 레코드와 active key를 두 번의 명령으로 저장하므로 중간 실패가 가능하다.
+     * 실패하면 이번 로그인 해시만 Redis에서 조건부 제거하고 DB 백업도 같은 해시일 때만 지운다.
+     * 보상 자체가 실패한 저장소는 기존 로그아웃 실패 아웃박스에 남겨 지연 재시도로 이어간다.
+     */
+    private void compensateFailedRefreshTokenSave(Long adminId, String role, String refreshTokenHash) {
+        boolean redisFailed = false;
+        boolean dbFailed = false;
+
+        try {
+            refreshTokenRepository.revokeIfActiveHashMatches(refreshTokenHash, role, adminId);
+        } catch (DataAccessException cleanupFailure) {
+            redisFailed = true;
+            log.warn("event=ADMIN_LOGIN_REDIS_COMPENSATION_FAILED "
+                            + LOG_FIELDS_ROLE_ADMIN_ID + LOG_FIELD_ERROR_TYPE,
+                    role, adminId, SafeExceptionLog.errorType(cleanupFailure));
+        }
+
+        try {
+            adminLoginTransactionService.clearRefreshTokenIfMatches(adminId, refreshTokenHash);
+        } catch (DataAccessException cleanupFailure) {
+            dbFailed = true;
+            log.warn("event=ADMIN_LOGIN_DB_COMPENSATION_FAILED adminId={} errorType={}",
+                    adminId, SafeExceptionLog.errorType(cleanupFailure));
+        }
+
+        if (redisFailed || dbFailed) {
+            adminLogoutFailureService.recordFailure(
+                    adminId, refreshTokenHash, redisFailed, dbFailed);
+        }
     }
 
     /*
@@ -236,8 +274,9 @@ public class AdminAuthService {
         try {
             adminLogoutTransactionService.recordSuccess(adminId);
         } catch (DataAccessException e) {
-            log.warn("event=ADMIN_LOGOUT_AUDIT_LOG_FAILED adminId={} errorType={} — durable outbox에 기록",
-                    adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
+            log.warn(
+                    "event=ADMIN_LOGOUT_AUDIT_LOG_FAILED adminId={} errorType={} — durable outbox에 기록",
+                    adminId, SafeExceptionLog.errorType(e));
             // 이 기록까지 실패하면 예외를 숨기지 않는다. 감사 행위가 DB와 outbox 양쪽에서
             // 모두 유실된 상태로 204를 반환하는 것을 막기 위해 호출자에게 실패를 드러낸다.
             adminAuditFailureService.recordFailure(
@@ -255,9 +294,11 @@ public class AdminAuthService {
         try {
             return refreshTokenRepository.findActiveHash(role, adminId).orElse(null);
         } catch (DataAccessException e) {
-            log.warn("event=ADMIN_LOGOUT_ACTIVE_REFRESH_TOKEN_LOOKUP_FAILED "
-                            + LOG_FIELDS_ROLE_ADMIN_ID + LOG_FIELD_ERROR_TYPE,
-                    role, adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
+            log.warn(
+                    "event=ADMIN_LOGOUT_ACTIVE_REFRESH_TOKEN_LOOKUP_FAILED " + LOG_FIELDS_ROLE_ADMIN_ID + LOG_FIELD_ERROR_TYPE,
+                    role,
+                    adminId,
+                    SafeExceptionLog.errorType(e));
             return null;
         }
     }
@@ -290,8 +331,7 @@ public class AdminAuthService {
                         role,
                         adminId,
                         attempt,
-                        SafeExceptionLog.errorType(e),
-                        SafeExceptionLog.stackTrace(e));
+                        SafeExceptionLog.errorType(e));
 
                 // timeout/연결 단절은 명령이 Redis에 반영된 뒤 응답만 잃었을 수도 있으므로 먼저 확인한다.
                 if (isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
@@ -341,8 +381,7 @@ public class AdminAuthService {
                             + LOG_FIELD_ERROR_TYPE,
                     role,
                     adminId,
-                    SafeExceptionLog.errorType(e),
-                    SafeExceptionLog.stackTrace(e));
+                    SafeExceptionLog.errorType(e));
 
             return false;
         }
@@ -360,8 +399,7 @@ public class AdminAuthService {
                         + LOG_FIELD_ERROR_TYPE,
                 role,
                 adminId,
-                SafeExceptionLog.errorType(cause),
-                SafeExceptionLog.stackTrace(cause));
+                SafeExceptionLog.errorType(cause));
 
         // DataAccessException을 cause로 연결하면 GlobalExceptionHandler가 BusinessException의
         // 전체 스택을 남길 때 공급자 SQL/상세 메시지가 함께 기록될 수 있으므로 외부 도메인 예외에는 싣지 않는다.
