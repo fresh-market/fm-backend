@@ -148,7 +148,7 @@ GET /v1/admin/statistics/orders?from=&to=&categoryId=
 ## 캠페인 대상 상품 조회
 
 ```
-GET /v1/admin/statistics/campaign-candidates?withinDays=10&bottomRatio=0.2&minStock=30&limit=3
+GET /v1/admin/statistics/campaign-candidates?withinDays=10&bottomRatio=0.1&minStock=30
 ```
 
 선착순 쿠폰 캠페인의 대상 상품과 **발급 가능 수량**을 함께 돌려준다.
@@ -156,9 +156,12 @@ GET /v1/admin/statistics/campaign-candidates?withinDays=10&bottomRatio=0.2&minSt
 | 파라미터 | 기본 | 설명 |
 |---|---|---|
 | `withinDays` | 10 | 소비기한 잔여 일수 |
-| `bottomRatio` | 0.2 | 소진율 하위 비율 |
+| `bottomRatio` | 0.1 | 소진율 하위 비율 |
 | `minStock` | 30 | 최소 잔여 재고 |
-| `limit` | 3 | 소진율 오름차순 상위 건수 |
+
+**건수 상한(`limit`)은 없다.** 대상은 조건을 만족하는 하위 `bottomRatio` **전체**이므로,
+후보가 늘면 대상 건수도 함께 는다. 비율 기준이라 후보가 적으면 대상도 함께 줄어든다
+(후보 15건이면 대상은 2건이다).
 
 ```json
 {
@@ -188,14 +191,29 @@ GET /v1/admin/statistics/campaign-candidates?withinDays=10&bottomRatio=0.2&minSt
 
 ## 쿠폰 캠페인과의 연결
 
-소진율과 소비기한이 **선착순 쿠폰 캠페인의 대상 선정 기준**이다.
+소진율과 소비기한이 **선착순 쿠폰 캠페인의 대상 선정 기준**이다. 소비기한이 `N` 이면:
 
 ```
-소비기한 임박 (기본 10일 이내)  +  소진율 저조
-        |
-        v
-쿠폰 대상 옵션으로 등록
+N-13 ─────────── N-10 ─────────── N
+ 임박 시작        판매 마감         소비기한
+      └─ 대상 구간 ─┘
+              +
+        소진율 하위 10%
+              |
+              v
+   자정 배치가 campaign_target_lot 에 확정
+              |
+       ┌──────┴──────┐
+       v             v
+   관리자 조회      회원 조회
+                (product.md)
 ```
 
-같은 기준을 [product.md](./product.md) 의 소비기한 임박 상품 조회가 쓴다.
-**두 곳이 다른 기준을 쓰면 캠페인 대상과 노출 상품이 어긋난다.**
+**판매 마감 기한(N-10)이 구간의 하한이다.** 그보다 소비기한이 가까운 로트는 이미 팔 수 없어
+쿠폰을 붙여도 쓸 수가 없다.
+
+**소진율에서 폐기 수량은 뺀다.** 폐기는 `available_qty` 를 줄이지만 팔린 것이 아니라,
+그대로 두면 일부만 폐기된 로트가 잘 팔린 것처럼 보여 대상에서 빠진다.
+
+관리자 조회와 회원용 [소비기한 임박 상품 조회](./product.md)가 **같은 확정본을 읽는다.**
+각자 계산하지 않으므로 두 곳의 기준이 어긋날 수 없다.
