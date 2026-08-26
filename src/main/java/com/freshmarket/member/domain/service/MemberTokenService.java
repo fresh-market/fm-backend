@@ -71,7 +71,9 @@ public class MemberTokenService {
     public record ReissueResult(String accessToken, long expiresInSeconds, String refreshToken, boolean remember) {
     }
 
-    /** 카카오 로그인 성공 시 토큰 발급. accessToken/refreshToken 둘 다 쿠키로 나가고, accessToken은
+    /** 카카오 로그인 성공 시 토큰 발급. accessToken은 항상 쿠키로 나간다. refreshToken은 DB 백업과
+     * Redis 저장이 둘 다 실패했을 때만 쿠키를 생략한다(AT-only 폴백, FUN-2-02) — 그 상태로 내려봐야
+     * 재발급이 안 되는 죽은 값이라, 로그인 자체를 실패로 만들 이유가 없다. accessToken은
      * 호출부(컨트롤러)가 만료 시각 등 안내용으로 쓸 수 있게 반환값에도 담는다. */
     @Transactional
     public IssueResult issue(Member member, boolean rememberMe, HttpServletResponse response) {
@@ -93,16 +95,16 @@ public class MemberTokenService {
         // (2026-08-25) DB 백업 저장과 Redis 저장은 서로의 결과를 모른 채 각자 로그를 남긴다 —
         // 둘 다 실패했을 때만 여기서 따로 알린다. 위 두 로그는 "반대쪽은 됐다"고 주장하지
         // 않으니 각자는 정확하지만, "둘 다 안 됐다"는 조합 자체는 둘 중 하나만 봐서는 안 드러난다.
-        // error는 아니다 — 방금 쿠키로 내려준 refreshToken이 DB/Redis 어디에도 안 남아 재발급만
-        // 안 될 뿐(fail-closed), 권한이 위험하게 남는 상태가 아니라 사용자는 accessToken 만료
-        // 시점에 재로그인하면 정상화된다. 다만 두 저장소가 동시에 실패하는 빈도는 인프라 신호일
-        // 수 있어 이름은 따로 둔다.
-        if (!dbBackupSaved && !redisSaved) {
+        boolean persistBothFailed = !dbBackupSaved && !redisSaved;
+        if (persistBothFailed) {
+            // 기존에는 RefreshToken Redis저장과 DB백업을 둘다 실패해도 Cookie에 발급해줬지만, 이후에 해당 토큰은 어디에도 없기에
+            // 조회할 수 없는 죽은 토큰이다. 따라서 RT발급 자체를 하지 않는다.
             log.warn("event=REFRESH_TOKEN_ISSUE_PERSIST_BOTH_FAILED memberId={} role={} — 방금 발급한 "
-                    + "refreshToken이 DB/Redis 어디에도 없음(재발급 불가, 다음 재로그인 때 정상화됨)", memberId, role);
+                    + "refreshToken이 DB/Redis 어디에도 없어 쿠키를 생략한다(AT-only, 재로그인 전까지 재발급 불가)",
+                    memberId, role);
+        } else {
+            response.addHeader(HttpHeaders.SET_COOKIE, authCookieFactory.refreshTokenCookie(refreshToken, rememberMe).toString());
         }
-
-        response.addHeader(HttpHeaders.SET_COOKIE, authCookieFactory.refreshTokenCookie(refreshToken, rememberMe).toString());
         // (2026-08-18 16:20) accessToken도 다시 쿠키로 내려준다(요청에 따라 헤더 방식에서 되돌림).
         response.addHeader(HttpHeaders.SET_COOKIE, authCookieFactory.accessTokenCookie(accessToken).toString());
 
