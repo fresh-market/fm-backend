@@ -5,19 +5,14 @@ import static com.freshmarket.stock.domain.ExpiringSoonPolicy.DEFAULT_PAGE_SIZE;
 import com.freshmarket.common.response.CursorPageResponse;
 import com.freshmarket.common.response.PageCursor;
 import com.freshmarket.common.response.PageTokens;
-import com.freshmarket.product.ProductApi;
 import com.freshmarket.product.ProductOptionInfo;
 import com.freshmarket.stock.domain.dto.ExpiringSoonResponse;
 import com.freshmarket.stock.domain.entity.CampaignTargetLot;
-import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.repository.CampaignTargetLotRepository;
-import com.freshmarket.stock.domain.repository.StockLotRepository;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -48,8 +43,7 @@ public class ExpiringSoonService {
     private static final int FETCH_MULTIPLIER = 2;
 
     private final CampaignTargetLotRepository campaignTargetLotRepository;
-    private final StockLotRepository stockLotRepository;
-    private final ProductApi productApi;
+    private final CampaignTargetLotProductInfoService campaignTargetLotProductInfoService;
     private final Clock clock;
 
     public CursorPageResponse<ExpiringSoonResponse> getExpiringSoonProducts(
@@ -73,7 +67,7 @@ public class ExpiringSoonService {
             return CursorPageResponse.of(List.of(), null);
         }
 
-        Map<Long, ProductOptionInfo> infoByStockLotId = findProductInfoByStockLotId(batch);
+        Map<Long, ProductOptionInfo> infoByStockLotId = campaignTargetLotProductInfoService.findByStockLotId(batch);
 
         List<Map.Entry<CampaignTargetLot, ProductOptionInfo>> filtered = batch.stream()
                 .filter(lot -> infoByStockLotId.containsKey(lot.getStockLotId()))
@@ -100,27 +94,4 @@ public class ExpiringSoonService {
         return CursorPageResponse.of(items, nextToken);
     }
 
-    /*
-     * 대상 로트마다 상품 정보를 붙인다. CampaignTargetLot 은 stockLotId 만 갖고 있어
-     * StockLot 을 한 번 더 조회해 productOptionId 를 얻고, 그것으로 ProductApi 를 부른다.
-     * 두 단계 모두 IN 조회 한 번씩이라 대상 수와 무관하게 쿼리는 두 번이다.
-     */
-    private Map<Long, ProductOptionInfo> findProductInfoByStockLotId(List<CampaignTargetLot> targetLots) {
-        List<Long> stockLotIds = targetLots.stream()
-                .map(CampaignTargetLot::getStockLotId)
-                .toList();
-        List<StockLot> stockLots = stockLotRepository.findAllById(stockLotIds);
-
-        List<Long> productOptionIds = stockLots.stream()
-                .map(StockLot::getProductOptionId)
-                .distinct()
-                .toList();
-        Map<Long, ProductOptionInfo> infoByOptionId = productApi.findOptionInfos(productOptionIds).stream()
-                .collect(Collectors.toMap(ProductOptionInfo::productOptionId, Function.identity()));
-
-        return stockLots.stream()
-                .filter(lot -> infoByOptionId.containsKey(lot.getProductOptionId()))
-                .collect(Collectors.toMap(
-                        StockLot::getId, lot -> infoByOptionId.get(lot.getProductOptionId())));
-    }
 }

@@ -2,20 +2,15 @@ package com.freshmarket.stock.domain.service;
 
 import com.freshmarket.common.response.PageCursor;
 import com.freshmarket.common.response.PageTokens;
-import com.freshmarket.product.ProductApi;
 import com.freshmarket.product.ProductOptionInfo;
 import com.freshmarket.stock.domain.dto.AdminCampaignTargetLotListResponse;
 import com.freshmarket.stock.domain.dto.AdminCampaignTargetLotResponse;
 import com.freshmarket.stock.domain.entity.CampaignTargetLot;
-import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.repository.CampaignTargetLotRepository;
-import com.freshmarket.stock.domain.repository.StockLotRepository;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
@@ -44,15 +39,13 @@ public class AdminCampaignTargetLotService {
     private static final int MAX_PAGE_SIZE = 100;
 
     private final CampaignTargetLotRepository campaignTargetLotRepository;
-    private final StockLotRepository stockLotRepository;
-    private final ProductApi productApi;
+    private final CampaignTargetLotProductInfoService campaignTargetLotProductInfoService;
     private final Clock clock;
 
     public AdminCampaignTargetLotService(CampaignTargetLotRepository campaignTargetLotRepository,
-            StockLotRepository stockLotRepository, ProductApi productApi, Clock clock) {
+            CampaignTargetLotProductInfoService campaignTargetLotProductInfoService, Clock clock) {
         this.campaignTargetLotRepository = campaignTargetLotRepository;
-        this.stockLotRepository = stockLotRepository;
-        this.productApi = productApi;
+        this.campaignTargetLotProductInfoService = campaignTargetLotProductInfoService;
         this.clock = clock;
     }
 
@@ -80,7 +73,7 @@ public class AdminCampaignTargetLotService {
             return new AdminCampaignTargetLotListResponse(today, List.of(), null);
         }
 
-        Map<Long, ProductOptionInfo> infoByStockLotId = findProductInfoByStockLotId(page);
+        Map<Long, ProductOptionInfo> infoByStockLotId = campaignTargetLotProductInfoService.findByStockLotId(page);
 
         List<AdminCampaignTargetLotResponse> targets = page.stream()
                 .filter(lot -> infoByStockLotId.containsKey(lot.getStockLotId()))
@@ -105,23 +98,4 @@ public class AdminCampaignTargetLotService {
         return PageTokens.encode(new PageCursor((long) page.get(page.size() - 1).getTargetRank(), null));
     }
 
-    // 대상 로트마다 상품 정보를 붙인다. 각 단계가 IN 조회 한 번이라 대상 수와 무관하게 쿼리 수가 일정하다
-    private Map<Long, ProductOptionInfo> findProductInfoByStockLotId(List<CampaignTargetLot> targetLots) {
-        List<Long> stockLotIds = targetLots.stream()
-                .map(CampaignTargetLot::getStockLotId)
-                .toList();
-        List<StockLot> stockLots = stockLotRepository.findAllById(stockLotIds);
-
-        List<Long> productOptionIds = stockLots.stream()
-                .map(StockLot::getProductOptionId)
-                .distinct()
-                .toList();
-        Map<Long, ProductOptionInfo> infoByOptionId = productApi.findOptionInfos(productOptionIds).stream()
-                .collect(Collectors.toMap(ProductOptionInfo::productOptionId, Function.identity()));
-
-        return stockLots.stream()
-                .filter(lot -> infoByOptionId.containsKey(lot.getProductOptionId()))
-                .collect(Collectors.toMap(
-                        StockLot::getId, lot -> infoByOptionId.get(lot.getProductOptionId())));
-    }
 }
