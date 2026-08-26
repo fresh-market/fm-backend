@@ -13,7 +13,10 @@ CREATE TABLE admin_logout_failure (
                                       created_at               DATETIME(6) NOT NULL, -- 생성 시각(애플리케이션에서 생성)
                                       updated_at               DATETIME(6) NOT NULL, -- 수정 시각(애플리케이션에서 생성)
                                       PRIMARY KEY (admin_logout_failure_id),
-    -- 관리자당 미해결 실패는 하나만 추적한다. 같은 관리자가 다시 실패하면 새 행 대신 기존 행을 재오픈한다
-                                      UNIQUE KEY uk_admin_logout_failure_admin (admin_id),
+    -- 같은 관리자라도 서로 다른 Refresh Token의 실패는 별도 행으로 보존한다.
+    -- 동일 (admin_id, refresh_token_hash) 실패만 upsert 대상으로 합쳐 이전 RT 정리 작업이
+    -- 재로그인 뒤 새 RT 실패에 덮어써지지 않게 한다. MySQL UNIQUE는 NULL끼리는 중복으로 보지 않으므로
+    -- 실패 당시 해시를 알 수 없는 건은 서로 합치지 않고 각각 보존한다.
+                                      UNIQUE KEY uk_admin_logout_failure_admin_hash (admin_id, refresh_token_hash),
                                       CONSTRAINT fk_admin_logout_failure_admin FOREIGN KEY (admin_id) REFERENCES admin (admin_id)
 ); -- 관리자 로그아웃 Refresh Token 정리 실패 아웃박스
