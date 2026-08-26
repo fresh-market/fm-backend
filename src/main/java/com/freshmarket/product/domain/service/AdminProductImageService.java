@@ -190,6 +190,10 @@ public class AdminProductImageService {
      * 지우면 뒤이은 행 삭제가 실패해도 사용자가 다시 지워서 해소된다. DeleteObject는 없는 객체에도
      * 성공하므로(멱등) 이 순서에서 재시도가 안전하다.
      *
+     * (API-3-07) 이미 지워진(또는 존재한 적 없는) imageId로 다시 호출해도 오류로 보지 않는다 —
+     * 목표 상태(행 없음)에 이미 도달했으므로 그대로 정상 종료한다. 조용히 무시하지 않고 404를
+     * 던지면, 같은 삭제를 재시도하는 클라이언트가 "실패"로 오해해 불필요한 재시도·오류 처리를 하게 된다.
+     *
      * (DI-4-02) S3 삭제는 트랜잭션 밖에서 끝낸다. DB 행 삭제는 deleteByIdAndProductId()의 원자적
      * DELETE 하나로만 하고, 조회에는 더는 쓰기 락을 걸지 않는다 — DeleteObject·DELETE 둘 다 멱등이라
      * 그 사이 다른 요청이 먼저 지웠어도(영향받은 행 0) 목표 상태(행 없음)에 이미 도달한 것이라
@@ -198,8 +202,11 @@ public class AdminProductImageService {
      * 판단했다 — 그 순서가 사용자 관점에서 문제가 된다면 별도로 다뤄야 한다.
      */
     public void delete(Long productId, Long imageId) {
-        ProductImage image = productImageRepository.findByIdAndProductId(imageId, productId)
-                .orElseThrow(() -> new ProductException(ProductErrorCode.IMAGE_NOT_FOUND));
+        Optional<ProductImage> maybeImage = productImageRepository.findByIdAndProductId(imageId, productId);
+        if (maybeImage.isEmpty()) {
+            return;
+        }
+        ProductImage image = maybeImage.get();
         try {
             imageStorageClient.deleteObjectOrThrow(image.getObjectKey());
         } catch (SdkException e) {

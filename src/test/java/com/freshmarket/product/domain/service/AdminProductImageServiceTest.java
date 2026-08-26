@@ -437,14 +437,13 @@ class AdminProductImageServiceTest {
     }
 
     @Test
-    void 없는_이미지를_삭제하면_실패한다() {
-        // given
+    void 없는_이미지를_삭제해도_성공한다() {
+        // given — (API-3-07) 이미 지워졌거나 존재한 적 없는 imageId. 목표 상태(행 없음)에 이미
+        // 도달했으므로 오류가 아니다
         when(productImageRepository.findByIdAndProductId(88L, 1L)).thenReturn(Optional.empty());
 
-        // when, then
-        assertThatThrownBy(() -> adminProductImageService.delete(1L, 88L))
-                .isInstanceOf(ProductException.class)
-                .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_NOT_FOUND);
+        // when, then — 예외 없이 끝난다
+        adminProductImageService.delete(1L, 88L);
         verify(productImageRepository, never()).deleteByIdAndProductId(any(), any());
         verify(imageStorageClient, never()).deleteObjectOrThrow(any());
     }
