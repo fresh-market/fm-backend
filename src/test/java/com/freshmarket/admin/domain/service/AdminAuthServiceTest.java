@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -35,10 +34,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.CannotCreateTransactionException;
 
 /*
- * AdminRepository 만 mock 이다 (들어오는 데이터를 제공하는 의존성, UT-4-01).
- * PasswordEncoder 와 JwtTokenProvider 는 순수 로직이라 실제 구현을 그대로 쓴다.
+ * Repository와 DB 트랜잭션 경계는 mock으로 격리한다.
+ * PasswordEncoder와 JwtTokenProvider는 순수 로직이므로 실제 구현을 사용한다.
  * mock 으로 대체하면 "비밀번호가 실제로 검증되는가", "토큰이 실제로 만들어지는가" 를
  * 이 테스트가 더 이상 보장하지 못한다 (UT-1-01 회귀 방어).
  */
@@ -56,6 +56,7 @@ class AdminAuthServiceTest {
     private final JwtTokenProvider jwtTokenProvider = new JwtTokenProvider(
             TEST_JWT_SECRET, ACCESS_TOKEN_VALIDITY_MS, MEMBER_REFRESH_TOKEN_VALIDITY_MS);
     private final RefreshTokenRepository refreshTokenRepository = mock(RefreshTokenRepository.class);
+    private final AdminLoginTransactionService adminLoginTransactionService = mock(AdminLoginTransactionService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-08-23T06:00:00Z"), ZoneId.of("Asia/Seoul"));
 
     private final AdminAuthService adminAuthService = new AdminAuthService(
@@ -63,6 +64,7 @@ class AdminAuthServiceTest {
             passwordEncoder,
             jwtTokenProvider,
             refreshTokenRepository,
+            adminLoginTransactionService,
             clock,
             ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS
     );
@@ -84,6 +86,7 @@ class AdminAuthServiceTest {
         );
 
         when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
+        stubDbBackupSuccess(admin);
 
         AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
@@ -110,8 +113,8 @@ class AdminAuthServiceTest {
                 false,
                 Duration.ofSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
 
-        // Redis가 죽어도 로그인이 막히지 않도록, DB에도 항상 해시/만료시각을 write-through로 남긴다.
-        verify(adminRepository).updateRefreshToken(
+        // Redis active key 유실 시 사용할 DB 백업은 짧은 별도 트랜잭션에서 기록한다.
+        verify(adminLoginTransactionService).issueRefreshToken(
                 eq(admin.getId()),
                 any(String.class),
                 eq(LocalDateTime.now(clock).plusSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS)));
@@ -122,9 +125,10 @@ class AdminAuthServiceTest {
         // given
         Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
         when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
+        stubDbBackupSuccess(admin);
         doThrow(new DataAccessResourceFailureException("redis down"))
                 .when(refreshTokenRepository)
-                .save(anyString(), anyLong(), anyString(), any(TokenType.class), anyBoolean(), any(Duration.class));
+                .save(anyString(), eq(admin.getId()), anyString(), any(TokenType.class), anyBoolean(), any(Duration.class));
 
         AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
@@ -135,8 +139,8 @@ class AdminAuthServiceTest {
         assertThat(result.accessToken()).isNotBlank();
         assertThat(result.refreshToken()).isNotBlank();
 
-        // DB 백업은 Redis 실패와 무관하게 먼저 반영된다.
-        verify(adminRepository).updateRefreshToken(
+        // DB 백업은 Redis 실패와 무관하게 남아 있으므로 로그인은 성공한다.
+        verify(adminLoginTransactionService).issueRefreshToken(
                 eq(admin.getId()),
                 any(String.class),
                 eq(LocalDateTime.now(clock).plusSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS)));
@@ -148,8 +152,8 @@ class AdminAuthServiceTest {
         Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
         when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
         doThrow(new DataAccessResourceFailureException("db down"))
-                .when(adminRepository)
-                .updateRefreshToken(anyLong(), anyString(), any(LocalDateTime.class));
+                .when(adminLoginTransactionService)
+                .issueRefreshToken(eq(admin.getId()), anyString(), any(LocalDateTime.class));
 
         AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
@@ -171,18 +175,20 @@ class AdminAuthServiceTest {
     }
 
     @Test
-    void DB_백업_대상_행을_못_찾아도_로그인은_성공한다() {
-        // given: updateRefreshToken이 0건 반영(대상 행 없음)을 반환하는 경쟁 상황을 흉내낸다.
+    void DB와_Redis_저장이_모두_실패하면_로그인도_실패한다() {
         Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
         when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
-        when(adminRepository.updateRefreshToken(anyLong(), anyString(), any(LocalDateTime.class)))
-                .thenReturn(0);
+        doThrow(new DataAccessResourceFailureException("db down"))
+                .when(adminLoginTransactionService)
+                .issueRefreshToken(eq(admin.getId()), anyString(), any(LocalDateTime.class));
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository)
+                .save(anyString(), eq(admin.getId()), anyString(), any(TokenType.class), anyBoolean(), any(Duration.class));
 
         AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
-        // when, then
-        AdminLoginResult result = adminAuthService.login(request);
-        assertThat(result.accessToken()).isNotBlank();
+        assertThatThrownBy(() -> adminAuthService.login(request))
+                .isInstanceOf(DataAccessResourceFailureException.class);
     }
 
     @Test
@@ -213,6 +219,7 @@ class AdminAuthServiceTest {
 
         when(adminRepository.findByLoginId("admin.kim"))
                 .thenReturn(Optional.of(admin));
+        stubDbBackupSuccess(admin);
 
         AdminLoginRequest request =
                 new AdminLoginRequest("admin.kim", "wrong-password");
@@ -239,6 +246,7 @@ class AdminAuthServiceTest {
 
         when(adminRepository.findByLoginId("admin.kim"))
                 .thenReturn(Optional.of(admin));
+        stubDbBackupSuccess(admin);
 
         AdminLoginRequest request =
                 new AdminLoginRequest("admin.kim", RAW_PASSWORD);
@@ -262,6 +270,7 @@ class AdminAuthServiceTest {
 
         when(adminRepository.findByLoginId("admin.kim"))
                 .thenReturn(Optional.of(admin));
+        stubDbBackupSuccess(admin);
 
         AdminLoginRequest request =
                 new AdminLoginRequest("admin.kim", "wrong-password");
@@ -278,6 +287,7 @@ class AdminAuthServiceTest {
         // given
         Admin admin = AdminFixture.active("admin.kim", passwordEncoder.encode(RAW_PASSWORD), AdminRole.ADMIN);
         when(adminRepository.findByLoginId("admin.kim")).thenReturn(Optional.of(admin));
+        stubDbBackupSuccess(admin);
         AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
         // when
@@ -285,5 +295,50 @@ class AdminAuthServiceTest {
 
         // then
         assertThat(jwtTokenProvider.getRole(result.accessToken())).isEqualTo("ROLE_ADMIN");
+    }
+
+    @Test
+    void DB_트랜잭션_시작이_실패해도_Redis가_성공하면_로그인은_성공한다() {
+        // given
+        Admin admin = AdminFixture.active(
+                "admin.kim",
+                passwordEncoder.encode(RAW_PASSWORD),
+                AdminRole.ADMIN);
+
+        when(adminRepository.findByLoginId("admin.kim"))
+                .thenReturn(Optional.of(admin));
+
+        doThrow(new CannotCreateTransactionException("db down"))
+                .when(adminLoginTransactionService)
+                .issueRefreshToken(
+                        eq(admin.getId()),
+                        anyString(),
+                        any(LocalDateTime.class));
+
+        AdminLoginRequest request =
+                new AdminLoginRequest("admin.kim", RAW_PASSWORD);
+
+        // when
+        AdminLoginResult result = adminAuthService.login(request);
+
+        // then
+        assertThat(result.accessToken()).isNotBlank();
+        assertThat(result.refreshToken()).isNotBlank();
+
+        // DB 트랜잭션은 실패했지만 Redis 저장은 계속 시도되어야 한다.
+        verify(refreshTokenRepository).save(
+                result.refreshToken(),
+                admin.getId(),
+                "ROLE_ADMIN",
+                TokenType.ADMIN,
+                false,
+                Duration.ofSeconds(ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS));
+    }
+
+    private void stubDbBackupSuccess(Admin admin) {
+        when(adminLoginTransactionService.issueRefreshToken(
+                eq(admin.getId()), anyString(), any(LocalDateTime.class)))
+                .thenReturn(new AdminLoginTransactionService.LoginDbState(
+                        admin.getId(), admin.getLoginId(), admin.getName(), admin.getRole()));
     }
 }

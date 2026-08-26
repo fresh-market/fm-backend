@@ -25,7 +25,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.TransactionException;
 
 /*
  * 관리자 로그인만 다룬다. 로그아웃, 토큰 재발급, 비밀번호 변경은 별도 PR 이다 (auth.md 참고).
@@ -37,13 +37,11 @@ import org.springframework.transaction.annotation.Transactional;
  * 리프레시 토큰은 member와 같은 공통 RefreshTokenRepository(Redis)에 저장한다.
  * 로그인은 최초 발급만 담당하고, Rotation은 별도 재발급 API에서 compareAndRotate()로 처리한다.
  *
- * Redis 완전 장애 시에도 로그인이 막히지 않도록, Refresh Token은 DB에 먼저 write-through로 백업한 뒤 Redis 저장을 시도한다.
- * DB 백업은 @Modifying UPDATE(AdminRepository.updateRefreshToken())라서 활성 트랜잭션이 없으면
- * InvalidDataAccessApiUsageException("Executing an update/delete query")이 난다 — 그래서 login() 전체를 @Transactional로 감싼다.
- * MemberTokenService.issue()도 같은 이유로 Redis 호출을 포함해 메서드 전체가
- * @Transactional이다(트랜잭션 안에서 외부 I/O를 하는 대가보다, DB 백업 자체가 항상 저장되는 게 우선이라는 판단).
- * Redis가 응답 없이 계속 걸려 있는 최악의 경우까지 커넥션을 붙잡고 있지 않도록 timeout = 5를 둔다
- * (feat/admin-logout 브랜치의 login()과 동일한 값 — 병합 시 구조를 맞추기 위함이기도 하다).
+ * Refresh Token은 DB와 Redis 두 저장소에 기록한다. DB 갱신은 AdminLoginTransactionService의 짧은
+ * 트랜잭션에서 처리하고 Redis I/O는 트랜잭션 밖에서 수행한다. Redis 장애 시 DB 백업이 있으면
+ * 로그인은 성공시키며, DB 장애 시에도 Redis 저장이 성공하면 로그인은 가능하다. 둘 다 저장하지
+ * 못한 경우에만 로그인 실패로 처리한다. 이 구조는 feat/admin-logout의 로그인 트랜잭션 분리 방식과
+ * 맞춰 두 브랜치 병합 시 충돌 범위를 줄인다.
  */
 @Slf4j
 @Service
@@ -56,6 +54,7 @@ public class AdminAuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final AdminLoginTransactionService adminLoginTransactionService;
     private final long refreshTokenValiditySeconds;
     private final Clock clock;
     private final String dummyPasswordHash;
@@ -65,19 +64,20 @@ public class AdminAuthService {
             PasswordEncoder passwordEncoder,
             JwtTokenProvider jwtTokenProvider,
             RefreshTokenRepository refreshTokenRepository,
+            AdminLoginTransactionService adminLoginTransactionService,
             Clock clock,
             @Value("${ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS:86400}") long refreshTokenValiditySeconds) {
         this.adminRepository = adminRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.adminLoginTransactionService = adminLoginTransactionService;
         this.clock = clock;
         this.refreshTokenValiditySeconds = refreshTokenValiditySeconds;
         // 같은 인코더로 미리 만들어 둬야 진짜 비밀번호 검증과 연산 비용(코스트 팩터)이 완전히 같다
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_SOURCE);
     }
 
-    @Transactional(timeout = 5)
     public AdminLoginResult login(AdminLoginRequest request) {
         Objects.requireNonNull(request, "request");
 
@@ -109,19 +109,68 @@ public class AdminAuthService {
             throw new AdminException(AdminErrorCode.LOGIN_FAILED);
         }
 
-        String accessToken = jwtTokenProvider.createAccessToken(
-                admin.getId(), TokenType.ADMIN, admin.getRole().toAuthority());
-
+        /*
+         * Refresh Token 원문은 한 번만 만들고, 같은 해시를 DB 백업과 Redis에 사용한다.
+         * DB 갱신은 별도 짧은 트랜잭션에서 먼저 시도한다. Redis가 장애여도 DB에 이 해시가
+         * 남아 있으면 이후 재발급/로그아웃이 DB fallback으로 세션을 식별할 수 있다.
+         */
         String rawRefreshToken = OpaqueTokenGenerator.generate();
-        issueRefreshToken(admin, rawRefreshToken, Duration.ofSeconds(refreshTokenValiditySeconds));
+        String refreshTokenHash = TokenHasher.sha256(rawRefreshToken);
+        Duration refreshTtl = Duration.ofSeconds(refreshTokenValiditySeconds);
+        LocalDateTime refreshTokenExpiresAt = LocalDateTime.now(clock).plus(refreshTtl);
+
+        AdminLoginTransactionService.LoginDbState dbState = null;
+        boolean dbSaved = false;
+        try {
+            dbState = adminLoginTransactionService.issueRefreshToken(
+                    admin.getId(),
+                    refreshTokenHash,
+                    refreshTokenExpiresAt);
+            dbSaved = true;
+        } catch (DataAccessException | TransactionException e) {
+            log.warn(
+                    "event=ADMIN_LOGIN_DB_BACKUP_SAVE_FAILED adminId={} — Redis 저장으로 계속 진행",
+                    admin.getId(),
+                    e);
+        }
+
+        Long adminId = dbSaved ? dbState.adminId() : admin.getId();
+        String loginId = dbSaved ? dbState.loginId() : admin.getLoginId();
+        String name = dbSaved ? dbState.name() : admin.getName();
+        var roleValue = dbSaved ? dbState.role() : admin.getRole();
+        String role = roleValue.toAuthority();
+
+        String accessToken = jwtTokenProvider.createAccessToken(
+                adminId, TokenType.ADMIN, role);
+
+        try {
+            refreshTokenRepository.save(
+                    rawRefreshToken,
+                    adminId,
+                    role,
+                    TokenType.ADMIN,
+                    false,
+                    refreshTtl);
+        } catch (DataAccessException e) {
+            if (!dbSaved) {
+                // 어느 저장소에도 RT 상태를 남기지 못했다면 발급한 RT는 곧바로 쓸 수 없으므로 로그인 실패가 맞다.
+                log.error("event=ADMIN_LOGIN_REFRESH_TOKEN_SAVE_FAILED adminId={} — DB와 Redis 모두 저장 실패",
+                        adminId, e);
+                throw e;
+            }
+
+            // 핵심 fallback: Redis가 죽어 있어도 DB 백업이 있으므로 로그인 자체는 성공시킨다.
+            log.warn("event=ADMIN_LOGIN_REDIS_SAVE_FAILED adminId={} — DB fallback으로 로그인 유지",
+                    adminId, e);
+        }
 
         AdminLoginResponse response = new AdminLoginResponse(
                 jwtTokenProvider.getAccessTokenValidityMs() / 1000,
                 new AdminLoginResponse.AdminSummary(
-                        admin.getLoginId(), admin.getName(), admin.getRole()));
+                        loginId, name, roleValue));
 
         log.info("event=ADMIN_LOGIN success=true adminId={} loginId={}",
-                admin.getId(), maskLoginId(admin.getLoginId()));
+                adminId, maskLoginId(loginId));
 
         // 두 토큰 원문은 응답 본문이 아니라 컨트롤러가 만드는 HttpOnly 쿠키로만 나간다
         return new AdminLoginResult(response, accessToken, rawRefreshToken, refreshTokenValiditySeconds);
@@ -129,38 +178,4 @@ public class AdminAuthService {
 
     private String maskLoginId(String loginId) { return PiiMasker.maskGeneric(loginId, 2, 1); }
 
-    /*
-     * Refresh Token을 DB에 먼저 write-through로 백업한 뒤 Redis 저장을 시도한다.
-     * 순서가 이런 이유: Redis가 죽어 있어도 DB 백업만은 남겨야 재발급/로그아웃이 나중에
-     * 이 값을 근거로 계속 동작할 수 있다. 반대로 Redis부터 쓰면, DB 쓰기가 실패했을 때
-     * "Redis에는 있는데 DB 백업은 없는" 상태가 남아 오히려 백업의 의미가 없어진다.
-     * 두 저장 모두 실패해도 로그인 응답 자체는 막지 않는다 — 이미 발급된 accessToken/rawRefreshToken은
-     * 그대로 클라이언트에 내려가고, 저장 실패는 로그로만 남긴다(MemberTokenService.issue() 참고).
-     */
-    private void issueRefreshToken(Admin admin, String rawRefreshToken, Duration ttl) {
-        trySaveDbBackup(admin.getId(), TokenHasher.sha256(rawRefreshToken), LocalDateTime.now(clock).plus(ttl));
-
-        try {
-            refreshTokenRepository.save(
-                    rawRefreshToken,
-                    admin.getId(),
-                    admin.getRole().toAuthority(),
-                    TokenType.ADMIN,
-                    false,
-                    ttl);
-        } catch (DataAccessException e) {
-            log.warn("event=ADMIN_LOGIN_REDIS_SAVE_FAILED adminId={} — DB 백업만 반영됨", admin.getId(), e);
-        }
-    }
-
-    private void trySaveDbBackup(Long adminId, String tokenHash, LocalDateTime expiresAt) {
-        try {
-            int updated = adminRepository.updateRefreshToken(adminId, tokenHash, expiresAt);
-            if (updated == 0) {
-                log.warn("event=ADMIN_LOGIN_DB_BACKUP_SAVE_SKIPPED adminId={} — 대상 행을 찾지 못함", adminId);
-            }
-        } catch (DataAccessException e) {
-            log.warn("event=ADMIN_LOGIN_DB_BACKUP_SAVE_FAILED adminId={} — Redis만 반영됨(DB 백업 유실 가능)", adminId, e);
-        }
-    }
 }
