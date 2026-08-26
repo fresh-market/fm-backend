@@ -212,7 +212,7 @@ public class AdminAuthService {
             redisFailed = true;
             log.warn("event=ADMIN_LOGIN_REDIS_COMPENSATION_FAILED "
                             + LOG_FIELDS_ROLE_ADMIN_ID + LOG_FIELD_ERROR_TYPE,
-                    role, adminId, SafeExceptionLog.errorType(cleanupFailure));
+                    role, adminId, SafeExceptionLog.errorType(cleanupFailure), SafeExceptionLog.stackTrace(cleanupFailure));
         }
 
         try {
@@ -220,7 +220,7 @@ public class AdminAuthService {
         } catch (DataAccessException cleanupFailure) {
             dbFailed = true;
             log.warn("event=ADMIN_LOGIN_DB_COMPENSATION_FAILED adminId={} errorType={}",
-                    adminId, SafeExceptionLog.errorType(cleanupFailure));
+                    adminId, SafeExceptionLog.errorType(cleanupFailure), SafeExceptionLog.stackTrace(cleanupFailure));
         }
 
         if (redisFailed || dbFailed) {
@@ -276,7 +276,7 @@ public class AdminAuthService {
         } catch (DataAccessException e) {
             log.warn(
                     "event=ADMIN_LOGOUT_AUDIT_LOG_FAILED adminId={} errorType={} — durable outbox에 기록",
-                    adminId, SafeExceptionLog.errorType(e));
+                    adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
             // 이 기록까지 실패하면 예외를 숨기지 않는다. 감사 행위가 DB와 outbox 양쪽에서
             // 모두 유실된 상태로 204를 반환하는 것을 막기 위해 호출자에게 실패를 드러낸다.
             adminAuditFailureService.recordFailure(
@@ -298,7 +298,8 @@ public class AdminAuthService {
                     "event=ADMIN_LOGOUT_ACTIVE_REFRESH_TOKEN_LOOKUP_FAILED " + LOG_FIELDS_ROLE_ADMIN_ID + LOG_FIELD_ERROR_TYPE,
                     role,
                     adminId,
-                    SafeExceptionLog.errorType(e));
+                    SafeExceptionLog.errorType(e),
+                    SafeExceptionLog.stackTrace(e));
             return null;
         }
     }
@@ -331,7 +332,8 @@ public class AdminAuthService {
                         role,
                         adminId,
                         attempt,
-                        SafeExceptionLog.errorType(e));
+                        SafeExceptionLog.errorType(e),
+                        SafeExceptionLog.stackTrace(e));
 
                 // timeout/연결 단절은 명령이 Redis에 반영된 뒤 응답만 잃었을 수도 있으므로 먼저 확인한다.
                 if (isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
@@ -381,7 +383,8 @@ public class AdminAuthService {
                             + LOG_FIELD_ERROR_TYPE,
                     role,
                     adminId,
-                    SafeExceptionLog.errorType(e));
+                    SafeExceptionLog.errorType(e),
+                    SafeExceptionLog.stackTrace(e));
 
             return false;
         }
@@ -399,7 +402,8 @@ public class AdminAuthService {
                         + LOG_FIELD_ERROR_TYPE,
                 role,
                 adminId,
-                SafeExceptionLog.errorType(cause));
+                SafeExceptionLog.errorType(cause),
+                SafeExceptionLog.stackTrace(cause));
 
         // DataAccessException을 cause로 연결하면 GlobalExceptionHandler가 BusinessException의
         // 전체 스택을 남길 때 공급자 SQL/상세 메시지가 함께 기록될 수 있으므로 외부 도메인 예외에는 싣지 않는다.
