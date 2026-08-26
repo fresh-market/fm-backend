@@ -60,25 +60,33 @@ class AdminLogoutFailureServiceTest {
     // ---- recordFailure() ----
 
     @Test
-    void 처음_실패한_관리자면_새_행을_만든다() {
-        when(failureRepository.findByAdminId(1L)).thenReturn(Optional.empty());
-
+    void 실패기록은_admin_id_기준_원자적_upsert로_저장한다() {
         sut.recordFailure(1L, "hash", true, false);
 
-        verify(failureRepository).save(any(AdminLogoutFailure.class));
+        verify(failureRepository).upsertFailure(
+                1L, "hash", true, false, CLAIMED_AT);
+        verify(failureRepository, never()).save(any());
     }
 
     @Test
-    void 이미_행이_있으면_재오픈만_하고_새로_만들지_않는다() {
-        AdminLogoutFailure existing = newFailure(10L, 1L, null, false, true);
-        when(failureRepository.findByAdminId(1L)).thenReturn(Optional.of(existing));
+    void 같은_관리자의_연속_실패도_조회후_insert가_아닌_upsert로_처리한다() {
+        sut.recordFailure(1L, "first-hash", true, false);
+        sut.recordFailure(1L, "latest-hash", false, true);
 
-        sut.recordFailure(1L, "hash", true, true);
+        verify(failureRepository).upsertFailure(
+                1L, "first-hash", true, false, CLAIMED_AT);
+        verify(failureRepository).upsertFailure(
+                1L, "latest-hash", false, true, CLAIMED_AT);
+    }
 
-        verify(failureRepository, never()).save(any());
-        assertThat(existing.getRefreshTokenHash()).isEqualTo("hash");
-        assertThat(existing.isRedisFailed()).isTrue();
-        assertThat(existing.isDbFailed()).isTrue();
+    @Test
+    void 실패한_저장소가_하나도_없으면_실패기록을_만들지_않는다() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> sut.recordFailure(1L, "hash", false, false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("redisFailed 또는 dbFailed 중 하나는 true여야 한다");
+
+        verify(failureRepository, never()).upsertFailure(any(), any(), anyBoolean(), anyBoolean(), any());
     }
 
     // ---- retryAllPending() ----

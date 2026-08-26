@@ -39,16 +39,23 @@ public class AdminLogoutFailureService {
     private final Clock clock;
 
     /*
-     * 같은 관리자에 대해 미해결 행이 있으면 재오픈하고, 없으면 새로 만든다. admin_id에 UNIQUE
-     * 제약이 있어(이미 해결된 행 포함) 같은 관리자에게 새 행을 또 만들 수 없으므로, 이미 해결된
-     * 행이 있어도 findByAdminId로 찾아 재오픈한다.
+     * 같은 admin의 실패 기록이 동시에 생성되는 경우를 DB의 원자적 upsert로 처리한다.
+     * 기존의 "조회 -> 없으면 INSERT" 방식은 두 요청이 동시에 없음을 확인한 뒤 둘 다 INSERT해
+     * UNIQUE(admin_id) 충돌이 날 수 있다. upsertFailure()는 생성과 재오픈을 한 SQL에서 처리하므로
+     * 그 경쟁 구간이 없고, 이미 해결된 행도 같은 행을 안전하게 재오픈한다.
      */
     @Transactional
     void recordFailure(Long adminId, String refreshTokenHash, boolean redisFailed, boolean dbFailed) {
-        failureRepository.findByAdminId(adminId).ifPresentOrElse(
-                existing -> existing.reopen(refreshTokenHash, redisFailed, dbFailed),
-                () -> failureRepository.save(
-                        AdminLogoutFailure.record(adminId, refreshTokenHash, redisFailed, dbFailed)));
+        if (!redisFailed && !dbFailed) {
+            throw new IllegalArgumentException("redisFailed 또는 dbFailed 중 하나는 true여야 한다");
+        }
+
+        failureRepository.upsertFailure(
+                adminId,
+                refreshTokenHash,
+                redisFailed,
+                dbFailed,
+                LocalDateTime.now(clock));
     }
 
     /**
