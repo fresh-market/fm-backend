@@ -270,14 +270,14 @@ class AdminAuthServiceTest {
      */
 
     @Test
-    void 존재하지_않는_관리자로_로그아웃하면_로그인_실패_예외가_발생한다() {
+    void 존재하지_않는_관리자로_로그아웃하면_NOT_FOUND_예외가_발생한다() {
         when(adminRefreshTokenCleanupService.revokeDbWithRetry(999L))
-                .thenThrow(new AdminException(AdminErrorCode.LOGIN_FAILED));
+                .thenThrow(new AdminException(AdminErrorCode.ADMIN_NOT_FOUND));
 
         assertThatThrownBy(() -> adminAuthService.logout(999L, "ROLE_ADMIN"))
                 .isInstanceOf(AdminException.class)
                 .extracting(e -> ((AdminException) e).getErrorCode())
-                .isEqualTo(AdminErrorCode.LOGIN_FAILED);
+                .isEqualTo(AdminErrorCode.ADMIN_NOT_FOUND);
     }
 
     @Test

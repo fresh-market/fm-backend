@@ -32,7 +32,7 @@ class AdminLogoutTransactionService {
         Objects.requireNonNull(adminId, "adminId");
 
         Admin admin = adminRepository.findByIdForUpdate(adminId)
-                .orElseThrow(() -> new AdminException(AdminErrorCode.LOGIN_FAILED));
+                .orElseThrow(() -> new AdminException(AdminErrorCode.ADMIN_NOT_FOUND));
 
         String refreshTokenHash = admin.getRefreshTokenHash();
         admin.revokeRefreshToken();

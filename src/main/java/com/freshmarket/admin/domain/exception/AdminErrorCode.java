@@ -19,6 +19,8 @@ public enum AdminErrorCode implements ErrorCode {
     ACCOUNT_INACTIVE(HttpStatus.FORBIDDEN, "ADMIN-002", "비활성화된 계정입니다."),
 
     // ADMIN-003~008은 auth/admin 문서의 비밀번호 변경·계정 관리 오류에 예약되어 있다.
+    ADMIN_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMIN-009", "관리자 계정을 찾을 수 없습니다."),
+
     // Access Token 차단 상태를 확정하지 못한 경우 성공으로 응답하지 않는다.
     LOGOUT_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "ADMIN-010", "로그아웃 처리 상태를 확인할 수 없습니다. 잠시 후 다시 시도해주세요.");
 

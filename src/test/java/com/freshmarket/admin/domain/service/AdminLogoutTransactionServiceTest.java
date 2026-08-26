@@ -50,13 +50,13 @@ class AdminLogoutTransactionServiceTest {
     }
 
     @Test
-    void 존재하지_않는_관리자의_DB_토큰_폐기는_로그인_실패로_처리한다() {
+    void 존재하지_않는_관리자의_DB_토큰_폐기는_NOT_FOUND로_처리한다() {
         when(adminRepository.findByIdForUpdate(999L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.revokeRefreshToken(999L))
                 .isInstanceOf(AdminException.class)
                 .extracting(e -> ((AdminException) e).getErrorCode())
-                .isEqualTo(AdminErrorCode.LOGIN_FAILED);
+                .isEqualTo(AdminErrorCode.ADMIN_NOT_FOUND);
     }
 
     @Test
