@@ -29,9 +29,6 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class CampaignTargetLot extends BaseImmutableTimeEntity {
 
-    // "상위 3건만 남긴다"는 요구사항 원문 그 자체다. chk_campaign_target_rank 와 짝을 이룬다
-    private static final int MAX_TARGET_RANK = 3;
-
     // 대상 확정 기준일(배치 실행일). 조회는 이 값으로 그날의 스냅샷을 찾는다
     @Column(name = "target_date", nullable = false)
     private LocalDate targetDate;
@@ -48,7 +45,7 @@ public class CampaignTargetLot extends BaseImmutableTimeEntity {
     @Column(name = "issuable_qty", nullable = false)
     private int issuableQty;
 
-    // 소진율 오름차순 순위. 1이 가장 낮은(=가장 안 팔린) 로트다. 상위 3건만 저장한다
+    // 소진율 오름차순 순위. 1이 가장 낮은(=가장 안 팔린) 로트다. 하위 10% 전체를 저장한다
     @Column(name = "target_rank", nullable = false)
     private int targetRank;
 
@@ -99,10 +96,14 @@ public class CampaignTargetLot extends BaseImmutableTimeEntity {
         }
     }
 
+    /*
+     * 상한을 두지 않는다. 대상이 소진율 하위 10% 전체라 후보 수에 따라 순위가 얼마든지 커진다.
+     * 한때 3으로 상한을 뒀었는데, 그 값은 요구사항이 바뀌면 같이 바뀌는 정책값이라
+     * 엔티티와 CHECK 제약에 굳히면 요구사항 변경이 곧 스키마 변경이 된다.
+     */
     private static void validateTargetRank(int targetRank) {
-        if (targetRank < 1 || targetRank > MAX_TARGET_RANK) {
-            throw new IllegalArgumentException(
-                    "targetRank 는 1 이상 " + MAX_TARGET_RANK + " 이하여야 한다: " + targetRank);
+        if (targetRank < 1) {
+            throw new IllegalArgumentException("targetRank 는 1 이상이어야 한다: " + targetRank);
         }
     }
 }

@@ -15,13 +15,13 @@ CREATE TABLE campaign_target_lot (
     stock_lot_id             BIGINT       NOT NULL, -- 대상 로트 FK
     turnover_rate            DECIMAL(5,4) NOT NULL, -- 확정 시점 소진율 (입고수량-잔여재고)/입고수량. 0.0000~1.0000
     issuable_qty             INT          NOT NULL, -- 발급 가능 수량(확정 시점 로트 잔량 기준)
-    target_rank              INT          NOT NULL, -- 소진율 오름차순 순위(1이 가장 낮음). 상위 3건만 남긴다
+    target_rank              INT          NOT NULL, -- 소진율 오름차순 순위(1이 가장 낮음). 하위 10% 전체를 남긴다
     created_at               DATETIME(6)  NOT NULL, -- 생성 시각(애플리케이션에서 생성)
     PRIMARY KEY (campaign_target_lot_id),
     CONSTRAINT uk_campaign_target_date_lot UNIQUE (target_date, stock_lot_id), -- 같은 날 같은 로트를 두 번 넣지 않는다(배치 재실행 시 덮어쓰기 판단 기준)
     CONSTRAINT fk_campaign_target_lot FOREIGN KEY (stock_lot_id) REFERENCES stock_lot (stock_lot_id),
     CONSTRAINT chk_campaign_turnover_rate CHECK (turnover_rate >= 0 AND turnover_rate <= 1),
     CONSTRAINT chk_campaign_issuable_qty CHECK (issuable_qty >= 0),
-    CONSTRAINT chk_campaign_target_rank CHECK (target_rank >= 1 AND target_rank <= 3), -- 상위 3건만 남긴다는 요구사항 그 자체를 DB에서도 강제한다 (DI-3-02)
+    CONSTRAINT chk_campaign_target_rank CHECK (target_rank >= 1), -- 상한은 두지 않는다. 대상 건수(하위 10%)는 후보 수에 따라 변하는 정책값이라 스키마에 굳히면 요구사항 변경이 곧 마이그레이션이 된다
     KEY idx_campaign_target_date (target_date, target_rank) -- 당일 대상을 순위대로 조회
 ); -- 선착순 쿠폰 캠페인 대상 로트(자정 배치가 확정한 그날의 스냅샷)

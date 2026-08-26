@@ -52,14 +52,27 @@ public class StockLotQueryRepository {
     }
 
     /*
-     * 캠페인 대상 상품 조회 배치용. 소비기한이 withinDate 이내인 AVAILABLE 로트 전체를
-     * 가져온다. 소진율 계산과 재고 하한 필터는 자바에서 한다 — 이유는 두 가지다.
-     * 1) 소진율(initialQty, availableQty 기반 계산)을 SQL 에서 하려면 QueryDSL 이
+     * 캠페인 대상 로트 배치용. 소비기한이 [from, to] 구간에 드는 AVAILABLE 로트를 가져온다.
+     *
+     * 구간의 양 끝이 모두 필요하다. to(=today+13) 는 "소비기한 임박" 시작선이고,
+     * from(=today+10) 은 "판매 마감 기한" 선이다. 하한이 없으면 판매 마감이 지나 이미 팔 수
+     * 없는 로트까지 후보에 들어온다 — 그런 로트에 쿠폰을 붙여봐야 쓸 수가 없다.
+     * 만료 배치는 소비기한이 지난 뒤에야 걷어가므로 그 사이 로트가 계속 AVAILABLE 로 쌓인다.
+     *
+     * 소비기한·재고 하한처럼 행 하나만 보고 판정되는 조건은 전부 SQL 에서 거른다.
+     * 자바로 가져와 거르면 버릴 행까지 전송하고 객체로 만들게 된다.
+     *
+     * 반면 소진율 계산과 순위 컷은 자바에 남긴다 — 이유는 두 가지다.
+     * 1) 소진율(initialQty, availableQty, 폐기 누계 기반 계산)을 SQL 에서 하려면 QueryDSL 이
      *    지원하지 않는 산술 표현이 얽혀 위험하다(날짜 뺄셈 미지원 사례와 같은 종류).
-     * 2) "소진율 하위 20%" 는 전체 대상 안에서의 상대적 순위라 애초에 SQL 한 줄로
+     * 2) "소진율 하위 10%" 는 전체 대상 안에서의 상대적 순위라 애초에 SQL 한 줄로
      *    표현하기 어렵다.
+     *
+     * expiry_date 범위가 idx_lot_expiry_date 를 탄다 (V19). status 는 CollationExpressions 가
+     * 컬럼을 collate() 로 감싸 인덱스를 못 타므로, 인덱스 선두를 expiry_date 로 잡았다.
      */
-    public List<CampaignTargetLotCandidate> findCandidatesExpiringBy(LocalDate withinDate) {
+    public List<CampaignTargetLotCandidate> findCandidatesExpiringBetween(
+            LocalDate from, LocalDate to, int minAvailableQty) {
         return queryFactory
                 .select(new QCampaignTargetLotCandidate(
                         stockLot.id,
@@ -70,7 +83,10 @@ public class StockLotQueryRepository {
                 .from(stockLot)
                 .where(
                         CollationExpressions.equalsAsCs(stockLot.status, LotStatus.AVAILABLE),
-                        stockLot.expiryDate.loe(withinDate))
+                        stockLot.expiryDate.goe(from),
+                        stockLot.expiryDate.loe(to),
+                        stockLot.initialQty.gt(0),
+                        stockLot.availableQty.goe(minAvailableQty))
                 .fetch();
     }
 

@@ -48,7 +48,9 @@ public class AdminCampaignTargetLotService {
     /*
      * CampaignTargetLot 은 stockLotId 만 갖고 있어, 상품/옵션 정보를 보여주려면
      * StockLot 을 한 번 더 조회해 productOptionId 를 얻고, 그걸로 ProductApi 를 불러야 한다.
-     * 두 단계 조회가 되지만, 대상 로트가 최대 3건뿐이라 성능 부담은 없다.
+     * 두 단계 조회가 되지만 각 단계가 IN 조회 한 번씩이라 대상 수와 무관하게 쿼리는 세 번이다.
+     * 다만 대상이 하위 10% 전체라 건수 상한이 없어, 후보가 크게 늘면 ProductApi 로 넘기는
+     * 옵션 ID 목록도 함께 커진다. 페이지네이션이 필요해지는 지점이 여기다.
      */
     public AdminCampaignTargetLotListResponse findToday() {
         LocalDate today = LocalDate.now(clock);

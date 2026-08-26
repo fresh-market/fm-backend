@@ -65,12 +65,14 @@ class CampaignTargetLotTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    // 대상이 하위 10% 전체라 순위 상한이 없다. 후보가 많으면 순위도 얼마든지 커진다
     @Test
-    void 순위가_3을_넘으면_실패한다() {
+    void 순위가_3을_넘어도_등록된다() {
         BigDecimal turnoverRate = new BigDecimal("0.5");
         LocalDate targetDate = LocalDate.now();
 
-        assertThatThrownBy(() -> CampaignTargetLot.register(targetDate, 1L, turnoverRate, 50, 4))
-                .isInstanceOf(IllegalArgumentException.class);
+        CampaignTargetLot lot = CampaignTargetLot.register(targetDate, 1L, turnoverRate, 50, 47);
+
+        assertThat(lot.getTargetRank()).isEqualTo(47);
     }
 }
