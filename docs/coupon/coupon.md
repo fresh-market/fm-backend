@@ -512,6 +512,33 @@ SELECT 1 FROM member_coupon WHERE coupon_id = ? AND status = 'PENDING' LIMIT 1;
    다만 그 요청들이 응답을 기다리므로 다음 윈도우로 넘기거나 실패로 끊는다
 ```
 
+**재건 공식이 v1~v5 와 다르다.** 3장과 9장의 `MAX(issue_seq) + 1` 은 행이 발급될 때 생기는 구조를 전제한 값이다.
+
+```
+v6 는 1..10000 이 미리 들어 있다
+-> MAX(issue_seq) 가 항상 10000 이다
+-> 그대로 쓰면 카운터가 10001 이 되어 전부 소진으로 판정한다
+```
+
+```sql
+-- v6 의 카운터 재건. ISSUED 만 본다
+SELECT COALESCE(MAX(issue_seq), 0) + 1 FROM member_coupon
+ WHERE coupon_id = ? AND status = 'ISSUED';
+```
+
+`free` 목록도 복구 시 다시 만든다. 페일오버로 승격된 노드에는 **폴백 중에 이미 채워진 번호가 남아 있어** 그대로 쓰면 0행만 나오고 헛돈다.
+
+```sql
+-- 진짜 구멍만 고른다. 이미 지나간 번호 중 아직 PENDING 인 것
+SELECT issue_seq FROM member_coupon
+ WHERE coupon_id = ? AND status = 'PENDING'
+   AND issue_seq < (SELECT MAX(issue_seq) FROM member_coupon
+                     WHERE coupon_id = ? AND status = 'ISSUED')
+ ORDER BY issue_seq;
+```
+
+`idx_pending` 범위 조회라 싸다. v2~v5 는 구멍이 존재하지 않는 행이라 `1..MAX` 를 생성해 LEFT JOIN 해야 했다.
+
 **얻는 것은 정확성이다.**
 
 | | |
