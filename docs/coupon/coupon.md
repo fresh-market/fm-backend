@@ -467,6 +467,34 @@ UPDATE member_coupon
 
 `uk_mc_coupon_seq (coupon_id, issue_seq)` 의 정확 일치라 인덱스를 새로 만들 필요가 없다. `status = 'PENDING'` 조건 자체가 낙관적 락이므로 version 컬럼도 두지 않는다.
 
+**Redis 가 죽으면 주소를 줄 곳이 없다.** 그때는 빈 행을 직접 찾는다.
+
+```sql
+SELECT issue_seq FROM member_coupon
+ WHERE coupon_id = ? AND status = 'PENDING'
+ ORDER BY issue_seq LIMIT N
+ FOR UPDATE SKIP LOCKED;
+```
+
+`SKIP LOCKED` 는 남이 잡은 행을 건너뛰므로 대기가 없다. **`coupon` 한 행을 거치지 않으니 폴백에도 직렬화가 없다.** v1~v5 는 잡을 행이 없어 순번을 `coupon` 에서 받아야 하고, 그 락이 폴백의 천장이 된다.
+
+전제가 둘이다.
+
+```sql
+KEY idx_pending (coupon_id, status, issue_seq)
+```
+
+**인덱스가 없으면 스캔하는 모든 행에 락을 걸려고 한다.** 300만 행에서 풀 스캔이 나면 개선이 아니라 장애다.
+
+그리고 `SKIP LOCKED` 의 0행은 **"없음" 과 "지금 다 잠김" 을 구분하지 못한다.** 별도 조회로 확정한다.
+
+```sql
+SELECT 1 FROM member_coupon WHERE coupon_id = ? AND status = 'PENDING' LIMIT 1;
+-- 0행이면 진짜 소진이다. 1행이면 잠겨 있을 뿐이니 다음 윈도우에 다시 본다
+```
+
+일반 조회는 락과 무관한 일관된 읽기라 **잠긴 행도 `PENDING` 으로 보인다.** 그래서 이 결과가 정확하다. 소진 근처에서만, 그것도 배치당 한 번 돈다.
+
 **얻는 것은 정확성이다.**
 
 | | |
@@ -474,6 +502,7 @@ UPDATE member_coupon
 | 과소 발급이 닫힌다 | 실패한 순번이 `PENDING` 으로 남아 다음 요청이 그대로 집어간다. 순번 반납 장치가 필요 없다 |
 | 카운터 오차가 한 신호로 모인다 | 범위 밖 순번도, 되밀려 재발급된 순번도 예외가 아니라 0행이다 |
 | 잔여가 조회 하나다 | `PENDING` 행 수가 곧 잔여다. `issued_quantity` 를 순번 발급기로 쓸 이유가 없어진다 |
+| Redis 가 죽어도 락이 없다 | 빈 행을 `SKIP LOCKED` 로 잡는다. v1~v5 는 폴백에서 `coupon` 행 락에 묶인다 |
 
 **내는 것**
 
