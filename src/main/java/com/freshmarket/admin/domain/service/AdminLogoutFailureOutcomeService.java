@@ -1,31 +1,36 @@
 package com.freshmarket.admin.domain.service;
 
 import com.freshmarket.admin.domain.repository.AdminLogoutFailureRepository;
+import java.time.Clock;
+import java.time.LocalDateTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /*
- * AdminLogoutFailureService.retryAllPending()이 Redis/DB를 재시도한 "결과"만 짧은 트랜잭션으로
- * 반영하는 전용 빈. 별도 빈으로 뺀 이유는 KakaoUnlinkRetryOutcomeService와 같다 — 같은 클래스
- * 안에서 this.xxx()로 @Transactional 메서드를 불러봐야 프록시를 안 거쳐서 트랜잭션이 조용히
- * 무시된다(Spring AOP 자기 자신 호출 한계).
+ * 실패 재시도의 결과 반영만 담당한다. 결과 UPDATE에도 claim 시각을 조건으로 넣어 lease가 만료된
+ * 옛 실행자가 이후 재선점한 실행자의 최신 상태를 덮어쓰지 못하게 한다. Repository의 조건부 UPDATE
+ * 자체가 짧은 트랜잭션 경계이므로 외부 Redis 호출은 여기 들어오지 않는다.
  */
 @Service
 @RequiredArgsConstructor
 class AdminLogoutFailureOutcomeService {
 
     private final AdminLogoutFailureRepository failureRepository;
+    private final Clock clock;
 
-    @Transactional
-    void applyOutcome(Long failureId, boolean dbOk, boolean redisOk, String latestRefreshTokenHash) {
-        failureRepository.findById(failureId)
-                .ifPresent(failure -> failure.applyRetryOutcome(dbOk, redisOk, latestRefreshTokenHash));
+    boolean applyOutcome(
+            Long failureId,
+            LocalDateTime claimedAt,
+            boolean dbOk,
+            boolean redisOk,
+            String latestRefreshTokenHash) {
+        LocalDateTime now = LocalDateTime.now(clock);
+        return failureRepository.applyOutcomeIfClaimOwned(
+                failureId, claimedAt, !dbOk, !redisOk, dbOk && redisOk, latestRefreshTokenHash, now) == 1;
     }
 
-    @Transactional
-    void releaseClaim(Long failureId) {
-        failureRepository.findById(failureId)
-                .ifPresent(failure -> failure.releaseProcessing());
+    boolean releaseClaim(Long failureId, LocalDateTime claimedAt) {
+        return failureRepository.releaseClaimIfOwned(
+                failureId, claimedAt, LocalDateTime.now(clock)) == 1;
     }
 }

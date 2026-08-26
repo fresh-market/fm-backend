@@ -69,6 +69,7 @@ public class AdminAuthService {
     private final AdminLogoutTransactionService adminLogoutTransactionService;
     private final AdminRefreshTokenCleanupService adminRefreshTokenCleanupService;
     private final AdminLogoutFailureService adminLogoutFailureService;
+    private final AdminAuditFailureService adminAuditFailureService;
     private final Clock clock;
     private final String dummyPasswordHash;
 
@@ -81,6 +82,7 @@ public class AdminAuthService {
             AdminLogoutTransactionService adminLogoutTransactionService,
             AdminRefreshTokenCleanupService adminRefreshTokenCleanupService,
             AdminLogoutFailureService adminLogoutFailureService,
+            AdminAuditFailureService adminAuditFailureService,
             Clock clock,
             @Value("${ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS:86400}") long refreshTokenValiditySeconds) {
         this.adminRepository = adminRepository;
@@ -91,6 +93,7 @@ public class AdminAuthService {
         this.adminLogoutTransactionService = adminLogoutTransactionService;
         this.adminRefreshTokenCleanupService = adminRefreshTokenCleanupService;
         this.adminLogoutFailureService = adminLogoutFailureService;
+        this.adminAuditFailureService = adminAuditFailureService;
         this.clock = clock;
         this.refreshTokenValiditySeconds = refreshTokenValiditySeconds;
         // 같은 인코더로 미리 만들어 둬야 진짜 비밀번호 검증과 연산 비용(코스트 팩터)이 완전히 같다
@@ -212,16 +215,18 @@ public class AdminAuthService {
         invalidateAccessTokenOrThrow(role, adminId, cutoff);
 
         /*
-         * 이 시점이면 Access Token 차단은 이미 확정된 뒤다(Refresh Token 정리는 확정 못 했더라도
-         * 아웃박스에 남아 있다). 감사 로그는 그 결과를 기록만 하는 부가 작업이라, 저장이 실패해도
-         * 이미 끝난 로그아웃 자체를 실패로 되돌리지 않는다(fail-open). 그러지 않으면 보안적으로
-         * 완전히 끝난 로그아웃이 감사 로그 하나 때문에 스펙에 없는 500으로 응답되고, 쿠키도 안 지워져
-         * 클라이언트가 이미 무의미해진 재시도를 하게 된다.
+         * Access Token 차단까지 확정된 뒤 성공 감사 로그를 기록한다. 직접 저장이 실패하면
+         * admin_audit_failure 아웃박스에 같은 감사 이벤트를 내구성 있게 남기고 배치가 재시도한다.
+         * 아웃박스 기록까지 실패하면 예외를 숨기지 않아 감사 행위가 완전히 유실된 채 204가 나가지 않는다.
          */
         try {
             adminLogoutTransactionService.recordSuccess(adminId);
         } catch (DataAccessException e) {
-            log.warn("event=ADMIN_LOGOUT_AUDIT_LOG_FAILED adminId={}", adminId, e);
+            log.warn("event=ADMIN_LOGOUT_AUDIT_LOG_FAILED adminId={} — durable outbox에 기록", adminId, e);
+            // 이 기록까지 실패하면 예외를 숨기지 않는다. 감사 행위가 DB와 outbox 양쪽에서
+            // 모두 유실된 상태로 204를 반환하는 것을 막기 위해 호출자에게 실패를 드러낸다.
+            adminAuditFailureService.recordFailure(
+                    adminId, "ADMIN_LOGOUT", String.valueOf(adminId), null);
         }
 
         log.info("event=ADMIN_LOGOUT success=true adminId={}", adminId);

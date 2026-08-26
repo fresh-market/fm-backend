@@ -70,6 +70,8 @@ class AdminAuthServiceTest {
             mock(AdminRefreshTokenCleanupService.class);
     private final AdminLogoutFailureService adminLogoutFailureService =
             mock(AdminLogoutFailureService.class);
+    private final AdminAuditFailureService adminAuditFailureService =
+            mock(AdminAuditFailureService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-08-23T06:00:00Z"), ZoneId.of("Asia/Seoul"));
 
     private final AdminAuthService adminAuthService = new AdminAuthService(
@@ -81,6 +83,7 @@ class AdminAuthServiceTest {
             adminLogoutTransactionService,
             adminRefreshTokenCleanupService,
             adminLogoutFailureService,
+            adminAuditFailureService,
             clock,
             ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS
     );
@@ -264,12 +267,9 @@ class AdminAuthServiceTest {
         verify(adminLogoutTransactionService).recordSuccess(1L);
     }
 
-    /*
-     * 이 시점이면 Access Token 차단은 이미 확정된 뒤다. 감사 로그 저장은 그 결과를 기록만 하는
-     * 부가 작업이므로, 저장에 실패해도 이미 끝난 로그아웃 자체가 예외로 전파되어서는 안 된다(fail-open).
-     */
+    // 직접 감사 로그 저장이 실패해도 durable outbox에 기록되면 로그아웃은 끝낼 수 있다.
     @Test
-    void 감사로그_저장이_실패해도_로그아웃은_예외없이_끝난다() {
+    void 감사로그_저장이_실패하면_감사_아웃박스에_기록하고_로그아웃은_끝난다() {
         String tokenHash = "a".repeat(64);
         when(adminRefreshTokenCleanupService.revokeDbWithRetry(1L))
                 .thenReturn(new AdminLogoutTransactionService.LogoutDbState(tokenHash));
@@ -286,6 +286,8 @@ class AdminAuthServiceTest {
                 LocalDateTime.now(clock),
                 Duration.ofMillis(ACCESS_TOKEN_VALIDITY_MS));
         verify(adminLogoutTransactionService).recordSuccess(1L);
+        verify(adminAuditFailureService).recordFailure(
+                1L, "ADMIN_LOGOUT", "1", null);
     }
 
     @Test

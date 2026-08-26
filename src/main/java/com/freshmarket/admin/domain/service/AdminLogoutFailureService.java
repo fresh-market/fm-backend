@@ -8,6 +8,7 @@ import com.freshmarket.admin.domain.repository.AdminRepository;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
@@ -89,26 +90,35 @@ public class AdminLogoutFailureService {
     }
 
     private void retryOne(Long failureId) {
-        LocalDateTime claimedAt = LocalDateTime.now(clock);
+        LocalDateTime claimedAt = LocalDateTime.now(clock).truncatedTo(ChronoUnit.MICROS);
         LocalDateTime staleBefore = claimedAt.minus(CLAIM_LEASE);
         if (failureRepository.claimForRetry(failureId, claimedAt, staleBefore) != 1) {
             return;
         }
 
-        Optional<AdminLogoutFailure> maybeFailure = failureRepository.findById(failureId);
+        Optional<AdminLogoutFailure> maybeFailure =
+                failureRepository.findById(failureId);
+
         if (maybeFailure.isEmpty()) {
+            outcomeService.releaseClaim(failureId, claimedAt);
             return;
         }
+
         AdminLogoutFailure failure = maybeFailure.get();
         Long adminId = failure.getAdminId();
 
-        Optional<Admin> maybeAdmin = adminRepository.findById(adminId);
+        Optional<Admin> maybeAdmin =
+                adminRepository.findById(adminId);
+
         if (maybeAdmin.isEmpty()) {
-            // 관리자 계정 자체가 더는 없다 — 재시도할 대상이 없으니 선점만 반납하고 다음 회차로 미룬다.
-            log.warn("event=ADMIN_LOGOUT_OUTBOX_ADMIN_NOT_FOUND adminId={}", adminId);
-            outcomeService.releaseClaim(failureId);
+            log.warn(
+                    "event=ADMIN_LOGOUT_OUTBOX_ADMIN_NOT_FOUND adminId={}",
+                    adminId);
+
+            outcomeService.releaseClaim(failureId, claimedAt);
             return;
         }
+
         String role = maybeAdmin.get().getRole().toAuthority();
 
         String tokenHash = failure.getRefreshTokenHash();
@@ -131,6 +141,6 @@ public class AdminLogoutFailureService {
             redisOk = cleanupService.cleanupRedisWithRetry(role, adminId, tokenHash);
         }
 
-        outcomeService.applyOutcome(failureId, dbOk, redisOk, tokenHash);
+        outcomeService.applyOutcome(failureId, claimedAt, dbOk, redisOk, tokenHash);
     }
 }

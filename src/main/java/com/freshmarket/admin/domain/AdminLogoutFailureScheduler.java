@@ -16,15 +16,15 @@ import org.springframework.stereotype.Component;
 // 빈 자체를 batch 프로필로 묶는다. @EnableScheduling만 끄면 빈은 남아 실수로 호출될 수 있다
 @Profile("batch")
 @RequiredArgsConstructor
-public class AdminLogoutFailureScheduler {
+class AdminLogoutFailureScheduler {
 
     private static final long RETRY_DELAY_MS = 10 * 60 * 1000L;
 
     private final AdminLogoutFailureService adminLogoutFailureService;
 
-    /** Todo: 인스턴스 여러 개 뜨면 이 스케줄러가 중복 실행될 수 있다.
-     *  지금은 단일 인스턴스라 문제없지만, 배치 전용 인프라(단일 인스턴스 강제 또는 DB 조건부
-     *  선점/분산실행 제어)가 갖춰지면 그때 확정한다 (KakaoUnlinkRetryScheduler와 같은 메모).
+    /** 여러 인스턴스에서 동시에 실행돼도 실패 행 단위 claimForRetry() 조건부 UPDATE로
+     *  한 실행자만 선점한다. 결과 반영도 processing_started_at(lease 식별자)이 같은 실행자만
+     *  허용해 만료된 옛 실행자가 새 실행자의 결과를 덮어쓰지 못한다.
      */
     @Scheduled(fixedDelay = RETRY_DELAY_MS)
     public void retryPendingLogoutFailures() {

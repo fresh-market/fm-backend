@@ -51,8 +51,7 @@ class AdminLogoutFailureServiceTest {
     }
 
     private void pending(AdminLogoutFailure failure) {
-        when(failureRepository.findTop100ByResolvedFalseAndIdGreaterThanOrderByIdAsc(0L))
-                .thenReturn(List.of(failure));
+        when(failureRepository.findTop100ByResolvedFalseAndIdGreaterThanOrderByIdAsc(0L)).thenReturn(List.of(failure));
         when(failureRepository.claimForRetry(failure.getId(), CLAIMED_AT, STALE_BEFORE)).thenReturn(1);
         when(failureRepository.findById(failure.getId())).thenReturn(Optional.of(failure));
     }
@@ -114,8 +113,8 @@ class AdminLogoutFailureServiceTest {
         sut.retryAllPending();
 
         verify(cleanupService, never()).revokeDbIfMatchesWithRetry(any(), any());
-        verify(outcomeService).releaseClaim(10L);
-        verify(outcomeService, never()).applyOutcome(any(), anyBoolean(), anyBoolean(), any());
+        verify(outcomeService).releaseClaim(eq(10L), any(LocalDateTime.class));
+        verify(outcomeService, never()).applyOutcome(any(), any(LocalDateTime.class), anyBoolean(), anyBoolean(), any());
     }
 
     @Test
@@ -130,7 +129,7 @@ class AdminLogoutFailureServiceTest {
 
         verify(cleanupService).revokeDbIfMatchesWithRetry(1L, storedHash);
         verify(cleanupService, never()).cleanupRedisWithRetry(any(), any(), any());
-        verify(outcomeService).applyOutcome(10L, true, true, storedHash);
+        verify(outcomeService).applyOutcome(eq(10L), any(LocalDateTime.class), eq(true), eq(true), eq(storedHash));
     }
 
     @Test
@@ -145,7 +144,7 @@ class AdminLogoutFailureServiceTest {
 
         verify(cleanupService, never()).revokeDbIfMatchesWithRetry(any(), any());
         verify(cleanupService).cleanupRedisWithRetry("ROLE_ADMIN", 1L, storedHash);
-        verify(outcomeService).applyOutcome(10L, true, true, storedHash);
+        verify(outcomeService).applyOutcome(eq(10L), any(LocalDateTime.class), eq(true), eq(true), eq(storedHash));
     }
 
     @Test
@@ -159,7 +158,7 @@ class AdminLogoutFailureServiceTest {
         sut.retryAllPending();
 
         verify(cleanupService, never()).cleanupRedisWithRetry(any(), any(), any());
-        verify(outcomeService).applyOutcome(10L, false, true, storedHash);
+        verify(outcomeService).applyOutcome(eq(10L), any(LocalDateTime.class), eq(false), eq(true), eq(storedHash));
     }
 
     @Test
@@ -171,7 +170,7 @@ class AdminLogoutFailureServiceTest {
         sut.retryAllPending();
 
         verify(cleanupService, never()).revokeDbIfMatchesWithRetry(any(), any());
-        verify(outcomeService).applyOutcome(10L, false, true, null);
+        verify(outcomeService).applyOutcome(eq(10L), any(LocalDateTime.class), eq(false), eq(true), isNull());
     }
 
     @Test
@@ -219,6 +218,6 @@ class AdminLogoutFailureServiceTest {
                 .cleanupRedisWithRetry(any(), any(), any());
 
         verify(outcomeService, never())
-                .applyOutcome(any(), anyBoolean(), anyBoolean(), any());
+                .applyOutcome(any(), any(LocalDateTime.class), anyBoolean(), anyBoolean(), any());
     }
 }

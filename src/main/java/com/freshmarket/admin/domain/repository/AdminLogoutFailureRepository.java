@@ -86,4 +86,52 @@ public interface AdminLogoutFailureRepository extends JpaRepository<AdminLogoutF
             @Param("failureId") Long failureId,
             @Param("claimedAt") LocalDateTime claimedAt,
             @Param("staleBefore") LocalDateTime staleBefore);
+
+    /**
+     * 내가 획득한 lease(processing_started_at)가 아직 유효할 때만 재시도 결과를 반영한다.
+     * lease 만료 뒤 다른 인스턴스가 재선점했다면 0을 반환해 늦게 끝난 옛 실행자의 덮어쓰기를 막는다.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update AdminLogoutFailure f
+               set f.attemptCount = f.attemptCount + 1,
+                   f.dbFailed = :dbFailed,
+                   f.redisFailed = :redisFailed,
+                   f.refreshTokenHash = coalesce(:latestRefreshTokenHash, f.refreshTokenHash),
+                   f.resolved = :resolved,
+                   f.processing = false,
+                   f.processingStartedAt = null,
+                   f.updatedAt = :updatedAt
+             where f.id = :failureId
+               and f.resolved = false
+               and f.processing = true
+               and f.processingStartedAt = :claimedAt
+            """)
+    int applyOutcomeIfClaimOwned(
+            @Param("failureId") Long failureId,
+            @Param("claimedAt") LocalDateTime claimedAt,
+            @Param("dbFailed") boolean dbFailed,
+            @Param("redisFailed") boolean redisFailed,
+            @Param("resolved") boolean resolved,
+            @Param("latestRefreshTokenHash") String latestRefreshTokenHash,
+            @Param("updatedAt") LocalDateTime updatedAt);
+
+    /** 외부 작업을 시작하지 못했을 때도 내가 가진 lease인 경우에만 선점을 반납한다. */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update AdminLogoutFailure f
+               set f.processing = false,
+                   f.processingStartedAt = null,
+                   f.updatedAt = :updatedAt
+             where f.id = :failureId
+               and f.resolved = false
+               and f.processing = true
+               and f.processingStartedAt = :claimedAt
+            """)
+    int releaseClaimIfOwned(
+            @Param("failureId") Long failureId,
+            @Param("claimedAt") LocalDateTime claimedAt,
+            @Param("updatedAt") LocalDateTime updatedAt);
 }
