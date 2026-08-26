@@ -19,13 +19,15 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 class AdminLoginTransactionService {
 
+    private static final int DB_TRANSACTION_TIMEOUT_SECONDS = 1;
+
     private final AdminRepository adminRepository;
 
     /**
      * 비밀번호 검증이 끝난 관리자 행을 잠근 뒤 현재 활성 상태를 다시 확인하고
      * 로그인에 사용할 Refresh Token 해시/만료시각만 DB에 기록한다.
      */
-    @Transactional(timeout = 1)
+    @Transactional(timeout = DB_TRANSACTION_TIMEOUT_SECONDS)
     LoginDbState issueRefreshToken(Long adminId, String refreshTokenHash, LocalDateTime expiresAt) {
         Objects.requireNonNull(adminId, "adminId");
         Objects.requireNonNull(refreshTokenHash, "refreshTokenHash");
@@ -45,7 +47,7 @@ class AdminLoginTransactionService {
      * 지연 정리 또는 로그아웃 재처리 시 사용한다.
      * 현재 DB의 Refresh Token hash가 지정한 hash와 같을 때만 제거한다.
      */
-    @Transactional(timeout = 1)
+    @Transactional(timeout = DB_TRANSACTION_TIMEOUT_SECONDS)
     void clearRefreshTokenIfMatches(Long adminId, String refreshTokenHash) {
         Objects.requireNonNull(adminId, "adminId");
         Objects.requireNonNull(refreshTokenHash, "refreshTokenHash");

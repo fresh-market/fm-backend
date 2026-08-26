@@ -30,6 +30,7 @@ import java.util.Optional;
 
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import com.freshmarket.common.auth.jwt.TokenType;
+import com.freshmarket.common.exception.CommonErrorCode;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -188,7 +189,10 @@ class AdminAuthServiceTest {
         AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
         assertThatThrownBy(() -> adminAuthService.login(request))
-                .isInstanceOf(DataAccessResourceFailureException.class);
+                .isInstanceOf(AdminException.class)
+                .hasCauseInstanceOf(DataAccessResourceFailureException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INTERNAL_ERROR);
     }
 
     @Test

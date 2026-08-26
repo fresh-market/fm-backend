@@ -19,6 +19,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import com.freshmarket.common.auth.opaque.TokenHasher;
+import com.freshmarket.common.exception.CommonErrorCode;
 import com.freshmarket.common.logging.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -156,7 +157,7 @@ public class AdminAuthService {
                 // 어느 저장소에도 RT 상태를 남기지 못했다면 발급한 RT는 곧바로 쓸 수 없으므로 로그인 실패가 맞다.
                 log.error("event=ADMIN_LOGIN_REFRESH_TOKEN_SAVE_FAILED adminId={} — DB와 Redis 모두 저장 실패",
                         adminId, e);
-                throw e;
+                throw new AdminException(CommonErrorCode.INTERNAL_ERROR, e);
             }
 
             // 핵심 fallback: Redis가 죽어 있어도 DB 백업이 있으므로 로그인 자체는 성공시킨다.
