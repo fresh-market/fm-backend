@@ -551,7 +551,7 @@ SELECT 1 FROM member_coupon WHERE coupon_id = ? AND status = 'PENDING' LIMIT 1;
 **재건 공식이 v1~v5 와 다르다.** 3장과 9장의 `MAX(issue_seq) + 1` 은 행이 발급될 때 생기는 구조를 전제한 값이다.
 
 ```
-v6 는 1..10000 이 미리 들어 있다
+v6 은 1..10000 이 미리 들어 있다
 -> MAX(issue_seq) 가 항상 10000 이다
 -> 그대로 쓰면 카운터가 10001 이 되어 전부 소진으로 판정한다
 ```
@@ -613,6 +613,38 @@ member_id 가 남    카운터가 되밀렸다   -> 다음 순번을 받아 재�
 0행일 때만 그 행을 한 번 더 읽으면 갈린다. 정상 경로는 UPDATE 한 번 그대로다.
 
 **성능은 v6 의 근거가 아니다.** 고정된 우측 말단 핫 페이지가 사라지는 것은 맞으나, 커밋 하나가 2~4ms(Multi-AZ 동기 복제)인데 행 하나의 쓰기 작업은 50~100us 다. 요청마다 커밋하면 그 차이가 묻히고, 배치로 커밋을 줄이면 이번에는 동시에 쓰는 주체가 줄어 다툴 상대가 없어진다. `undo` 는 오히려 v6 이 크다. **1만 장 규모에서는 차이의 부호도 확신할 수 없다.** 10만 이상에서 재볼 값이다.
+
+**작업 셋이 확정되어 있어 미리 예열할 수 있다.** v1~v5 는 발급될 행이 아직 없어 올려둘 대상이 없다. v6 은 1만 행이 이미 있으므로 이벤트 전에 통째로 버퍼 풀에 넣어둘 수 있다.
+
+`LOAD INDEX INTO CACHE` 는 MyISAM 전용이라 InnoDB 에는 안 먹는다. 읽어서 올린다.
+
+```sql
+-- 순번으로 행을 찾는 경로다
+SELECT COUNT(*) FROM member_coupon FORCE INDEX (uk_mc_coupon_seq)
+ WHERE coupon_id = ?;
+
+-- status 는 uk_mc_coupon_seq 에 없어 행까지 읽으므로 클러스터드 인덱스가 올라온다
+SELECT COUNT(status) FROM member_coupon FORCE INDEX (uk_mc_coupon_seq)
+ WHERE coupon_id = ?;
+
+-- 폴백 경로다
+SELECT COUNT(*) FROM member_coupon FORCE INDEX (idx_pending)
+ WHERE coupon_id = ? AND status = 'PENDING';
+
+-- UPDATE 가 member_id 를 바꾸므로 이 인덱스도 갱신 대상이다
+SELECT COUNT(*) FROM member_coupon FORCE INDEX (uk_mc_coupon_member)
+ WHERE coupon_id = ?;
+```
+
+**마지막 것이 빠지기 쉽다.** `member_id` 를 NULL 에서 값으로 바꾸는 것은 `uk_mc_coupon_member` 에서 `(coupon_id, NULL)` 을 지우고 `(coupon_id, 회원)` 을 넣는 일이라, 그 인덱스도 1만 번 갱신된다.
+
+**1초 이상 띄워 두 번 돌린다.** InnoDB 는 새로 읽은 페이지를 old 서브리스트에 넣어 풀 스캔이 캐시를 쓸어가는 것을 막는데, 예열도 같은 취급을 받는다. 한 번만 돌리면 올려둔 페이지가 old 에 남아 제일 먼저 쫓겨난다. `innodb_old_blocks_time` 기본값이 1000ms 라 그만큼 지난 뒤 다시 읽어야 young 으로 승격된다.
+
+용량은 부담이 아니다. 1만 행에 인덱스까지 10MB 아래이고 버퍼 풀은 약 700MB 다. 한 쿠폰의 1만 행이 `uk_mc_coupon_seq` 상 연속이라 페이지 수도 적다.
+
+**페일오버 뒤에는 다시 돌린다.** 9장의 RDS 페일오버는 버퍼 풀이 빈 인스턴스로 넘어가는 것이라 예열이 통째로 날아간다. 재개 직후 첫 배치들이 디스크를 읽게 되므로, 승격을 감지하면 예열을 다시 돌리는 절차가 필요하다.
+
+**측정에서는 예열 있음과 없음을 나눠 잰다.** 안 그러면 v6 이 빨라 보인 것이 예열 덕인지 update 덕인지 가릴 수 없다.
 
 ---
 
