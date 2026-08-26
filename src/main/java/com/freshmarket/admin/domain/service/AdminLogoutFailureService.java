@@ -13,6 +13,7 @@ import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /*
@@ -43,8 +44,12 @@ public class AdminLogoutFailureService {
      * 기존의 "조회 -> 없으면 INSERT" 방식은 두 요청이 동시에 없음을 확인한 뒤 둘 다 INSERT해
      * UNIQUE(admin_id) 충돌이 날 수 있다. upsertFailure()는 생성과 재오픈을 한 SQL에서 처리하므로
      * 그 경쟁 구간이 없고, 이미 해결된 행도 같은 행을 안전하게 재오픈한다.
+     *
+     * 실패 기록은 바깥 작업의 성공/롤백과 분리되어야 하므로 REQUIRES_NEW로 독립 커밋한다.
+     * 현재 logout() 자체는 트랜잭션이 아니지만, 향후 트랜잭션 안에서 호출되더라도 실패 이력이
+     * 상위 트랜잭션 롤백에 같이 사라지지 않도록 경계를 명시한다.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     void recordFailure(Long adminId, String refreshTokenHash, boolean redisFailed, boolean dbFailed) {
         if (!redisFailed && !dbFailed) {
             throw new IllegalArgumentException("redisFailed 또는 dbFailed 중 하나는 true여야 한다");
