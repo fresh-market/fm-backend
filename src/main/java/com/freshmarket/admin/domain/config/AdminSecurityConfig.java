@@ -50,11 +50,18 @@ class AdminSecurityConfig {
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .ignoringRequestMatchers(
-                                PathPatternRequestMatcher.withDefaults().matcher(POST, "/v1/admin/auth/tokens")))
+                                PathPatternRequestMatcher.withDefaults().matcher(
+                                        POST, "/v1/admin/auth/tokens"),
+                                PathPatternRequestMatcher.withDefaults().matcher(
+                                        POST, "/v1/admin/auth/tokens:refresh")))
                 .authorizeHttpRequests(auth -> auth
                         // 로그인(POST)은 인증 그 자체라 공개해야 한다
-                        .requestMatchers(POST, "/v1/admin/auth/tokens").permitAll()
-                        // 재발급/로그아웃 등 로그인 외 관리자 인증 API는 TYPE_ADMIN 권한을 요구한다
+                        .requestMatchers(
+                                POST,
+                                "/v1/admin/auth/tokens",
+                                "/v1/admin/auth/tokens:refresh")
+                        .permitAll()
+                        // 로그아웃 등 재발급 이외의 관리자 인증 API는 TYPE_ADMIN 권한을 요구한다
                         .anyRequest().hasAuthority(ADMIN))
                 .build();
     }
