@@ -40,6 +40,18 @@ class AdminLogoutTransactionService {
         return new LogoutDbState(refreshTokenHash);
     }
 
+    /**
+     * 지연 재시도에서는 실패 당시 Refresh Token과 현재 DB 토큰이 같은 경우에만 폐기한다.
+     * 0건 수정은 이미 폐기됐거나 재로그인으로 새 토큰으로 교체됐다는 뜻이므로 정상 완료로 본다.
+     */
+    @Transactional(timeout = 5)
+    void revokeRefreshTokenIfMatches(Long adminId, String expectedRefreshTokenHash) {
+        Objects.requireNonNull(adminId, "adminId");
+        Objects.requireNonNull(expectedRefreshTokenHash, "expectedRefreshTokenHash");
+
+        adminRepository.clearRefreshTokenIfMatches(adminId, expectedRefreshTokenHash);
+    }
+
     /** Access Token 차단까지 확정된 뒤 성공 감사 로그를 별도 짧은 트랜잭션으로 기록한다. */
     @Transactional(timeout = 5)
     void recordSuccess(Long adminId) {

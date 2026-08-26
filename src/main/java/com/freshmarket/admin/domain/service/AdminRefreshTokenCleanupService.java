@@ -61,6 +61,29 @@ class AdminRefreshTokenCleanupService {
         return null;
     }
 
+    /**
+     * 아웃박스의 지연 재시도 전용 DB 폐기. 실패 당시 해시와 현재 DB 해시가 같을 때만 지운다.
+     * 재로그인으로 새 해시가 저장된 경우 조건부 UPDATE가 0건으로 끝나므로 새 RT를 보호한다.
+     */
+    boolean revokeDbIfMatchesWithRetry(Long adminId, String expectedRefreshTokenHash) {
+        DataAccessException lastFailure = null;
+
+        for (int attempt = 1; attempt <= MAX_DB_REVOKE_ATTEMPTS; attempt++) {
+            try {
+                adminLogoutTransactionService.revokeRefreshTokenIfMatches(adminId, expectedRefreshTokenHash);
+                return true;
+            } catch (DataAccessException e) {
+                lastFailure = e;
+                log.warn("event=ADMIN_LOGOUT_DB_REVOKE_IF_MATCHES_RETRY adminId={} attempt={}",
+                        adminId, attempt, e);
+            }
+        }
+
+        log.error("event=ADMIN_LOGOUT_DB_REVOKE_IF_MATCHES_GAVE_UP adminId={} attempts={}",
+                adminId, MAX_DB_REVOKE_ATTEMPTS, lastFailure);
+        return false;
+    }
+
     /*
      * Refresh Token의 Redis 기본 레코드(tokenHash가 있을 때만)와 active key를 정리한다.
      * 둘 다 확정(CONFIRMED)돼야 true를 반환한다 — 하나라도 아니면 전체를 다시 시도할 대상이다.

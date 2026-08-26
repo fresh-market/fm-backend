@@ -65,6 +65,28 @@ class AdminRefreshTokenCleanupServiceTest {
         verify(adminLogoutTransactionService, times(3)).revokeRefreshToken(1L);
     }
 
+    @Test
+    void 지연_DB폐기는_실패당시_해시를_조건으로_사용한다() {
+        String tokenHash = "a".repeat(64);
+
+        boolean result = sut.revokeDbIfMatchesWithRetry(1L, tokenHash);
+
+        assertThat(result).isTrue();
+        verify(adminLogoutTransactionService).revokeRefreshTokenIfMatches(1L, tokenHash);
+    }
+
+    @Test
+    void 조건부_DB폐기가_3회_실패하면_false를_반환한다() {
+        String tokenHash = "a".repeat(64);
+        doThrow(new DataAccessResourceFailureException("db down"))
+                .when(adminLogoutTransactionService).revokeRefreshTokenIfMatches(1L, tokenHash);
+
+        boolean result = sut.revokeDbIfMatchesWithRetry(1L, tokenHash);
+
+        assertThat(result).isFalse();
+        verify(adminLogoutTransactionService, times(3)).revokeRefreshTokenIfMatches(1L, tokenHash);
+    }
+
     // ---- cleanupRedisWithRetry() ----
 
     @Test

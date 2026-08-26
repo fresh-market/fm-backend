@@ -333,6 +333,31 @@ class AdminAuthServiceTest {
     }
 
     @Test
+    void DB폐기가_모두_실패하면_Redis_active_hash를_실패기록에_남긴다() {
+        String activeTokenHash = "a".repeat(64);
+
+        when(refreshTokenRepository.findActiveHash("ROLE_ADMIN", 1L))
+                .thenReturn(Optional.of(activeTokenHash));
+
+        when(adminRefreshTokenCleanupService.revokeDbWithRetry(1L))
+                .thenReturn(null);
+
+        when(adminRefreshTokenCleanupService.cleanupRedisWithRetry(
+                "ROLE_ADMIN",
+                1L,
+                activeTokenHash))
+                .thenReturn(true);
+
+        adminAuthService.logout(1L, "ROLE_ADMIN");
+
+        verify(adminLogoutFailureService).recordFailure(
+                1L,
+                activeTokenHash,
+                false,
+                true);
+    }
+
+    @Test
     void AccessToken_차단_타임아웃이어도_후속조회에서_반영이_확인되면_로그아웃에_성공한다() {
         LocalDateTime cutoff = LocalDateTime.now(clock);
         when(adminRefreshTokenCleanupService.revokeDbWithRetry(1L))

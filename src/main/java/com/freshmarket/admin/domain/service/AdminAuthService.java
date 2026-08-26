@@ -190,11 +190,16 @@ public class AdminAuthService {
         Objects.requireNonNull(adminId, "adminId");
         Objects.requireNonNull(role, "role");
 
+        // DB 폐기가 실패하면 트랜잭션 밖으로 기존 해시를 반환받을 수 없으므로, 지연 재시도가
+        // 새 로그인 RT를 잘못 지우지 않게 실패 대상의 해시를 Redis active index에서 먼저 보조 확보한다.
+        // 조회 실패는 로그아웃 자체를 막지 않고, DB 폐기가 성공하면 DB에서 얻은 해시를 우선 사용한다.
+        String activeTokenHash = findActiveRefreshTokenHashSafely(role, adminId);
+
         AdminLogoutTransactionService.LogoutDbState dbState =
                 adminRefreshTokenCleanupService.revokeDbWithRetry(adminId);
 
         boolean dbFailed = dbState == null;
-        String tokenHash = dbFailed ? null : dbState.refreshTokenHash();
+        String tokenHash = dbFailed ? activeTokenHash : dbState.refreshTokenHash();
 
         boolean redisOk = adminRefreshTokenCleanupService.cleanupRedisWithRetry(role, adminId, tokenHash);
         boolean redisFailed = !redisOk;
@@ -220,6 +225,20 @@ public class AdminAuthService {
         }
 
         log.info("event=ADMIN_LOGOUT success=true adminId={}", adminId);
+    }
+
+    /*
+     * DB 폐기 실패 시 아웃박스에 과거 RT 해시를 남길 수 있도록 Redis active index를 보조 조회한다.
+     * 조회가 실패하면 null을 반환한다. null인 실패 건은 지연 재시도에서 조건 없는 DB 삭제를 하지 않는다.
+     */
+    private String findActiveRefreshTokenHashSafely(String role, Long adminId) {
+        try {
+            return refreshTokenRepository.findActiveHash(role, adminId).orElse(null);
+        } catch (DataAccessException e) {
+            log.warn("event=ADMIN_LOGOUT_ACTIVE_REFRESH_TOKEN_LOOKUP_FAILED "
+                    + LOG_FIELDS_ROLE_ADMIN_ID, role, adminId, e);
+            return null;
+        }
     }
 
     /*

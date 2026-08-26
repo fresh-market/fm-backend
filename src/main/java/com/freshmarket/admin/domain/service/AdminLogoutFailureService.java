@@ -103,17 +103,19 @@ public class AdminLogoutFailureService {
         boolean dbOk = !failure.isDbFailed();
 
         if (failure.isDbFailed()) {
-            var dbState = cleanupService.revokeDbWithRetry(adminId);
-            if (dbState != null) {
-                dbOk = true;
-                tokenHash = dbState.refreshTokenHash();
+            if (tokenHash == null) {
+                // 실패 당시 해시가 없으면 현재 DB의 토큰이 과거 로그아웃 대상인지,
+                // 그 뒤 재로그인으로 새로 발급된 토큰인지 구분할 수 없다.
+                // adminId만 보고 무조건 지우면 새 세션을 끊을 수 있으므로 지연 재시도에서는 건드리지 않는다.
+                log.warn("event=ADMIN_LOGOUT_DB_RETRY_SKIPPED_MISSING_HASH adminId={}", adminId);
+                dbOk = false;
+            } else {
+                dbOk = cleanupService.revokeDbIfMatchesWithRetry(adminId, tokenHash);
             }
         }
 
         boolean redisOk = !failure.isRedisFailed();
-        if (failure.isRedisFailed() || (dbOk && failure.isDbFailed())) {
-            // Redis가 원래도 실패했거나, DB 폐기가 이번에 새로 성공해 새 해시를 얻었다면
-            // 그 해시로 Redis 기본 레코드까지 마저 정리한다.
+        if (failure.isRedisFailed()) {
             redisOk = cleanupService.cleanupRedisWithRetry(role, adminId, tokenHash);
         }
 
