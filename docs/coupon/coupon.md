@@ -408,35 +408,40 @@ SELECT issue_seq FROM member_coupon WHERE coupon_id = ? AND member_id = ?;
 **순서가 있다.** 키를 먼저 지우면 지각 요청이 카운터 없는 Redis 를 친다.
 
 ```
-1  is_active 를 끈다.  관리자가 누르거나, 소진되면 배치가 끈다
+1  is_active 를 끈다.  관리자가 종료를 누르거나, issue_end_at 이 지나 배치가 끈다
 2  진행 중인 배치가 결판날 때까지 기다린다
 3  배치가 issued_quantity 를 실제 발급 수로 맞춘다
 4  배치가 세 키를 UNLINK 한다
 ```
 
-**소진되면 배치가 끈다.** 관리자가 누르지 않아도 끝나게 하는 장치다.
+**마감 시각이 지나면 배치가 끈다.** 관리자가 누르지 않아도 끝나게 하는 장치다.
 
 ```sql
-UPDATE coupon c SET is_active = FALSE, updated_at = NOW(6)
+UPDATE coupon SET is_active = FALSE, updated_at = NOW(6)
  WHERE is_active = TRUE AND total_quantity IS NOT NULL
-   AND (SELECT COUNT(*) FROM member_coupon WHERE coupon_id = c.coupon_id) >= total_quantity;
+   AND issue_end_at IS NOT NULL AND issue_end_at <= NOW(6);
 ```
 
-**발급 수는 실제 행 수라 구멍이 안 잡힌다.** 반납된 번호가 남아 있으면 `COUNT < total` 이라 안 꺼진다. 정말 다 나갔을 때만 꺼진다.
+**소진은 종료 조건이 아니다.** 소진돼도 반납된 번호가 있으면 다시 나갈 수 있어 최종이 아니기 때문이다. 끝났다고 판정하는 것은 **마감 시각과 관리자 판단** 둘뿐이다.
+
+`issue_end_at` 이 `NULL` 인 쿠폰은 관리자가 끌 때까지 켜져 있다. 소진 상태여도 스크립트가 `-1` 로 정상 거절하므로 해롭지 않다. 다만 TTL 을 걸 기준도 없어 **키가 관리자 동작까지 남는다.**
 
 **정리 대상은 DB 로 찾는다.** Redis 키가 남아 있는지로 찾지 않는다.
 
 ```sql
 SELECT coupon_id FROM coupon c
  WHERE is_active = FALSE AND total_quantity IS NOT NULL
+   AND updated_at < NOW(6) - INTERVAL 60 SECOND
    AND issued_quantity <> (SELECT COUNT(*) FROM member_coupon WHERE coupon_id = c.coupon_id);
 ```
 
 키로 찾으면 **TTL 이 키를 먼저 지웠을 때 대상을 놓쳐** 3번을 건너뛴다. DB 만 보면 TTL 길이와 배치 주기가 서로 묶이지 않는다. `is_active = FALSE` 조건이 발급 중인 쿠폰을 건드리지 않게 지킨다.
 
+**`updated_at` 조건이 2번의 대기를 만든다.** 이것이 없으면 배치가 방금 끈 쿠폰을 같은 실행에서 정리해 대기가 0 이 되고, 관리자가 끈 직후에 배치가 돌아도 마찬가지다. 60초는 배치 윈도우와 커밋과 캐시 지연을 합친 것보다 한참 크다.
+
 **1번이 먼저인 이유.** 새 요청을 1단계에서 끊는다. 다만 그 순간 **이미 서버 안에 들어와 1단계를 통과한 요청들이 남아 있고**, `is_active` 를 캐시해서 보는 버전이면 그 TTL 만큼 더 통과한다.
 
-**2번이 필요한 이유.** Redis 를 마지막으로 만지는 것은 순번 확보가 아니라 **실패 시 반납**이다. 커밋 시도 뒤에 오므로, 진행 중인 배치가 커밋되거나 실패해 반납까지 끝나야 Redis 호출이 다 끝난다. 대기는 `배치 윈도우 + 커밋 + 캐시 TTL` 보다 넉넉하면 되고 초 단위다.
+**2번을 지키는 것은 위 `updated_at` 조건이다.** Redis 를 마지막으로 만지는 것은 순번 확보가 아니라 **실패 시 반납**이다. 커밋 시도 뒤에 오므로, 진행 중인 배치가 커밋되거나 실패해 반납까지 끝나야 Redis 호출이 다 끝난다. 대기는 `배치 윈도우 + 커밋 + 캐시 TTL` 보다 넉넉하면 되고 초 단위다.
 
 **4번을 앞당기면 안 되는 이유.** 카운터가 없는 상태에서 요청이 닿으면 `INCR` 이 1 을 준다. 1번은 이미 남이 쓴 번호라 `uk_mc_coupon_seq` 에 걸린다. `maxmemory-policy` 로 경고한 상황을 손으로 만드는 셈이다.
 
