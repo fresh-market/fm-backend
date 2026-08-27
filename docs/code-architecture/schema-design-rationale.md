@@ -306,15 +306,17 @@ UNIQUE (pg_tid)   한 PG 거래가 두 주문에 붙는 것
 
 ### `coupon` 은 틀이고 `member_coupon` 이 실제 쿠폰이다
 
-`member_coupon` 이 발급 시점에 조건 8개를 복사해 온다.
+`member_coupon` 은 발급 조건을 복사하지 않는다. **쿠폰 정책은 한 번 만들면 바뀌지 않기 때문이다.**
 
 ```
-coupon_name  scope  discount_type  discount_value
-max_discount_amount  min_order_amount  valid_from  valid_to
+참조로 둔다   coupon_name  discount_type  discount_value
+              max_discount_amount  min_order_amount  valid_from  valid_to
+
+행에 남긴다   scope        복합 외래 키에 쓰인다 (아래)
+              issue_limit  한정 수량을 강제하는 장치다 (아래)
 ```
 
-**복사하는 이유는 `coupon` 이 살아 있는 표라 관리자가 고칠 수 있기 때문이다.**
-참조만 두면 이미 받아 둔 쿠폰의 이름과 할인액이 나중에 바뀌고, 과거 주문 내역의 표시도 함께 바뀐다.
+**원래는 복사했고, 근거는 `coupon` 이 살아 있는 표라 관리자가 고칠 수 있다는 것이었다.**
 
 ```
 5월  coupon 42: '신규가입 5,000원', 5000   -> 주문. coupon_discount = 5000 저장
@@ -322,10 +324,17 @@ max_discount_amount  min_order_amount  valid_from  valid_to
      -> 5월 주문을 열면 "여름 특가 8,000원 적용, -5,000원"
 ```
 
-금액은 주문에 박혀 있고 이름만 현재 값을 읽어 와서 앞뒤가 안 맞는다.
-`order_item` 이 `name_snapshot` 과 `unit_price` 를 남기는 것과 같은 문제이고 같은 해법이다.
+**정책을 불변으로 두면 이 시나리오가 성립하지 않는다.** 쿠폰을 고쳐 재활용하는 대신 새 `coupon` 행을 만든다.
+`order_item` 의 `name_snapshot` 과는 성격이 갈린다. 상품명과 가격은 실제로 바뀌지만 쿠폰 정책은 안 바뀐다.
 
-**쿠폰함도 함께 해결된다.** 관리자가 할인액을 고쳐도 이미 받아 둔 사람의 쿠폰은 안 바뀐다.
+**얻는 것은 행 크기다.** `coupon_name VARCHAR(100)` 하나만 빼도 행이 백 바이트 가까이 줄고,
+그만큼 페이지당 행 수가 늘어 쓰기와 버퍼 풀이 가벼워진다. 발급 이력이 300만 건 규모라 누적 효과가 크고,
+선착순 발급 경로가 `INSERT` 하나뿐이라 **행 크기가 곧 쓰기 비용이다**(`coupon.md` 3장).
+
+**대가는 전제 하나다.** 정책 수정 기능이 생기면 이미 발급된 쿠폰의 조건까지 소급해 바뀐다.
+그때는 위 일곱 컬럼을 되돌려 다시 복사한다. **컬럼을 다시 더하는 방향이라 되돌리기가 어렵지 않다.**
+
+**쿠폰함 조회에는 `coupon` 조인이 붙는다.** 발급이 아니라 조회 경로의 비용이다.
 
 ### 대상 옵션은 필수이고 복사하지 않는다
 
@@ -333,8 +342,8 @@ max_discount_amount  min_order_amount  valid_from  valid_to
 그 해석은 관리자가 대상을 실수로 지웠을 때 전 상품 할인으로 바뀌고, 그 사고가 조용하다.
 대상이 필수라야 `order_item` 이 복합 외래 키로 대상 여부를 강제할 수 있기도 하다.
 
-**복사 값 중 `scope` 만 성격이 다르다.** 나머지 일곱은 관리자가 `coupon` 을 고쳐도 옛 발급분이 옛 값을 유지하는
-진짜 스냅샷인데, `scope` 는 복합 외래 키로 `coupon.scope` 와 같기를 강제한다.
+**`scope` 만 행에 남는다.** 나머지 일곱과 달리 이것은 스냅샷이 아니라 **복합 외래 키의 한 칸**이라,
+`coupon.scope` 와 같기를 강제하는 역할을 한다.
 
 ```sql
 FOREIGN KEY (coupon_id, scope) REFERENCES coupon (coupon_id, scope)
@@ -436,8 +445,9 @@ UPDATE coupon SET issued_quantity = issued_quantity + 1
 서로 다른 번호가 `1..issue_limit` 안에만 존재하므로 **행 수는 한도를 넘을 수 없다.**
 카운터의 정확성은 여전히 앱 몫이지만, 그 오차가 한정 수량을 깨뜨리지는 못한다.
 
-`issue_limit` 을 복사하는 것은 다른 조건들과 같은 이유다. 관리자가 수량을 100 에서 200 으로 늘리면
-이후 발급분만 새 한도로 판정되고 이미 나간 것은 그대로다. 줄이면 그 시점부터 발급이 멈춘다.
+`issue_limit` 은 다른 조건들과 이유가 다르다. **표시용 스냅샷이 아니라 이 제약을 성립시키는 장치다.**
+CHECK 은 다른 테이블을 못 보므로 `coupon.total_quantity` 를 참조로 두면 위 CHECK 자체를 걸 수 없고,
+한정 수량 강제가 DB 를 떠나 앱으로 넘어간다. **정책을 불변으로 두더라도 이 컬럼은 남는다.**
 
 무제한 쿠폰은 둘 다 `NULL` 이다. MySQL UNIQUE 가 `NULL` 을 중복으로 보지 않아 **번호를 다투지 않는다.**
 `NULL` 을 비워 두는 것으로 제약을 끄는 방식은 3장의 조건부 유일성과 같은 수법이다.
@@ -1503,9 +1513,10 @@ SELECT 'product', p.product_id FROM product p
    AND NOT EXISTS (SELECT 1 FROM product_option o WHERE o.product_id = p.product_id);
 ```
 
-**발급 시점 스냅샷은 검사 대상이 아니다.** `member_coupon.issue_limit` 이 `coupon.total_quantity` 와
-같은지 보려다 접었다. 관리자가 한정 수량을 늘리면 옛 발급분이 다른 값을 갖는 것이 정상이라 매번 오탐이 난다.
-`coupon_name` 이나 `discount_value` 를 안 보는 것과 같은 이유이고, 대신 8 번이 **불변식 자체**를 본다.
+**`issue_limit` 은 검사 대상이 아니다.** `coupon.total_quantity` 와 같은지 보려다 접었다.
+한정 수량을 늘리면 옛 발급분이 다른 값을 갖는 것이 정상이라 매번 오탐이 난다.
+정책을 불변으로 두기로 했으므로 실제로 갈릴 일은 드물지만, **갈려도 그것이 옳은 상태**라 검사로 잡을 값이 아니다.
+대신 8 번이 **불변식 자체**를 본다.
 
 **4 와 5 는 카운터가 생기면 따라붙는 짝이다.** 카운터를 두는 대가가 이 검사이고,
 `stock_lot.available_qty` 도 같은 성질이라 `stock_movement` 의 `qty_before` / `qty_after` 로 되짚을 수 있다.
@@ -1588,6 +1599,7 @@ MySQL 8.4 컨테이너에 올려 표를 만들고 제약이 실제로 동작하�
 
 ```
 쿠폰 재설계             캠페인 표 제거, member_coupon 이 조건을 복사
+쿠폰 조건 복사 철회      정책 불변 전제로 일곱 컬럼을 참조로 되돌림
 포인트와 등급 할인 제거
 폐기 표 흡수            stock_disposal 이 stock_movement 로 들어감
 DATETIME(6) 전환        시각 컬럼 79 개
