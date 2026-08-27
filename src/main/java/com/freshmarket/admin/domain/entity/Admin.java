@@ -62,12 +62,14 @@ public class Admin extends BaseMutableTimeEntity {
     private LocalDateTime deletedAt;
 
     /*
-     * 패키지 전용이다(private 가 아니다). 관리자 등록(계정 발급) 기능이 아직 없어 프로덕션
-     * 호출부가 없다 — 있지도 않은 기능을 위해 public 팩터리를 미리 만들어두면 EC-3-08
-     * (프로덕션 코드에 테스트 전용 생성 수단 금지) 위반이 된다.
-     * 그래서 생성은 같은 패키지의 테스트 코드(AdminFixture, AdminTest)가 이 생성자를 직접 호출하는 것으로 대신한다.
-     * 실제 등록 유스케이스가 생기면, 그 서비스가 아이디 중복 검사 등 발급 정책을 검사한 뒤 이 생성자를 감싸는 public 팩터리를 여기에 새로 추가한다.
+     * 관리자 계정 발급 서비스는 아이디 중복과 비밀번호 정책 같은 유스케이스 규칙을 먼저 검사한 뒤
+     * 이 팩터리로 ACTIVE 관리자 엔티티를 만든다. 외부에서 status를 주입할 수 없게 해 신규 계정은
+     * 항상 활성 상태로 시작한다.
      */
+    public static Admin register(String loginId, String passwordHash, String name, AdminRole role) {
+        return new Admin(loginId, passwordHash, name, role);
+    }
+
     Admin(String loginId, String passwordHash, String name, AdminRole role) {
         validateLoginId(loginId);
         validatePasswordHash(passwordHash);

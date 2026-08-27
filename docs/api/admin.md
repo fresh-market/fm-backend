@@ -30,16 +30,18 @@ DELETE /v1/admin/admins/{adminId}
 **최고관리자만 할 수 있다** (`SUPER_ADMIN`). 나머지는 `403` 이다.
 
 ```json
-{ "loginId": "admin.lee", "name": "이관리", "role": "ADMIN" }
+{ "loginId": "admin.lee", "initialPassword": "Freshman!2026", "name": "이관리", "role": "ADMIN" }
 ```
 
 | 필드 | 필수 | 제약 |
 |---|---|---|
 | `loginId` | O | 50자 이하. 중복 불가 |
+| `initialPassword` | O | 10~72자. 영문 대문자·소문자·숫자·특수문자 모두 포함 |
 | `name` | O | 50자 이하 |
 | `role` | O | `ADMIN` 또는 `SUPER_ADMIN` |
 
-임시 비밀번호를 발급한다. 비밀번호 변경 기능은 현재 구현 범위에 포함하지 않는다.
+요청의 `initialPassword`를 임시 비밀번호로 사용하며 서버에는 BCrypt 해시만 저장한다.
+비밀번호 변경 기능은 현재 구현 범위에 포함하지 않는다.
 
 **삭제는 하드 삭제가 아니라 비활성화다.** 이력 테이블 다섯이 `admin_id` 를 참조해 지울 수 없다.
 비활성화하면 리프레시 토큰을 비운다. Access 토큰의 즉시 무효화 처리는 관리자 비활성화 구현 시 별도로 연동한다.
