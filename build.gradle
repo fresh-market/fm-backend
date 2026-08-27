@@ -119,6 +119,15 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
 
     /*
+     * Boot 4가 아웃바운드 WebClient 자동구성(WebClientAutoConfiguration,
+     * org.springframework.boot.webclient.WebClientCustomizer)을 spring-boot-webflux와
+     * 별도 모듈(spring-boot-webclient)로 쪼개놨다 — 위 webflux 스타터만으로는 이 모듈이
+     * 안 끌려온다. WebClientConfig의 defaultExternalApiCustomizer(공통 타임아웃/풀/필터)가
+     * 실제로 적용되려면 이 스타터가 필요하다.
+     */
+    implementation 'org.springframework.boot:spring-boot-starter-webclient'
+
+    /*
      * @Scheduled 메서드 공통 로깅(SchedulerLoggingAspect)이 커스텀 애노테이션
      * 포인트컷(@annotation(...))을 쓴다. spring-aop 자체는 spring-data-jpa가
      * (→ @Transactional 프록시) 전이 의존성으로 이미 들여오지만, AspectJ 애노테이션
