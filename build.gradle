@@ -128,6 +128,13 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webclient'
 
     /*
+     * 카카오 OIDC 외부 API(로그인 토큰교환/로그아웃/unlink) 서킷브레이커.
+     * Boot 4는 spring-boot-starter-webflux(위)와 별도로 spring-boot4 전용 아티팩트가 있다
+     * (spring-boot-starter-resilience4j가 아니라 spring-boot3용과 나뉘어 있음).
+     */
+    implementation 'io.github.resilience4j:resilience4j-spring-boot4:2.4.0'
+
+    /*
      * @Scheduled 메서드 공통 로깅(SchedulerLoggingAspect)이 커스텀 애노테이션
      * 포인트컷(@annotation(...))을 쓴다. spring-aop 자체는 spring-data-jpa가
      * (→ @Transactional 프록시) 전이 의존성으로 이미 들여오지만, AspectJ 애노테이션

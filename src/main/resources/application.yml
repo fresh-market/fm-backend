@@ -151,3 +151,36 @@ jwt:
 kakao:
   app-id: "${KAKAO_APP_ID}"
   admin-key: "${KAKAO_ADMIN_KEY}"
+
+# 카카오 OIDC 외부 API(로그인 토큰교환/로그아웃/unlink) 서킷브레이커.
+# 인스턴스를 API별로 나눈다 — 하나가 막혀도 다른 API까지 같이 막히지 않는다.
+# 수치는 kakao-common 하나로 공유한다(base-config) — 값만 공유할 뿐 상태(open/closed)는
+# 인스턴스별로 독립이다. 이름을 하나로 합치지 않는 한 세 서킷은 절대 같이 안 열린다.
+resilience4j:
+  circuitbreaker:
+    configs:
+      kakao-common:
+        slidingWindowType: TIME_BASED
+        slidingWindowSize: 60              # 최근 60초
+        minimumNumberOfCalls: 5            # 트래픽 뜸한 시간대에 소수 실패로 오탐 열리는 것 방지
+        failureRateThreshold: 50
+        slowCallDurationThreshold: 3s      # WebClientConfig의 connect timeout과 맞춘 기준
+        slowCallRateThreshold: 50
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 1
+        maxWaitDurationInHalfOpenState: 5s
+        # 트래픽이 뜸한 API라 백그라운드 스레드로 자동 전환할 필요가 없다 —
+        # waitDuration이 지난 뒤 다음 실제 요청이 half-open 전환 여부를 판단한다
+        automaticTransitionFromOpenToHalfOpenEnabled: false
+        # /actuator/health에 묶지 않는다 (INF-16과 같은 이유 — readiness의 diskSpace 화이트리스트
+        # 참고). 카카오 장애는 우리 배포/DB/주문과 무관한 제3자 장애라, 이걸로 health를 DOWN
+        # 시키면 배포 스모크나 ALB가 엉뚱하게 반응한다. 상태 확인은 Micrometer/Prometheus로 한다.
+        registerHealthIndicator: false
+        eventConsumerBufferSize: 100
+    instances:
+      kakaoLogin:
+        base-config: kakao-common
+      kakaoLogout:
+        base-config: kakao-common
+      kakaoUnlink:
+        base-config: kakao-common
