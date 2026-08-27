@@ -26,7 +26,10 @@ public enum AdminErrorCode implements ErrorCode {
     ADMIN_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMIN-009", "관리자 계정을 찾을 수 없습니다."),
 
     // DB/Redis 로그아웃 작업을 한 번 시도했지만 완료하지 못한 경우. 이후 재시도는 클라이언트가 새 요청으로 수행한다.
-    LOGOUT_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "ADMIN-010", "로그아웃 처리에 실패했습니다. 잠시 후 다시 시도해주세요.");
+    LOGOUT_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "ADMIN-010", "로그아웃 처리에 실패했습니다. 잠시 후 다시 시도해주세요."),
+
+    // 로그인 인증은 성공했지만 Refresh Token을 Redis에 저장하지 못해 토큰 발급을 완료할 수 없는 경우
+    LOGIN_TOKEN_ISSUE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "ADMIN-011", "로그인 토큰 발급에 실패했습니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus httpStatus;
     private final String code;

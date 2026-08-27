@@ -153,7 +153,9 @@ class AdminAuthServiceTest {
         AdminLoginRequest request = new AdminLoginRequest("admin.kim", RAW_PASSWORD);
 
         assertThatThrownBy(() -> adminAuthService.login(request))
-                .isInstanceOf(DataAccessResourceFailureException.class);
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminErrorCode.LOGIN_TOKEN_ISSUE_FAILED);
 
         verify(refreshTokenRepository).revokeIfActiveHashMatches(
                 any(), eq("ROLE_ADMIN"), eq(admin.getId()));

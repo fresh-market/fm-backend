@@ -162,7 +162,12 @@ public class AdminAuthService {
                     refreshTtl);
         } catch (DataAccessException e) {
             compensateFailedRefreshTokenSave(dbState.adminId(), role, refreshTokenHash);
-            throw e;
+            log.error(
+                    "event=ADMIN_LOGIN_REFRESH_TOKEN_SAVE_FAILED adminId={} errorType={}",
+                    dbState.adminId(),
+                    SafeExceptionLog.errorType(e),
+                    SafeExceptionLog.stackTrace(e));
+            throw new AdminException(AdminErrorCode.LOGIN_TOKEN_ISSUE_FAILED);
         }
 
         AdminLoginResponse response = new AdminLoginResponse(
