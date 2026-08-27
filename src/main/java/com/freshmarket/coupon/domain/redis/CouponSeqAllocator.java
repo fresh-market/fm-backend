@@ -3,7 +3,6 @@ package com.freshmarket.coupon.domain.redis;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 
@@ -39,7 +38,6 @@ public class CouponSeqAllocator {
     private static final String NOT_PREPARED = "-2";
 
     private final StringRedisTemplate redisTemplate;
-    private final Clock clock;
     private final RedisScript<String> allocateScript;
     private final Duration reclaimAfter;
 
@@ -49,10 +47,8 @@ public class CouponSeqAllocator {
      * 달라져도 아직 살아 있는 요청의 번호를 뺏는다. 요청 예산보다 길게 잡아야 한다.
      */
     public CouponSeqAllocator(StringRedisTemplate redisTemplate,
-                              Clock clock,
                               @Value("${coupon.issue.reclaim-after:60s}") Duration reclaimAfter) {
         this.redisTemplate = redisTemplate;
-        this.clock = clock;
         this.reclaimAfter = reclaimAfter;
         this.allocateScript = loadAllocateScript();
     }
@@ -83,7 +79,6 @@ public class CouponSeqAllocator {
                 List.of(seqKey(couponId), freeKey(couponId), counterKey(couponId), pendingKey(couponId)),
                 String.valueOf(memberId),
                 String.valueOf(issueLimit),
-                String.valueOf(clock.millis()),
                 String.valueOf(reclaimAfter.toMillis())
         );
         return parse(raw);

@@ -1,6 +1,6 @@
 -- 선착순 발급의 순번 확보. docs/coupon/coupon.md 3장이 이 스크립트의 근거다.
 -- KEYS[1]=seq(해시)  KEYS[2]=free(정렬집합)  KEYS[3]=counter(문자열)  KEYS[4]=pending(정렬집합)
--- ARGV[1]=memberId  ARGV[2]=issueLimit  ARGV[3]=지금(ms)  ARGV[4]=회수 기준(ms)
+-- ARGV[1]=memberId  ARGV[2]=issueLimit  ARGV[3]=회수 기준(ms)
 -- 반환 "6" 번호를 받았다 / "6:1" 이미 발급됐다 / "-1" 소진 / "-2" 준비되지 않았다
 
 -- 카운터가 없으면 순번을 내주지 않는다. 재건 전에 INCR 이 1 을 주는 것을 막는 가드다
@@ -14,10 +14,15 @@ if mine then
   return mine
 end
 
+-- 시각은 앱이 아니라 Redis 에서 받는다. 점수를 쓰는 인스턴스와 재는 인스턴스가 달라서다
+-- 앱 시계로 하면 어긋난 한 대가 살아 있는 요청의 번호까지 오래된 것으로 보고 뺏는다
+local t = redis.call('TIME')
+local now = t[1] * 1000 + math.floor(t[2] / 1000)
+
 -- 번호를 주면서 미확정으로 표시한다. 커밋 뒤에 플러시 스레드가 확정 표시를 붙이고 pending 에서 뺀다
 local function give(seq)
   redis.call('HSET', KEYS[1], ARGV[1], seq)
-  redis.call('ZADD', KEYS[4], ARGV[3], ARGV[1])
+  redis.call('ZADD', KEYS[4], now, ARGV[1])
   return seq
 end
 
@@ -35,7 +40,7 @@ redis.call('DECR', KEYS[3])
 
 -- 여기부터 소진이다. 묶인 번호가 있으면 회수해 이 요청에게 준다
 -- 재고가 남아 있는 동안에는 이 구간에 오지 않으므로 평상시 비용이 0 이다
-local cut = tonumber(ARGV[3]) - tonumber(ARGV[4])
+local cut = now - tonumber(ARGV[3])
 local stale = redis.call('ZRANGEBYSCORE', KEYS[4], 0, cut, 'LIMIT', 0, 1)
 if stale[1] then
   local seq = redis.call('HGET', KEYS[1], stale[1])
