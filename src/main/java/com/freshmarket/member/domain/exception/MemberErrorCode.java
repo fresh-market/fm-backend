@@ -59,6 +59,11 @@ public enum MemberErrorCode implements ErrorCode {
     // (2026-08-27) 로그아웃도 unlink처럼 서킷브레이커 대상이라, 내부에서 삼키지 않고 던져야
     // CB가 실패를 인지한다 — KakaoLogoutClient/KakaoLogoutEventListener 참고.
     KAKAO_LOGOUT_FAILED(HttpStatus.BAD_GATEWAY, "MEMBER-019", "카카오 로그아웃 요청에 실패했습니다."),
+    // (2026-08-27, PR 리뷰 P1) 카카오가 4xx(429 제외)로 "정상적으로" 거절한 unlink 요청 전용.
+    // KAKAO_UNLINK_FAILED와 분리한 이유는 재시도 정책이 다르기 때문이다 — 이건 재시도해도
+    // 결과가 똑같으므로 KakaoUnlinkRejectedException으로 던져서 자동 재시도 없이 즉시 수동
+    // 처리 대상으로 넘긴다(KakaoUnlinkClient/KakaoUnlinkEventListener/KakaoUnlinkRetryService 참고).
+    KAKAO_UNLINK_REJECTED(HttpStatus.BAD_GATEWAY, "MEMBER-020", "카카오가 연결 해제 요청을 거절했습니다. 관리자 확인이 필요합니다."),
     ;
 
     private final HttpStatus httpStatus;

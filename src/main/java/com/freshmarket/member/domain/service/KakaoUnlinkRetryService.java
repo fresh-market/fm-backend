@@ -2,6 +2,7 @@ package com.freshmarket.member.domain.service;
 
 import com.freshmarket.member.domain.client.KakaoUnlinkClient;
 import com.freshmarket.member.domain.entity.KakaoUnlinkFailure;
+import com.freshmarket.member.domain.exception.KakaoUnlinkRejectedException;
 import com.freshmarket.member.domain.repository.KakaoUnlinkFailureRepository;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +36,17 @@ public class KakaoUnlinkRetryService {
                 () -> failureRepository.save(KakaoUnlinkFailure.record(memberId, kakaoUserId)));
     }
 
+    /**
+     * (2026-08-27, PR 리뷰 P1) 카카오가 4xx(429 제외)로 "정상적으로" 거절한 경우 전용 — 재시도해도
+     * 결과가 같으므로 recordFailure()처럼 카운트를 하나씩 늘리지 않고 바로 포기 상태로 만든다.
+     */
+    @Transactional
+    public void recordRejected(Long memberId, String kakaoUserId) {
+        failureRepository.findByMemberId(memberId).ifPresentOrElse(
+                KakaoUnlinkFailure::markRejected,
+                () -> failureRepository.save(KakaoUnlinkFailure.recordRejected(memberId, kakaoUserId)));
+    }
+
     /** 포기 문턱 미만의 미해소 행만 DB에서 조회해 재시도한다. */
     public void retryAllPending() {
         for (KakaoUnlinkFailure failure : failureRepository
@@ -57,6 +69,10 @@ public class KakaoUnlinkRetryService {
              */
             log.info("event=KAKAO_UNLINK_RETRY_SKIPPED_CIRCUIT_OPEN failureId={} — 카운트 증가 없이 다음 사이클로 넘김",
                     failureId);
+        } catch (KakaoUnlinkRejectedException e) {
+            // (2026-08-27, PR 리뷰 P1) 재시도 도중에도 4xx(429 제외) 거절은 markFailed()로 한
+            // 칸씩 깎아가지 않고 바로 포기 상태로 민다 — 어차피 재시도해도 똑같이 거절당한다.
+            outcomeService.markRejected(failureId, e);
         } catch (Exception e) {
             outcomeService.markFailed(failureId, e);
         }

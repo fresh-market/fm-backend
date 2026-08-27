@@ -2,6 +2,7 @@ package com.freshmarket.member.domain;
 
 import com.freshmarket.common.logging.PiiMasker;
 import com.freshmarket.member.domain.client.KakaoUnlinkClient;
+import com.freshmarket.member.domain.exception.KakaoUnlinkRejectedException;
 import com.freshmarket.member.domain.service.KakaoUnlinkRetryService;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +43,13 @@ public class KakaoUnlinkEventListener {
             log.warn("event=KAKAO_UNLINK_CIRCUIT_OPEN memberId={} kakaoUserId={} — 호출 자체를 안 하고 아웃박스로",
                     event.memberId(), PiiMasker.maskProviderId(event.kakaoUserId()));
             kakaoUnlinkRetryService.recordFailure(event.memberId(), event.kakaoUserId());
+        } catch (KakaoUnlinkRejectedException e) {
+            // (2026-08-27, PR 리뷰 P1) 카카오가 4xx(429 제외)로 "정상적으로" 거절한 경우다 —
+            // 재시도해도 결과가 같으므로 recordFailure()로 카운트를 하나씩 올리지 않고
+            // recordRejected()로 바로 포기(수동 처리 대상) 상태로 넘긴다.
+            log.error("event=KAKAO_UNLINK_REJECTED memberId={} kakaoUserId={} — 재시도 없이 즉시 수동 처리 대상",
+                    event.memberId(), PiiMasker.maskProviderId(event.kakaoUserId()), e);
+            kakaoUnlinkRetryService.recordRejected(event.memberId(), event.kakaoUserId());
         } catch (Exception e) {
             log.warn("event=KAKAO_UNLINK_FAILED memberId={} kakaoUserId={} — 아웃박스에 기록, 스케줄러가 재시도",
                     event.memberId(), PiiMasker.maskProviderId(event.kakaoUserId()), e);

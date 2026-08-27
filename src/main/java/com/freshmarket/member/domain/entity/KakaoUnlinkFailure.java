@@ -57,8 +57,25 @@ public class KakaoUnlinkFailure extends BaseMutableTimeEntity {
         return new KakaoUnlinkFailure(memberId, kakaoUserId);
     }
 
+    /**
+     * (2026-08-27, PR 리뷰 P1) 카카오가 4xx(429 제외)로 "정상적으로" 거절한 첫 시도를 기록할 때
+     * 쓰는 진입점 — record()와 달리 attemptCount를 처음부터 MAX_RETRY_ATTEMPTS로 만들어서
+     * retryAllPending()의 대상 조회(findByAttemptCountLessThanAndResolvedFalse)에서 바로
+     * 빠지게 한다. 재시도해도 결과가 같은 실패를 자동 재시도 큐에 태울 이유가 없다.
+     */
+    public static KakaoUnlinkFailure recordRejected(Long memberId, String kakaoUserId) {
+        KakaoUnlinkFailure failure = new KakaoUnlinkFailure(memberId, kakaoUserId);
+        failure.markRejected();
+        return failure;
+    }
+
     public void markRetryFailed() {
         this.attemptCount++;
+    }
+
+    /** 이미 있던 행이 이후 재시도에서 다시 4xx 거절을 받았을 때 즉시 포기 상태로 전환한다. */
+    public void markRejected() {
+        this.attemptCount = MAX_RETRY_ATTEMPTS;
     }
 
     public boolean shouldGiveUp() {
