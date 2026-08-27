@@ -28,12 +28,24 @@ class PaymentApiImpl implements PaymentApi {
         }
         /*
          * TODO: 실제 PG Gateway를 붙일 때 아래를 함께 구현한다.
-         * - PG에 orderId 기반 merchant payment key를 보내 중복 승인을 막는다.
+         *
+         * [중복 승인·결과 수렴]
+         * - PG에 orderId 기반의 merchant payment key(또는 PG가 요구하는 고유 주문번호)를 보낸다.
+         *   같은 결제 요청·웹훅·복구 작업이 여러 번 와도 PG 승인과 내부 상태가 한 건으로 수렴해야 한다.
+         * - PG 웹훅은 서명, 이벤트 ID, 결제 금액, merchant key를 검증하고, 이벤트 ID도 별도로 멱등 처리한다.
+         * - PG 승인 성공 후 DB의 Payment/Order/재고 확정 트랜잭션이 실패할 수 있다. 이 경우 PG 거래를
+         *   재조회해 PAID로 복구할 수 있어야 하며, 단순히 PENDING Payment를 반환하고 끝내면 안 된다.
+         *
+         * [실패·불확실 상태]
          * - 명확한 거절은 FAILED로 전이하고 PaymentFailedEvent를 발행한다.
-         * - 타임아웃/연결 단절처럼 승인 결과를 모르는 경우는 UNKNOWN으로 기록한 뒤,
-         *   PG 거래 조회 API와 batch 프로필 복구 스케줄러로 PAID 또는 FAILED를 확정한다.
-         * - 최종 결제 만료는 order 이벤트로 전달해 재고 예약과 쿠폰 사용을 되돌린다.
-         * - Gateway HTTP 연결/읽기 타임아웃, PG 원문 응답 코드 로그, 성공·실패 메트릭을 추가한다.
+         * - 타임아웃·연결 단절처럼 PG 승인 결과를 알 수 없으면 UNKNOWN으로 기록한다. 재호출로 이중
+         *   승인하지 말고 PG 거래 조회 API와 복구 배치로 PAID 또는 FAILED를 확정한다.
+         * - 결제 유효시간 만료·최종 실패는 order 이벤트로 전달해 PAYMENT_PENDING 주문을 취소하고,
+         *   재고 예약 및 쿠폰 사용을 같은 보상 흐름에서 되돌린다.
+         *
+         * [운영]
+         * - Gateway HTTP 연결/읽기 타임아웃, 제한된 재시도 정책, PG 원문 응답 코드·추적 ID 로그,
+         *   성공·실패·UNKNOWN·복구 지연 메트릭과 알림을 추가한다.
          */
         return paymentService.approvePayment(payment.getId(), paymentGateway.request(payment.toRequest()));
     }
