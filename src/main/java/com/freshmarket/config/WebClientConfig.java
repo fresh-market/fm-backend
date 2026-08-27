@@ -13,10 +13,9 @@ import reactor.netty.http.client.HttpClient;
 @Configuration
 public class WebClientConfig {
 
-    // 연결 자체가 안 되는 상황(네트워크/DNS)과 연결은 됐는데 응답이 안 오는 상황을 각각 다른
-    // 타임아웃으로 잡는다 — 커넥션 타임아웃만 있으면 "연결은 됐지만 응답을 영원히 안 주는" 카카오
-    // 장애를 못 막는다. 값은 보수적으로 잡았다(카카오 SLA 문서 없음) — 실제 운영 지연 분포를
-    // 보고 좁혀도 된다.
+    // 연결 자체가 안 되는 상황(네트워크/DNS)과 연결은 됐는데 응답이 안 오는 상황을 각각 다른타임아웃으로 잡는다
+    // 커넥션 타임아웃만 있으면 "연결은 됐지만 응답을 영원히 안 주는" 외부 API장애를 못 막는다
+    // 값은 보수적으로 3000ms 1차 방어선을 두었다 — 실제 운영 지연 분포를 보고 좁혀도 된다.
     private static final int CONNECT_TIMEOUT_MS = 3000;
     private static final Duration RESPONSE_TIMEOUT = Duration.ofSeconds(5);
 
