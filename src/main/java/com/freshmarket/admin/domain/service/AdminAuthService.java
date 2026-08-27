@@ -8,7 +8,6 @@ import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.logging.SafeExceptionLog;
 import com.freshmarket.admin.domain.repository.AdminRepository;
-import com.freshmarket.admin.domain.retry.FullJitterRetryPolicy;
 import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
 import com.freshmarket.common.auth.jwt.JwtTokenProvider;
 import com.freshmarket.common.auth.jwt.TokenType;
@@ -26,8 +25,6 @@ import com.freshmarket.common.logging.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
-import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.dao.QueryTimeoutException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -41,9 +38,9 @@ import org.springframework.stereotype.Service;
  * 리프레시 토큰은 member와 같은 공통 RefreshTokenRepository(Redis)에 저장한다.
  * 로그인은 최초 발급만 담당하고, Rotation은 별도 재발급 API에서 처리한다.
  *
- * Refresh Token의 Redis 정리와 DB 폐기(재시도 포함)는 AdminRefreshTokenCleanupService에 있다.
- * logout()에서 그 즉시 재시도(각 3회)까지 실패하면 AdminLogoutFailureService에 기록해두고,
- * AdminLogoutFailureScheduler가 10분 간격으로 재시도한다.
+ * Refresh Token의 Redis 정리와 DB 폐기는 AdminRefreshTokenCleanupService에 있다.
+ * 서버에서는 저장소 작업을 한 번만 시도한다. 실패하면 별도 실패 테이블이나 스케줄러에 넘기지 않고
+ * 실패 로그를 남긴 뒤 ADMIN-010으로 응답한다. 이후 재시도는 클라이언트의 새 로그아웃 요청으로 수행한다.
  */
 @Slf4j
 @Service
@@ -52,14 +49,6 @@ public class AdminAuthService {
     // 실제 계정과 무관한 값이다. 계정이 없을 때도 이 해시로 BCrypt 를 돌려 응답 시간을 맞춘다 (SEC-6-04)
     private static final String DUMMY_PASSWORD_SOURCE = "dummy-password-for-constant-time-comparison";
 
-    // Access Token 차단 커트라인 반영 여부를 확인할 때 사용하는 최소 시간 오프셋
-    private static final long CUTOFF_CONFIRMATION_OFFSET_NANOS = 1L;
-
-    // Access Token 차단 Redis 재시도도 요청 예산 안에서 Full Jitter 지수 백오프를 적용한다.
-    private static final int MAX_ACCESS_TOKEN_INVALIDATION_ATTEMPTS = 3;
-    private static final Duration ACCESS_TOKEN_RETRY_BUDGET = Duration.ofMillis(500);
-    private static final Duration ACCESS_TOKEN_RETRY_BASE_DELAY = Duration.ofMillis(25);
-    private static final Duration ACCESS_TOKEN_RETRY_MAX_DELAY = Duration.ofMillis(100);
 
     // 로그인 실패 로그 포맷
     private static final String LOG_ADMIN_LOGIN_FAILED = "event=ADMIN_LOGIN success=false loginId={}";
@@ -79,10 +68,7 @@ public class AdminAuthService {
     private final AdminLogoutTransactionService adminLogoutTransactionService;
     private final AdminLoginTransactionService adminLoginTransactionService;
     private final AdminRefreshTokenCleanupService adminRefreshTokenCleanupService;
-    private final AdminLogoutFailureService adminLogoutFailureService;
-    private final AdminAuditFailureService adminAuditFailureService;
     private final Clock clock;
-    private final FullJitterRetryPolicy retryPolicy;
     private final String dummyPasswordHash;
 
     public AdminAuthService(
@@ -94,10 +80,7 @@ public class AdminAuthService {
             AdminLogoutTransactionService adminLogoutTransactionService,
             AdminLoginTransactionService adminLoginTransactionService,
             AdminRefreshTokenCleanupService adminRefreshTokenCleanupService,
-            AdminLogoutFailureService adminLogoutFailureService,
-            AdminAuditFailureService adminAuditFailureService,
             Clock clock,
-            FullJitterRetryPolicy retryPolicy,
             @Value("${ADMIN_REFRESH_TOKEN_VALIDITY_SECONDS:86400}") long refreshTokenValiditySeconds) {
         this.adminRepository = adminRepository;
         this.passwordEncoder = passwordEncoder;
@@ -107,10 +90,7 @@ public class AdminAuthService {
         this.adminLogoutTransactionService = adminLogoutTransactionService;
         this.adminLoginTransactionService = adminLoginTransactionService;
         this.adminRefreshTokenCleanupService = adminRefreshTokenCleanupService;
-        this.adminLogoutFailureService = adminLogoutFailureService;
-        this.adminAuditFailureService = adminAuditFailureService;
         this.clock = clock;
-        this.retryPolicy = retryPolicy;
         this.refreshTokenValiditySeconds = refreshTokenValiditySeconds;
         // 같은 인코더로 미리 만들어 둬야 진짜 비밀번호 검증과 연산 비용(코스트 팩터)이 완전히 같다
         this.dummyPasswordHash = passwordEncoder.encode(DUMMY_PASSWORD_SOURCE);
@@ -200,7 +180,7 @@ public class AdminAuthService {
     /*
      * Redis save()는 기본 레코드와 active key를 두 번의 명령으로 저장하므로 중간 실패가 가능하다.
      * 실패하면 이번 로그인 해시만 Redis에서 조건부 제거하고 DB 백업도 같은 해시일 때만 지운다.
-     * 보상 자체가 실패한 저장소는 기존 로그아웃 실패 아웃박스에 남겨 지연 재시도로 이어간다.
+     * 보상 자체가 실패하면 별도 실패 테이블이나 스케줄러에 넘기지 않고 로그만 남긴다.
      */
     private void compensateFailedRefreshTokenSave(Long adminId, String role, String refreshTokenHash) {
         boolean redisFailed = false;
@@ -224,90 +204,87 @@ public class AdminAuthService {
         }
 
         if (redisFailed || dbFailed) {
-            adminLogoutFailureService.recordFailure(
-                    adminId, refreshTokenHash, redisFailed, dbFailed);
+            log.error(
+                    "event=ADMIN_LOGIN_COMPENSATION_INCOMPLETE adminId={} redisFailed={} dbFailed={}",
+                    adminId, redisFailed, dbFailed);
         }
     }
 
     /*
-     * 관리자 로그아웃. DB의 Refresh Token 백업을 먼저 폐기한 뒤 Redis 정리와 Access Token 차단을
-     * 수행한다 — 각각 AdminRefreshTokenCleanupService가 즉시 재시도(3회씩)까지 담당한다.
-     *
-     * Refresh Token은 DB를 최종 판정 기준으로 사용한다. 즉시 재시도(3회)까지 다 실패하면
-     * AdminLogoutFailureService에 기록해두고, 로그아웃 자체는 계속 진행한다 — 아웃박스에 남았으니
-     * 스케줄러가 다시 시도할 것이고, 여기서 실패로 응답을 막을 이유는 없다(Access Token 차단은
-     * 별개로 확정되고, DB는 이미 최종 판정 기준으로 재발급을 거부할 근거를 갖고 있다).
-     *
-     * Access Token은 기존 공용 JwtAuthenticationFilter의 Redis fail-open 정책을 유지하되,
-     * 이 로그아웃 요청 자체는 차단 커트라인 저장 결과를 확정하지 못하면 성공으로 응답하지 않는다.
+     * 관리자 로그아웃. DB Refresh Token 폐기 -> Redis Refresh Token 정리 -> Access Token 차단 순서로 수행한다.
+     * DB/Redis 작업은 서버에서 각각 한 번만 시도하고, 실패를 별도 DB 테이블이나 스케줄러로 재처리하지 않는다.
+     * 하나라도 실패하면 실패 로그를 남기고 ADMIN-010으로 종료한다.
+     * 클라이언트가 다시 로그아웃을 요청하면 멱등적인 폐기/삭제 로직을 처음부터 다시 수행한다.
      */
     public void logout(Long adminId, String role) {
         Objects.requireNonNull(adminId, "adminId");
         Objects.requireNonNull(role, "role");
 
-        // DB 폐기가 실패하면 트랜잭션 밖으로 기존 해시를 반환받을 수 없으므로, 지연 재시도가
-        // 새 로그인 RT를 잘못 지우지 않게 실패 대상의 해시를 Redis active index에서 먼저 보조 확보한다.
-        // 조회 실패는 로그아웃 자체를 막지 않고, DB 폐기가 성공하면 DB에서 얻은 해시를 우선 사용한다.
-        String activeTokenHash = findActiveRefreshTokenHashSafely(role, adminId);
+        // 클라이언트 재요청에서 DB RT가 이미 폐기된 상태일 수 있으므로 Redis active hash를 먼저 확인한다.
+        // Redis 조회 자체가 실패하면 로그아웃 상태를 확정할 수 없으므로 즉시 실패 응답한다.
+        Optional<String> activeTokenHash = findActiveRefreshTokenHashOrThrow(role, adminId);
 
         AdminLogoutTransactionService.LogoutDbState dbState =
-                adminRefreshTokenCleanupService.revokeDbWithRetry(adminId);
+                adminRefreshTokenCleanupService.revokeDbOnce(adminId);
 
         boolean dbFailed = dbState == null;
-        String tokenHash = dbFailed ? activeTokenHash : dbState.refreshTokenHash();
+        // 이전 요청에서 DB 폐기만 성공하고 Redis 정리가 실패했을 수 있다.
+        // 재요청 시 DB 해시는 이미 null이므로 Redis active hash를 fallback으로 사용해 남은 RT를 정리한다.
+        String tokenHash = dbState != null && dbState.refreshTokenHash() != null
+                ? dbState.refreshTokenHash()
+                : activeTokenHash.orElse(null);
 
-        boolean redisOk = adminRefreshTokenCleanupService.cleanupRedisWithRetry(role, adminId, tokenHash);
+        // DB와 Redis 모두 이미 RT가 없는 재요청은 정리가 끝난 상태이므로 성공으로 본다.
+        boolean redisOk = tokenHash == null
+                || adminRefreshTokenCleanupService.cleanupRedisOnce(role, adminId, tokenHash);
         boolean redisFailed = !redisOk;
 
         if (dbFailed || redisFailed) {
-            adminLogoutFailureService.recordFailure(adminId, tokenHash, redisFailed, dbFailed);
+            log.error(
+                    "event=ADMIN_LOGOUT_REFRESH_TOKEN_CLEANUP_FAILED role={} adminId={} redisFailed={} dbFailed={}",
+                    role, adminId, redisFailed, dbFailed);
+            throw new AdminException(AdminErrorCode.LOGOUT_FAILED);
         }
 
         LocalDateTime cutoff = LocalDateTime.now(clock);
         invalidateAccessTokenOrThrow(role, adminId, cutoff);
 
-        /*
-         * Access Token 차단까지 확정된 뒤 성공 감사 로그를 기록한다. 직접 저장이 실패하면
-         * admin_audit_failure 아웃박스에 같은 감사 이벤트를 내구성 있게 남기고 배치가 재시도한다.
-         * 아웃박스 기록까지 실패하면 예외를 숨기지 않아 감사 행위가 완전히 유실된 채 204가 나가지 않는다.
-         */
+        // RT 폐기와 Access Token 차단까지 끝났다면 보안상 로그아웃은 이미 완료된 상태다.
+        // 감사 로그 저장 실패 때문에 ADMIN-010을 반환하면 차단된 Access Token으로 클라이언트가 재시도할 수 없으므로,
+        // 감사 로그는 best-effort로 기록하고 실패 시 애플리케이션 로그만 남긴다.
         try {
             adminLogoutTransactionService.recordSuccess(adminId);
         } catch (DataAccessException e) {
-            log.warn(
-                    "event=ADMIN_LOGOUT_AUDIT_LOG_FAILED adminId={} errorType={} — durable outbox에 기록",
+            log.error(
+                    "event=ADMIN_LOGOUT_AUDIT_LOG_FAILED adminId={} errorType={}",
                     adminId, SafeExceptionLog.errorType(e), SafeExceptionLog.stackTrace(e));
-            // 이 기록까지 실패하면 예외를 숨기지 않는다. 감사 행위가 DB와 outbox 양쪽에서
-            // 모두 유실된 상태로 204를 반환하는 것을 막기 위해 호출자에게 실패를 드러낸다.
-            adminAuditFailureService.recordFailure(
-                    adminId, "ADMIN_LOGOUT", String.valueOf(adminId), null);
         }
 
         log.info("event=ADMIN_LOGOUT success=true adminId={}", adminId);
     }
 
     /*
-     * DB 폐기 실패 시 아웃박스에 과거 RT 해시를 남길 수 있도록 Redis active index를 보조 조회한다.
-     * 조회가 실패하면 null을 반환한다. null인 실패 건은 지연 재시도에서 조건 없는 DB 삭제를 하지 않는다.
+     * 클라이언트 재요청을 위해 Redis active hash를 보조 조회한다.
+     * 조회 실패는 별도 재처리로 넘기지 않고 ADMIN-010으로 즉시 응답한다.
      */
-    private String findActiveRefreshTokenHashSafely(String role, Long adminId) {
+    private Optional<String> findActiveRefreshTokenHashOrThrow(String role, Long adminId) {
         try {
-            return refreshTokenRepository.findActiveHash(role, adminId).orElse(null);
+            return refreshTokenRepository.findActiveHash(role, adminId);
         } catch (DataAccessException e) {
-            log.warn(
+            log.error(
                     "event=ADMIN_LOGOUT_ACTIVE_REFRESH_TOKEN_LOOKUP_FAILED " + LOG_FIELDS_ROLE_ADMIN_ID + LOG_FIELD_ERROR_TYPE,
                     role,
                     adminId,
                     SafeExceptionLog.errorType(e),
                     SafeExceptionLog.stackTrace(e));
-            return null;
+            throw new AdminException(AdminErrorCode.LOGOUT_FAILED);
         }
     }
 
     /*
-     * 로그아웃 이전에 발급된 Access Token을 사용할 수 없도록 Redis에 valid-after 커트라인을 저장한다.
-     * timeout/연결 실패의 경우 Redis가 실제로 반영했을 가능성이 있으므로 후속 조회로 확인하고,
-     * 아직 미반영이면 요청 예산 안에서 Full Jitter 지수 백오프를 두고 최대 3회까지 저장을 시도한다.
+     * 로그아웃 이전에 발급된 Access Token을 사용할 수 없도록 Redis에 valid-after 커트라인을 한 번 저장한다.
+     * 서버 내부 재시도는 하지 않는다. Redis 작업이 실패하면 로그를 남기고 ADMIN-010으로 응답하며,
+     * 이후 재시도는 클라이언트의 새 로그아웃 요청에 맡긴다.
      */
     private void invalidateAccessTokenOrThrow(
             String role,
@@ -315,99 +292,20 @@ public class AdminAuthService {
             LocalDateTime cutoff) {
 
         Duration ttl = Duration.ofMillis(jwtTokenProvider.getAccessTokenValidityMs());
-        long deadlineNanos = retryPolicy.deadline(ACCESS_TOKEN_RETRY_BUDGET);
-        DataAccessException lastUnknownFailure = null;
-
-        for (int attempt = 1; attempt <= MAX_ACCESS_TOKEN_INVALIDATION_ATTEMPTS; attempt++) {
-            try {
-                accessTokenValidAfterRepository.invalidateBefore(role, adminId, cutoff, ttl);
-                return;
-
-            } catch (QueryTimeoutException | DataAccessResourceFailureException e) {
-                lastUnknownFailure = e;
-                log.warn(
-                        "event=ADMIN_ACCESS_TOKEN_INVALIDATION_UNKNOWN "
-                                + LOG_FIELDS_ROLE_ADMIN_ID
-                                + " attempt={} errorType={}",
-                        role,
-                        adminId,
-                        attempt,
-                        SafeExceptionLog.errorType(e),
-                        SafeExceptionLog.stackTrace(e));
-
-                // timeout/연결 단절은 명령이 Redis에 반영된 뒤 응답만 잃었을 수도 있으므로 먼저 확인한다.
-                if (isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
-                    return;
-                }
-
-            } catch (DataAccessException e) {
-                throw logoutFailed(role, adminId, e);
-            }
-
-            if (attempt < MAX_ACCESS_TOKEN_INVALIDATION_ATTEMPTS
-                    && !retryPolicy.waitBeforeRetry(
-                    attempt, deadlineNanos,
-                    ACCESS_TOKEN_RETRY_BASE_DELAY, ACCESS_TOKEN_RETRY_MAX_DELAY)) {
-                break;
-            }
-        }
-
-        // 재시도 예산 또는 횟수를 다 썼더라도 마지막 상태 확인에서 반영이 확인되면 성공으로 본다.
-        if (!isAccessTokenInvalidationConfirmed(role, adminId, cutoff)) {
-            throw logoutFailed(role, adminId, lastUnknownFailure);
-        }
-    }
-
-    /*
-     * 저장된 커트라인이 cutoff 이상인지 간접적으로 확인한다.
-     * cutoff 직전 시각의 토큰이 더 이상 유효하지 않다면 logout 시 기록한 커트라인이 반영된 것으로 볼 수 있다.
-     */
-    private boolean isAccessTokenInvalidationConfirmed(
-            String role,
-            Long adminId,
-            LocalDateTime cutoff) {
 
         try {
-            return !accessTokenValidAfterRepository
-                    .isValidAfter(
-                            role,
-                            adminId,
-                            cutoff.minusNanos(
-                                    CUTOFF_CONFIRMATION_OFFSET_NANOS));
-
+            accessTokenValidAfterRepository.invalidateBefore(role, adminId, cutoff, ttl);
         } catch (DataAccessException e) {
-
-            log.warn(
-                    "event=ADMIN_ACCESS_TOKEN_INVALIDATION_CONFIRM_FAILED "
+            log.error(
+                    "event=ADMIN_ACCESS_TOKEN_INVALIDATION_FAILED "
                             + LOG_FIELDS_ROLE_ADMIN_ID
                             + LOG_FIELD_ERROR_TYPE,
                     role,
                     adminId,
                     SafeExceptionLog.errorType(e),
                     SafeExceptionLog.stackTrace(e));
-
-            return false;
+            throw new AdminException(AdminErrorCode.LOGOUT_FAILED);
         }
-    }
-
-    // Access Token 차단 결과를 확정하지 못했을 때 ADMIN-010 예외를 생성한다.
-    private AdminException logoutFailed(
-            String role,
-            Long adminId,
-            DataAccessException cause) {
-
-        log.error(
-                "event=ADMIN_ACCESS_TOKEN_INVALIDATION_FAILED "
-                        + LOG_FIELDS_ROLE_ADMIN_ID
-                        + LOG_FIELD_ERROR_TYPE,
-                role,
-                adminId,
-                SafeExceptionLog.errorType(cause),
-                SafeExceptionLog.stackTrace(cause));
-
-        // DataAccessException을 cause로 연결하면 GlobalExceptionHandler가 BusinessException의
-        // 전체 스택을 남길 때 공급자 SQL/상세 메시지가 함께 기록될 수 있으므로 외부 도메인 예외에는 싣지 않는다.
-        return new AdminException(AdminErrorCode.LOGOUT_FAILED);
     }
 
     private String maskLoginId(String loginId) { return PiiMasker.maskGeneric(loginId, 2, 1); }

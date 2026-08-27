@@ -16,7 +16,7 @@ class AdminTest {
 
     @Test
     void 관리자_등록시_활성_상태로_생성된다() {
-        Admin admin = new Admin("admin.kim", "hash", "관리자", AdminRole.ADMIN);
+        Admin admin = Admin.register("admin.kim", "hash", "관리자", AdminRole.ADMIN);
 
         assertThat(admin.isActive()).isTrue();
         assertThat(admin.getLoginId()).isEqualTo("admin.kim");
@@ -25,13 +25,13 @@ class AdminTest {
 
     @Test
     void 관리자_등록시_필수값이_없으면_예외가_발생한다() {
-        assertThatThrownBy(() -> new Admin(null, "hash", "관리자", AdminRole.ADMIN))
+        assertThatThrownBy(() -> Admin.register(null, "hash", "관리자", AdminRole.ADMIN))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Admin("admin.kim", "", "관리자", AdminRole.ADMIN))
+        assertThatThrownBy(() -> Admin.register("admin.kim", "", "관리자", AdminRole.ADMIN))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Admin("admin.kim", "hash", " ", AdminRole.ADMIN))
+        assertThatThrownBy(() -> Admin.register("admin.kim", "hash", " ", AdminRole.ADMIN))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Admin("admin.kim", "hash", "관리자", null))
+        assertThatThrownBy(() -> Admin.register("admin.kim", "hash", "관리자", null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -41,15 +41,15 @@ class AdminTest {
         String over50 = "a".repeat(51);
         String over255 = "a".repeat(256);
 
-        assertThatThrownBy(() -> new Admin(over50, "hash", "관리자", AdminRole.ADMIN))
+        assertThatThrownBy(() -> Admin.register(over50, "hash", "관리자", AdminRole.ADMIN))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Admin("admin.kim", over255, "관리자", AdminRole.ADMIN))
+        assertThatThrownBy(() -> Admin.register("admin.kim", over255, "관리자", AdminRole.ADMIN))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Admin("admin.kim", "hash", over50, AdminRole.ADMIN))
+        assertThatThrownBy(() -> Admin.register("admin.kim", "hash", over50, AdminRole.ADMIN))
                 .isInstanceOf(IllegalArgumentException.class);
 
         // 상한과 정확히 같은 길이는 통과해야 한다 (경계값)
-        assertThat(new Admin("a".repeat(50), "hash", "a".repeat(50), AdminRole.ADMIN)).isNotNull();
+        assertThat(Admin.register("a".repeat(50), "hash", "a".repeat(50), AdminRole.ADMIN)).isNotNull();
     }
 
     @Test

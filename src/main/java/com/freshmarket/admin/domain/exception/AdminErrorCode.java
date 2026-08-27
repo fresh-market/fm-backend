@@ -18,11 +18,15 @@ public enum AdminErrorCode implements ErrorCode {
     // 관리자 삭제(비활성화) 처리된 계정. 잠금(5회 실패)은 이번 범위에서 제외했다
     ACCOUNT_INACTIVE(HttpStatus.FORBIDDEN, "ADMIN-002", "비활성화된 계정입니다."),
 
-    // ADMIN-003~008은 auth/admin 문서의 비밀번호 변경·계정 관리 오류에 예약되어 있다.
+    SUPER_ADMIN_REQUIRED(HttpStatus.FORBIDDEN, "ADMIN-005", "최고관리자 권한이 필요합니다."),
+
+    LOGIN_ID_DUPLICATED(HttpStatus.CONFLICT, "ADMIN-006", "이미 사용 중인 관리자 아이디입니다. 다른 아이디를 사용해 주세요."),
+
+    // 로그아웃에서 현재 인증 주체에 해당하는 관리자 행을 찾을 수 없는 경우
     ADMIN_NOT_FOUND(HttpStatus.NOT_FOUND, "ADMIN-009", "관리자 계정을 찾을 수 없습니다."),
 
-    // Access Token 차단 상태를 확정하지 못한 경우 성공으로 응답하지 않는다.
-    LOGOUT_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "ADMIN-010", "로그아웃 처리 상태를 확인할 수 없습니다. 잠시 후 다시 시도해주세요.");
+    // DB/Redis 로그아웃 작업을 한 번 시도했지만 완료하지 못한 경우. 이후 재시도는 클라이언트가 새 요청으로 수행한다.
+    LOGOUT_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "ADMIN-010", "로그아웃 처리에 실패했습니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus httpStatus;
     private final String code;

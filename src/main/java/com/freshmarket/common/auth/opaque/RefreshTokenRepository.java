@@ -123,13 +123,12 @@ public class RefreshTokenRepository {
     }
 
     /**
-     * 토큰 기본 레코드는 항상 지우고, activeKey는 지금도 이 해시를 가리킬 때만 함께 지운다.
-     * 실패한 옛 revoke를 나중에 재시도하는 사이 새 로그인으로 activeKey가 다른 해시를 가리킬 수
-     * 있으므로, 두 삭제를 Lua로 원자 처리해 새 세션의 포인터를 지우지 않는다.
+     * 기본 레코드는 삭제하고, active key는 지금도 같은 해시를 가리킬 때만 함께 삭제한다.
+     * 로그아웃 재요청 사이에 새 로그인 세션이 만들어져도 새 active key를 지우지 않도록 Lua로 원자 처리한다.
      */
-    public void revokeIfActiveHashMatches(String tokenHash, String role, Long memberId) {
+    public void revokeIfActiveHashMatches(String tokenHash, String role, Long id) {
         redisTemplate.execute(REVOKE_SCRIPT,
-                List.of(primaryKey(tokenHash), activeKey(role, memberId)), tokenHash);
+                List.of(primaryKey(tokenHash), activeKey(role, id)), tokenHash);
     }
 
     /** 삭제 타임아웃 뒤 실제 기본 레코드가 남았는지 후속 확인할 때 사용한다. */

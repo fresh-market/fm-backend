@@ -59,19 +59,6 @@ class AdminLogoutTransactionServiceTest {
                 .isEqualTo(AdminErrorCode.ADMIN_NOT_FOUND);
     }
 
-    @Test
-    void 지연재시도는_실패당시_해시와_현재해시가_같을때만_DB토큰을_폐기한다() {
-        service.revokeRefreshTokenIfMatches(1L, "a".repeat(64));
-
-        verify(adminRepository).clearRefreshTokenIfMatches(1L, "a".repeat(64));
-    }
-
-    @Test
-    void 지연재시도_해시가_null이면_조건없이_삭제하지_않고_예외가_발생한다() {
-        assertThatThrownBy(() -> service.revokeRefreshTokenIfMatches(1L, null))
-                .isInstanceOf(NullPointerException.class)
-                .hasMessage("expectedRefreshTokenHash");
-    }
 
     @Test
     void AccessToken_차단까지_성공한_로그아웃은_감사로그로_기록한다() {

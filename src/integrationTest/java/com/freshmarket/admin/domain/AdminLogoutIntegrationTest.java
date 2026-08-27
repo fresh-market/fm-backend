@@ -7,11 +7,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.freshmarket.RedisIntegrationTestSupport;
-import com.freshmarket.admin.domain.entity.AdminLogoutFailure;
-import com.freshmarket.admin.domain.repository.AdminLogoutFailureRepository;
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
 import jakarta.servlet.http.Cookie;
-import java.time.LocalDateTime;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,7 +30,6 @@ class AdminLogoutIntegrationTest extends RedisIntegrationTestSupport {
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PasswordEncoder passwordEncoder;
-    @Autowired AdminLogoutFailureRepository failureRepository;
 
     @Autowired RefreshTokenRepository refreshTokenRepository;
 
@@ -80,78 +76,6 @@ class AdminLogoutIntegrationTest extends RedisIntegrationTestSupport {
                 .andExpect(status().isUnauthorized());
     }
 
-    @Test
-    void 같은_관리자와_같은_RT해시는_실제_MySQL에서_한_행으로_upsert된다() {
-        long adminId = insertAdmin("integration.admin.failure.same-hash", "Password!2026");
-        LocalDateTime now = LocalDateTime.of(2026, 8, 26, 12, 0);
-        String hash = "a".repeat(64);
-
-        failureRepository.upsertFailure(adminId, hash, true, false, now);
-        failureRepository.upsertFailure(adminId, hash, false, true, now.plusSeconds(1));
-
-        List<AdminLogoutFailure> failures = failureRepository.findAll().stream()
-                .filter(row -> row.getAdminId().equals(adminId))
-                .toList();
-
-        assertThat(failures).hasSize(1);
-        AdminLogoutFailure failure = failures.getFirst();
-        assertThat(failure.getRefreshTokenHash()).isEqualTo(hash);
-        assertThat(failure.isRedisFailed()).isTrue();
-        assertThat(failure.isDbFailed()).isTrue();
-    }
-
-    @Test
-    void 같은_관리자라도_서로_다른_RT해시는_실제_MySQL에서_별도_행으로_저장된다() {
-        long adminId = insertAdmin("integration.admin.failure.different-hash", "Password!2026");
-        LocalDateTime now = LocalDateTime.of(2026, 8, 26, 12, 0);
-        String firstHash = "b".repeat(64);
-        String secondHash = "c".repeat(64);
-
-        failureRepository.upsertFailure(adminId, firstHash, true, false, now);
-        failureRepository.upsertFailure(adminId, secondHash, false, true, now.plusSeconds(1));
-
-        List<AdminLogoutFailure> failures = failureRepository.findAll().stream()
-                .filter(row -> row.getAdminId().equals(adminId))
-                .toList();
-
-        assertThat(failures).hasSize(2);
-        assertThat(failures)
-                .extracting(AdminLogoutFailure::getRefreshTokenHash)
-                .containsExactlyInAnyOrder(firstHash, secondHash);
-    }
-
-    @Test
-    void 실패행_선점_결과반영이_실제_MySQL에서_동작하고_옛_lease는_덮어쓰지_못한다() {
-        long adminId = insertAdmin("integration.admin.failure.lease", "Password!2026");
-        LocalDateTime now = LocalDateTime.of(2026, 8, 26, 12, 0);
-        String hash = "d".repeat(64);
-
-        failureRepository.upsertFailure(adminId, hash, true, false, now);
-
-        AdminLogoutFailure failure = failureRepository.findAll().stream()
-                .filter(row -> row.getAdminId().equals(adminId))
-                .findFirst()
-                .orElseThrow();
-
-        LocalDateTime firstClaim = LocalDateTime.of(2026, 8, 26, 12, 1);
-        assertThat(failureRepository.claimForRetry(
-                failure.getId(), firstClaim, firstClaim.minusMinutes(10))).isEqualTo(1);
-
-        LocalDateTime secondClaim = LocalDateTime.of(2026, 8, 26, 12, 12);
-        assertThat(failureRepository.claimForRetry(
-                failure.getId(), secondClaim, secondClaim.minusMinutes(10))).isEqualTo(1);
-
-        int staleUpdate = failureRepository.applyOutcomeIfClaimOwned(
-                failure.getId(), firstClaim, false, false, true, hash, secondClaim.plusSeconds(1));
-        int ownerUpdate = failureRepository.applyOutcomeIfClaimOwned(
-                failure.getId(), secondClaim, false, false, true, hash, secondClaim.plusSeconds(2));
-
-        assertThat(staleUpdate).isZero();
-        assertThat(ownerUpdate).isEqualTo(1);
-        AdminLogoutFailure resolved = failureRepository.findById(failure.getId()).orElseThrow();
-        assertThat(resolved.isResolved()).isTrue();
-        assertThat(resolved.isProcessing()).isFalse();
-    }
 
     private long insertAdmin(String loginId, String rawPassword) {
         jdbcTemplate.update("""
