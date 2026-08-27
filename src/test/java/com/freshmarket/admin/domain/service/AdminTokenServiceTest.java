@@ -68,6 +68,18 @@ class AdminTokenServiceTest {
     }
 
     @Test
+    void refresh_token이_최대길이를_초과하면_거부한다() {
+        String tooLongToken = "a".repeat(513);
+
+        assertThatThrownBy(() -> sut.reissue(tooLongToken))
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminTokenErrorCode.REFRESH_TOKEN_INVALID);
+
+        verify(refreshTokenRepository, never()).find(anyString());
+    }
+
+    @Test
     void redis와_db_회전에_성공하면_새_access_refresh_token을_발급한다() {
         when(refreshTokenRepository.find("old-rt")).thenReturn(Optional.of(adminRefreshTokenData()));
         when(refreshTokenRepository.compareAndRotate(eq("old-rt"), anyString(), any()))

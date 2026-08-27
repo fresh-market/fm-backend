@@ -30,6 +30,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class AdminTokenService {
 
+    private static final int MAX_REFRESH_TOKEN_LENGTH = 512;
+
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenRepository refreshTokenRepository;
     private final AdminTokenRepository adminTokenRepository;
@@ -53,9 +55,7 @@ public class AdminTokenService {
     }
 
     public ReissueResult reissue(String oldRefreshToken) {
-        if (oldRefreshToken == null || oldRefreshToken.isBlank()) {
-            throw invalidRefreshToken();
-        }
+        validateRefreshToken(oldRefreshToken);
 
         String newRefreshToken = OpaqueTokenGenerator.generate();
         String oldHash = TokenHasher.sha256(oldRefreshToken);
@@ -103,22 +103,7 @@ public class AdminTokenService {
                     newRefreshToken, oldHash, newHash, newExpiresAt, now, ttl, adminIdHint);
         }
 
-        if (!outcome.isSuccess()) {
-            if (outcome.isReuseDetected()) {
-                RefreshTokenRepository.RefreshTokenData reused = outcome.data();
-                log.warn("event=ADMIN_REFRESH_TOKEN_REUSE_DETECTED");
-                if (reused != null && reused.type() == TokenType.ADMIN) {
-                    recordFailureAuditSafely(reused.memberId(), "REUSE_DETECTED");
-                }
-            }
-            throw invalidRefreshToken();
-        }
-
-        RefreshTokenRepository.RefreshTokenData rotated = outcome.data();
-        if (rotated.type() != TokenType.ADMIN) {
-            log.warn("event=ADMIN_REFRESH_TOKEN_TYPE_MISMATCH actualType={}", rotated.type());
-            throw invalidRefreshToken();
-        }
+        RefreshTokenRepository.RefreshTokenData rotated = requireSuccessfulAdminRotation(outcome);
 
         AdminTokenRepository.RotationState state;
         try {
@@ -153,18 +138,50 @@ public class AdminTokenService {
                 throw resultUnknown();
             }
 
-            try {
-                AdminTokenRepository.RotationState state = adminTokenRepository.rotateKnownAdmin(
-                        data.memberId(), oldHash, newHash, newExpiresAt, now);
-                return issueResult(state, newRefreshToken);
-            } catch (RuntimeException e) {
-                compensateRedisRotation(data.role(), data.memberId(), newHash);
-                recordFailureAuditSafely(data.memberId(), "DB_VALIDATION_AFTER_REDIS_TIMEOUT_FAILED");
-                throw e;
-            }
+            return finalizeRotationAfterRedisTimeout(
+                    data, oldHash, newHash, newExpiresAt, now, newRefreshToken);
         } catch (DataAccessException confirmationFailure) {
             recordFailureAuditSafely(adminIdHint, "REDIS_TIMEOUT_CONFIRMATION_FAILED");
             throw resultUnknown(confirmationFailure);
+        }
+    }
+
+    private RefreshTokenRepository.RefreshTokenData requireSuccessfulAdminRotation(
+            RefreshTokenRepository.RotateOutcome outcome) {
+        if (!outcome.isSuccess()) {
+            if (outcome.isReuseDetected()) {
+                RefreshTokenRepository.RefreshTokenData reused = outcome.data();
+                log.warn("event=ADMIN_REFRESH_TOKEN_REUSE_DETECTED");
+                if (reused != null && reused.type() == TokenType.ADMIN) {
+                    recordFailureAuditSafely(reused.memberId(), "REUSE_DETECTED");
+                }
+            }
+            throw invalidRefreshToken();
+        }
+
+        RefreshTokenRepository.RefreshTokenData rotated = outcome.data();
+        if (rotated.type() != TokenType.ADMIN) {
+            log.warn("event=ADMIN_REFRESH_TOKEN_TYPE_MISMATCH actualType={}", rotated.type());
+            throw invalidRefreshToken();
+        }
+        return rotated;
+    }
+
+    private ReissueResult finalizeRotationAfterRedisTimeout(
+            RefreshTokenRepository.RefreshTokenData data,
+            String oldHash,
+            String newHash,
+            LocalDateTime newExpiresAt,
+            LocalDateTime now,
+            String newRefreshToken) {
+        try {
+            AdminTokenRepository.RotationState state = adminTokenRepository.rotateKnownAdmin(
+                    data.memberId(), oldHash, newHash, newExpiresAt, now);
+            return issueResult(state, newRefreshToken);
+        } catch (RuntimeException e) {
+            compensateRedisRotation(data.role(), data.memberId(), newHash);
+            recordFailureAuditSafely(data.memberId(), "DB_VALIDATION_AFTER_REDIS_TIMEOUT_FAILED");
+            throw e;
         }
     }
 
@@ -211,6 +228,14 @@ public class AdminTokenService {
         }
 
         return issueResult(state, newRefreshToken);
+    }
+
+    private void validateRefreshToken(String refreshToken) {
+        if (refreshToken == null
+                || refreshToken.isBlank()
+                || refreshToken.length() > MAX_REFRESH_TOKEN_LENGTH) {
+            throw invalidRefreshToken();
+        }
     }
 
     private boolean isTimeout(Throwable throwable) {
