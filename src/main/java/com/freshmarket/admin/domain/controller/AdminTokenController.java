@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/v1/admin/auth")
 @RequiredArgsConstructor
-public class AdminTokenController {
+class AdminTokenController {
 
     private static final String REFRESH_TOKEN_COOKIE_NAME = "refreshToken";
 
@@ -33,6 +33,7 @@ public class AdminTokenController {
     @Operation(summary = "관리자 토큰 재발급", description = "Refresh Token을 회전하고 Access/Refresh Token을 새로 발급한다.")
     @ApiResponse(responseCode = "200", description = "재발급 성공")
     @ApiResponse(responseCode = "401", description = "만료되었거나 이미 사용된 Refresh Token (ADMIN-011)")
+    @ApiResponse(responseCode = "503", description = "Redis timeout 결과를 확인할 수 없음 (ADMIN-012)")
     @PostMapping("/tokens:refresh")
     public ResponseEntity<ResponseEnvelope<AdminTokenResponse>> reissue(
             HttpServletRequest request,

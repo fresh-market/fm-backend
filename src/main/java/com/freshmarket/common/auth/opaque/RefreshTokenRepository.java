@@ -49,6 +49,7 @@ public class RefreshTokenRepository {
     private static final String REVOKED_SUFFIX = "|REVOKED";
 
     private static final RedisScript<String> ROTATE_SCRIPT = loadRotateScript();
+    private static final RedisScript<Long> DELETE_ACTIVE_KEY_IF_MATCHES_SCRIPT = loadDeleteActiveKeyIfMatchesScript();
 
     private static RedisScript<String> loadRotateScript() {
         DefaultRedisScript<String> script = new DefaultRedisScript<>();
@@ -124,6 +125,28 @@ public class RefreshTokenRepository {
         redisTemplate.delete(activeKey(role, id));
     }
 
+    /**
+     * 보조 인덱스가 아직 expectedHash를 가리키고 있을 때만 삭제한다.
+     *
+     * Rotation 이후 DB 확정에 실패했을 때 보상 처리용으로 사용한다.
+     * 그 사이 다른 로그인/재발급으로 activeKey가 더 최신 hash를 가리키게 됐다면 삭제하지 않는다.
+     *
+     * @return 실제로 삭제했으면 true, 이미 다른 hash를 가리키거나 없으면 false
+     */
+    public boolean deleteActiveKeyIfMatches(
+            String role,
+            Long id,
+            String expectedHash) {
+
+        Long deleted = redisTemplate.execute(
+                DELETE_ACTIVE_KEY_IF_MATCHES_SCRIPT,
+                List.of(activeKey(role, id)),
+                expectedHash
+        );
+
+        return deleted != null && deleted == 1L;
+    }
+
     private String primaryKey(String tokenHash) {
         return KEY_PREFIX + tokenHash;
     }
@@ -142,6 +165,21 @@ public class RefreshTokenRepository {
     }
 
     public record RefreshTokenData(Long memberId, String role, TokenType type, boolean remember) {
+    }
+
+    private static RedisScript<Long> loadDeleteActiveKeyIfMatchesScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setScriptText("""
+            local current = redis.call('GET', KEYS[1])
+
+            if current == ARGV[1] then
+                return redis.call('DEL', KEYS[1])
+            end
+
+            return 0
+            """);
+        script.setResultType(Long.class);
+        return script;
     }
 
     /** compareAndRotate()의 3단 결과. Optional 하나로는 "없음"과 "재사용 의심(소유자는 앎)"을 구분 못 해서 뺐다. */
