@@ -1,7 +1,7 @@
 package com.freshmarket.config;
 
-import io.github.resilience4j.circuitbreaker.CircuitBreakerConfigCustomizer;
-import java.util.List;
+import io.github.resilience4j.common.circuitbreaker.configuration.CircuitBreakerConfigCustomizer;
+import java.util.function.Predicate;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatusCode;
@@ -13,9 +13,28 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
  * KakaoUnlinkClient 등은 원인을 MemberException/AuthException으로 감싸서 던지므로,
  * application.yml의 recordExceptions(클래스 목록)만으로는 카카오 응답 상태코드까지 못 본다 —
  * cause 체인을 직접 풀어서 판단해야 한다.
+ *
+ * CircuitBreakerConfigCustomizer.of()는 인스턴스 하나당 커스터마이저 하나를 받는 구조라
+ * (List로 한 번에 못 묶는다) 세 인스턴스마다 빈을 따로 등록한다 — 등록된 빈들은 Boot
+ * 자동구성이 이름으로 매칭해서 각자의 인스턴스에 적용한다.
  */
 @Configuration
 public class KakaoCircuitBreakerConfig {
+
+    @Bean
+    public CircuitBreakerConfigCustomizer kakaoLoginFailureClassifier() {
+        return CircuitBreakerConfigCustomizer.of("kakaoLogin", builder -> builder.recordException(FAILURE_PREDICATE));
+    }
+
+    @Bean
+    public CircuitBreakerConfigCustomizer kakaoLogoutFailureClassifier() {
+        return CircuitBreakerConfigCustomizer.of("kakaoLogout", builder -> builder.recordException(FAILURE_PREDICATE));
+    }
+
+    @Bean
+    public CircuitBreakerConfigCustomizer kakaoUnlinkFailureClassifier() {
+        return CircuitBreakerConfigCustomizer.of("kakaoUnlink", builder -> builder.recordException(FAILURE_PREDICATE));
+    }
 
     /**
      * 5xx, 응답 자체를 못 받은 경우(타임아웃/커넥션 거부/DNS), 429는 서킷 실패로 센다.
@@ -25,12 +44,7 @@ public class KakaoCircuitBreakerConfig {
      * — 카운트하면 우리 쪽 설정 실수(예: 잘못된 요청 파라미터) 하나로 무관한 다른 요청까지
      * 서킷에 막혀버린다.
      */
-    @Bean
-    public CircuitBreakerConfigCustomizer kakaoFailureClassifier() {
-        return CircuitBreakerConfigCustomizer.of(
-                List.of("kakaoLogin", "kakaoLogout", "kakaoUnlink"),
-                builder -> builder.recordException(KakaoCircuitBreakerConfig::isCircuitFailure));
-    }
+    private static final Predicate<Throwable> FAILURE_PREDICATE = KakaoCircuitBreakerConfig::isCircuitFailure;
 
     private static boolean isCircuitFailure(Throwable t) {
         HttpStatusCode status = extractStatus(t);
