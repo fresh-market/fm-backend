@@ -2,7 +2,6 @@ package com.freshmarket.admin.domain.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.freshmarket.admin.domain.dto.AdminRegistrationRequest;
@@ -26,7 +25,7 @@ class AdminRegistrationControllerTest {
         CustomUserDetails issuer = new CustomUserDetails(1L, TokenType.ADMIN, "ROLE_SUPER_ADMIN");
         AdminRegistrationRequest request = new AdminRegistrationRequest(
                 "admin.lee", "Freshman!2026", "이관리", AdminRole.ADMIN);
-        AdminRegistrationResponse registered = new AdminRegistrationResponse("admin.lee", "이관리", AdminRole.ADMIN);
+        AdminRegistrationResponse registered = new AdminRegistrationResponse("admin.lee", "이관리", "ADMIN");
         when(service.register(issuer.getId(), issuer.getRole(), request)).thenReturn(registered);
 
         ResponseEntity<ResponseEnvelope<AdminRegistrationResponse>> response = controller.register(issuer, request);
@@ -34,6 +33,5 @@ class AdminRegistrationControllerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().data()).isEqualTo(registered);
-        verify(service).register(1L, "ROLE_SUPER_ADMIN", request);
     }
 }

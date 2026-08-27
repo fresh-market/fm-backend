@@ -46,7 +46,7 @@ class AdminRegistrationServiceTest {
 
         assertThat(response.loginId()).isEqualTo("admin.lee");
         assertThat(response.name()).isEqualTo("이관리");
-        assertThat(response.role()).isEqualTo(AdminRole.ADMIN);
+        assertThat(response.role()).isEqualTo("ADMIN");
 
         ArgumentCaptor<Admin> adminCaptor = ArgumentCaptor.forClass(Admin.class);
         verify(adminRepository).saveAndFlush(adminCaptor.capture());
@@ -60,7 +60,9 @@ class AdminRegistrationServiceTest {
 
     @Test
     void 일반관리자는_계정을_발급할_수_없다() {
-        assertThatThrownBy(() -> service.register(ISSUER_ADMIN_ID, "ROLE_ADMIN", request("admin.lee")))
+        AdminRegistrationRequest request = request("admin.lee");
+
+        assertThatThrownBy(() -> service.register(ISSUER_ADMIN_ID, "ROLE_ADMIN", request))
                 .isInstanceOf(AdminException.class)
                 .extracting(e -> ((AdminException) e).getErrorCode())
                 .isEqualTo(AdminRegistrationErrorCode.SUPER_ADMIN_REQUIRED);
