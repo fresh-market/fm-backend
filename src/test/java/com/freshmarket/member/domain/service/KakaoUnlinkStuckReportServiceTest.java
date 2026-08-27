@@ -28,7 +28,7 @@ class KakaoUnlinkStuckReportServiceTest {
 
     private static KakaoUnlinkFailure givenUpFailure(Long id, Long memberId) {
         KakaoUnlinkFailure failure = KakaoUnlinkFailure.record(memberId, "kakao-" + memberId);
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS; i++) {
             failure.markRetryFailed();
         }
         setId(failure, id);
