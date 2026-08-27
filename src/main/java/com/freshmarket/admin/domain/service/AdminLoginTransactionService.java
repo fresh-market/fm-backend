@@ -5,11 +5,12 @@ import com.freshmarket.admin.domain.entity.AdminRole;
 import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminRepository;
-import java.time.LocalDateTime;
-import java.util.Objects;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.Objects;
 
 /**
  * 관리자 로그인에서 DB 잠금과 Refresh Token 백업 갱신만 짧은 트랜잭션으로 처리한다.
@@ -19,15 +20,13 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 class AdminLoginTransactionService {
 
-    private static final int DB_TRANSACTION_TIMEOUT_SECONDS = 1;
-
     private final AdminRepository adminRepository;
 
     /**
      * 비밀번호 검증이 끝난 관리자 행을 잠근 뒤 현재 활성 상태를 다시 확인하고
      * 로그인에 사용할 Refresh Token 해시/만료시각만 DB에 기록한다.
      */
-    @Transactional(timeout = DB_TRANSACTION_TIMEOUT_SECONDS)
+    @Transactional(timeout = 1)
     LoginDbState issueRefreshToken(Long adminId, String refreshTokenHash, LocalDateTime expiresAt) {
         Objects.requireNonNull(adminId, "adminId");
         Objects.requireNonNull(refreshTokenHash, "refreshTokenHash");
@@ -43,11 +42,8 @@ class AdminLoginTransactionService {
         return new LoginDbState(admin.getId(), admin.getLoginId(), admin.getName(), admin.getRole());
     }
 
-    /**
-     * 지연 정리 또는 로그아웃 재처리 시 사용한다.
-     * 현재 DB의 Refresh Token hash가 지정한 hash와 같을 때만 제거한다.
-     */
-    @Transactional(timeout = DB_TRANSACTION_TIMEOUT_SECONDS)
+    /** Redis 저장 실패 보상용. 이번 로그인에서 기록한 해시가 아직 현재 값일 때만 DB 백업을 제거한다. */
+    @Transactional(timeout = 1)
     void clearRefreshTokenIfMatches(Long adminId, String refreshTokenHash) {
         Objects.requireNonNull(adminId, "adminId");
         Objects.requireNonNull(refreshTokenHash, "refreshTokenHash");

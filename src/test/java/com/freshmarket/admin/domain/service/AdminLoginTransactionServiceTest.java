@@ -81,7 +81,7 @@ class AdminLoginTransactionServiceTest {
     }
 
     @Test
-    void 로그아웃_재처리시_같은_RefreshToken_해시만_조건부로_제거한다() {
+    void Redis_저장_실패_보상시_같은_RefreshToken_해시만_조건부로_제거한다() {
         String refreshTokenHash = "a".repeat(64);
 
         sut.clearRefreshTokenIfMatches(1L, refreshTokenHash);
