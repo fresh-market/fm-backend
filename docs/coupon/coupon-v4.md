@@ -392,9 +392,9 @@ require(reclaimAfter.compareTo(requestBudget) > 0, ...)
 이벤트 준비와 종료   카운터 초기화, EXPIREAT, 종료 배치
 서킷 브레이커        Redis 호출에만
 큐 길이 지표         8장이 요구하는 큐 최대 길이
-문서 맞추기         coupon.md 3장 스크립트에 확정 표시 가드와 TIME 반영
-                    "푸는 시점은 소진 순간이다" 를 트리거와 조건으로 나눠 쓰기
 ```
+
+**[coupon.md](coupon.md) 3장은 맞췄다.** 스크립트에 `TIME` 과 확정 표시 가드를 넣고, 회수를 트리거와 조건으로 나눠 쓰고, 실패 표에 순번을 견주는 갈래를 더했다.
 
 #### `rewriteBatchedStatements` 는 전역에 넣었다
 
