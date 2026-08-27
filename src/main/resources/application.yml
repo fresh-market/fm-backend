@@ -154,8 +154,15 @@ kakao:
 
 # 카카오 OIDC 외부 API(로그인 토큰교환/로그아웃/unlink) 서킷브레이커.
 # 인스턴스를 API별로 나눈다 — 하나가 막혀도 다른 API까지 같이 막히지 않는다.
-# 수치는 kakao-common 하나로 공유한다(base-config) — 값만 공유할 뿐 상태(open/closed)는
+# config는 트래픽 양에 따라 두 종류로 나눈다 — 값만 공유할 뿐 상태(open/closed)는
 # 인스턴스별로 독립이다. 이름을 하나로 합치지 않는 한 세 서킷은 절대 같이 안 열린다.
+#
+# (2026-08-27, PR 리뷰 P1) 원래 셋 다 kakao-common(60초/최소 5회) 하나를 같이 썼는데,
+# login은 트래픽이 꾸준해 60초에 5회가 쉽게 채워지지만 unlink는 10분 배치, logout은
+# 사용자 행동 기반이라 60초 윈도우에 5통이 쌓이는 일 자체가 드물다 — 그러면 5xx가
+# 반복돼도 minimumNumberOfCalls를 못 채워 failureRateThreshold가 영원히 계산 안 되고
+# 서킷이 열리지 않는다. 그래서 unlink/logout은 windows를 5분으로 늘리고
+# minimumNumberOfCalls를 3으로 낮춘 kakao-low-traffic을 따로 쓴다.
 resilience4j:
   circuitbreaker:
     configs:
@@ -178,10 +185,25 @@ resilience4j:
         # 상태 확인은 Micrometer/Prometheus로 한다.
         registerHealthIndicator: false
         eventConsumerBufferSize: 100
+      kakao-low-traffic:
+        slidingWindowType: TIME_BASED
+        slidingWindowSize: 300             # 최근 5분 — unlink 10분 배치/logout 사용자 행동
+                                            # 기반이라 60초로는 minimumNumberOfCalls도 못 채운다
+        minimumNumberOfCalls: 3
+        failureRateThreshold: 100          # 호출 자체가 뜸해서 낮은 임계값이면 소수 실패로
+                                            # 오탐 열릴 수 있다 — 최근 3회가 전부 실패했을 때만 OPEN
+        slowCallDurationThreshold: 3s
+        slowCallRateThreshold: 50
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 1
+        maxWaitDurationInHalfOpenState: 5s
+        automaticTransitionFromOpenToHalfOpenEnabled: false
+        registerHealthIndicator: false
+        eventConsumerBufferSize: 100
     instances:
       kakaoLogin:
         base-config: kakao-common
       kakaoLogout:
-        base-config: kakao-common
+        base-config: kakao-low-traffic
       kakaoUnlink:
-        base-config: kakao-common
+        base-config: kakao-low-traffic
