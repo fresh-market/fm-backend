@@ -23,6 +23,7 @@ import com.freshmarket.coupon.domain.entity.CouponScope;
 import com.freshmarket.coupon.domain.entity.DiscountType;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
+import com.freshmarket.coupon.domain.cache.CouponCache;
 import com.freshmarket.coupon.domain.redis.CouponSeqInitializer;
 import com.freshmarket.coupon.domain.repository.CouponRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,12 +45,15 @@ class CouponEventServiceTest {
     @Mock
     private CouponSeqInitializer seqInitializer;
 
+    @Mock
+    private CouponCache couponCache;
+
     private CouponEventService sut;
 
     @BeforeEach
     void setUp() {
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
-        sut = new CouponEventService(couponRepository, seqInitializer, fixed);
+        sut = new CouponEventService(couponRepository, seqInitializer, couponCache, fixed);
     }
 
     @Test

@@ -19,6 +19,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param flushThreads  플러시 스레드 수. 1 부터 늘려가며 잰다
  * @param queueCapacity 큐 상한. 기본은 사실상 무한이고 시험에서 줄여간다
  * @param requestBudget 요청 스레드가 응답까지 기다리는 총 시간. 넘으면 혼잡으로 끊는다
+ * @param couponCacheTtl 자격 확인용 쿠폰 스냅샷을 이 JVM 이 들고 있는 시간.
+ *                       마감으로 스위치가 꺼진 뒤 이 앱이 요청을 더 받아 주는 시간이기도 하다
  */
 @ConfigurationProperties("coupon.issue")
 public record CouponIssueProperties(
@@ -27,13 +29,15 @@ public record CouponIssueProperties(
         @DefaultValue("500") int batchSize,
         @DefaultValue("1") int flushThreads,
         @DefaultValue("2147483647") int queueCapacity,
-        @DefaultValue("2s") Duration requestBudget) {
+        @DefaultValue("2s") Duration requestBudget,
+        @DefaultValue("5s") Duration couponCacheTtl) {
 
     public CouponIssueProperties {
         require(batchSize >= 1, "batchSize 는 1 이상이어야 한다");
         require(flushThreads >= 1, "flushThreads 는 1 이상이어야 한다");
         require(queueCapacity >= 1, "queueCapacity 는 1 이상이어야 한다");
         require(!batchWindow.isNegative(), "batchWindow 는 음수일 수 없다");
+        require(!couponCacheTtl.isNegative(), "couponCacheTtl 은 음수일 수 없다");
 
         /*
          * 회수 기준이 요청 예산보다 짧으면 아직 살아 있는 요청의 번호를 뺏는다.

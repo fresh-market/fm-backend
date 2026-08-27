@@ -7,8 +7,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import com.freshmarket.common.exception.CommonErrorCode;
+import com.freshmarket.coupon.domain.cache.CachedCoupon;
+import com.freshmarket.coupon.domain.cache.CouponCache;
 import com.freshmarket.coupon.domain.dto.CouponIssueResponse;
-import com.freshmarket.coupon.domain.entity.Coupon;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
@@ -17,7 +18,6 @@ import com.freshmarket.coupon.domain.issue.IssueOutcome;
 import com.freshmarket.coupon.domain.issue.IssueTicket;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
 import com.freshmarket.coupon.domain.redis.SeqOutcome;
-import com.freshmarket.coupon.domain.repository.CouponRepository;
 import com.freshmarket.member.MemberApi;
 import com.freshmarket.member.MemberInfo;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +25,9 @@ import org.springframework.stereotype.Service;
 
 /**
  * 선착순 발급의 네 단계를 잇는다. 자격을 보고, 순번을 받고, 큐에 넣고, 결과를 응답으로 바꾼다.
+ *
+ * <p>쿠폰은 {@link CouponCache} 에서 받는다. 발급 창 안에서는 그 값들이 얼어붙으므로 요청마다
+ * DB 를 칠 이유가 없다({@code docs/coupon/coupon.md} 3장).
  *
  * <p>트랜잭션이 없다. 쓰기는 플러시 스레드가 자기 커넥션으로 하고 이 메서드는 큐에 넣고 기다릴
  * 뿐이다. 여기서 트랜잭션을 열면 기다리는 내내 커넥션을 쥐어, 5장의 커넥션 예산을 요청 수만큼
@@ -34,7 +37,7 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class CouponIssueService {
 
-    private final CouponRepository couponRepository;
+    private final CouponCache couponCache;
     private final MemberApi memberApi;
     private final CouponSeqAllocator allocator;
     private final CouponIssueQueue queue;
@@ -48,7 +51,7 @@ public class CouponIssueService {
      * @throws CouponException 소진(최종)이거나 혼잡(다시 시도할 값이 있다)일 때
      */
     public CouponIssueResponse issue(long couponId, long memberId) {
-        Coupon coupon = couponRepository.findById(couponId)
+        CachedCoupon coupon = couponCache.find(couponId)
                 .orElseThrow(() -> new CouponException(CouponErrorCode.COUPON_NOT_FOUND));
         verifyIssuable(coupon, memberId);
 
@@ -61,7 +64,7 @@ public class CouponIssueService {
             throw new CouponException(CouponErrorCode.CONGESTED);
         }
 
-        return switch (allocator.allocate(couponId, memberId, coupon.getTotalQuantity())) {
+        return switch (allocator.allocate(couponId, memberId, coupon.totalQuantity())) {
             case SeqOutcome.Allocated allocated -> record(coupon, memberId, allocated.seq());
             case SeqOutcome.AlreadyIssued issued -> CouponIssueResponse.alreadyIssued(issued.seq());
             case SeqOutcome.SoldOut ignored -> throw new CouponException(CouponErrorCode.SOLD_OUT);
@@ -70,11 +73,11 @@ public class CouponIssueService {
         };
     }
 
-    private void verifyIssuable(Coupon coupon, long memberId) {
+    private void verifyIssuable(CachedCoupon coupon, long memberId) {
         if (!coupon.isLimited()) {
             throw new CouponException(CouponErrorCode.NOT_LIMITED);
         }
-        if (!coupon.isActive() || !coupon.isIssuableAt(LocalDateTime.now(clock))) {
+        if (!coupon.active() || !coupon.isIssuableAt(LocalDateTime.now(clock))) {
             throw new CouponException(CouponErrorCode.NOT_ISSUABLE);
         }
         verifyTargetGrade(coupon, memberId);
@@ -84,8 +87,8 @@ public class CouponIssueService {
      * 대상 등급이 걸려 있지 않으면 회원을 아예 읽지 않는다.
      * 이 읽기는 DB 왕복이라 선착순 경로에서 되도록 피한다. 대부분의 선착순 쿠폰은 등급을 안 건다.
      */
-    private void verifyTargetGrade(Coupon coupon, long memberId) {
-        if (coupon.getTargetGradeId() == null) {
+    private void verifyTargetGrade(CachedCoupon coupon, long memberId) {
+        if (coupon.targetGradeId() == null) {
             return;
         }
         /*
@@ -99,9 +102,9 @@ public class CouponIssueService {
         }
     }
 
-    private CouponIssueResponse record(Coupon coupon, long memberId, int issueSeq) {
+    private CouponIssueResponse record(CachedCoupon coupon, long memberId, int issueSeq) {
         IssueTicket ticket = IssueTicket.of(
-                coupon.getId(), memberId, coupon.getScope(), coupon.getTotalQuantity(), issueSeq);
+                coupon.couponId(), memberId, coupon.scope(), coupon.totalQuantity(), issueSeq);
         queue.submit(ticket);
         return waitFor(ticket);
     }

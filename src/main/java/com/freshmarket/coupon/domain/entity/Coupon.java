@@ -136,19 +136,11 @@ public class Coupon extends BaseMutableTimeEntity {
         return totalQuantity != null;
     }
 
-    // 지금이 발급 기간 안인가. 시작과 마감은 각각 없을 수 있다
-    public boolean isIssuableAt(LocalDateTime now) {
-        if (issueStartAt != null && now.isBefore(issueStartAt)) {
-            return false;
-        }
-        return issueEndAt == null || !now.isAfter(issueEndAt);
-    }
-
-    // 이 등급이 받을 수 있는 쿠폰인가. 대상 등급이 없으면 전체가 받는다
-    public boolean isTargetGrade(Long memberGradeId) {
-        return targetGradeId == null || targetGradeId.equals(memberGradeId);
-    }
-
+    /*
+     * 발급 기간과 대상 등급을 보는 판정은 여기 없다.
+     * 발급 경로가 캐시된 스냅샷으로 판정하므로 CachedCoupon 이 그 식을 갖는다. 양쪽에 두면
+     * 한쪽만 고쳤을 때 캐시가 켜졌을 때와 꺼졌을 때 답이 달라진다.
+     */
     private static void validateName(String name) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("name 은 필수다");

@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 
+import com.freshmarket.coupon.domain.cache.CouponCache;
 import com.freshmarket.coupon.domain.entity.Coupon;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
@@ -38,6 +39,7 @@ public class CouponEventService {
 
     private final CouponRepository couponRepository;
     private final CouponSeqInitializer seqInitializer;
+    private final CouponCache couponCache;
     private final Clock clock;
 
     /**
@@ -66,6 +68,7 @@ public class CouponEventService {
             return;
         }
         seqInitializer.prepare(couponId, coupon.getIssueEndAt());
+        couponCache.evict(couponId);
         log.info("event=COUPON_EVENT_OPENED couponId={} issueEndAt={}", couponId, coupon.getIssueEndAt());
     }
 
@@ -89,6 +92,7 @@ public class CouponEventService {
             log.info("event=COUPON_EVENT_CLOSE_RACED couponId={}", couponId);
             return;
         }
+        couponCache.evict(couponId);
         log.info("event=COUPON_EVENT_CLOSED_BY_ADMIN couponId={}", couponId);
     }
 
@@ -121,6 +125,7 @@ public class CouponEventService {
         if (coupon.isActive()) {
             seqInitializer.applyTtl(couponId, issueEndAt);
         }
+        couponCache.evict(couponId);
         log.info("event=COUPON_ISSUE_PERIOD_CHANGED couponId={} start={} end={}",
                 couponId, issueStartAt, issueEndAt);
     }

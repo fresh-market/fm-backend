@@ -11,19 +11,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import java.lang.reflect.Field;
 import java.time.Clock;
 import java.time.Duration;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Optional;
 
 import com.freshmarket.common.exception.CommonErrorCode;
+import com.freshmarket.coupon.domain.cache.CachedCoupon;
+import com.freshmarket.coupon.domain.cache.CouponCache;
 import com.freshmarket.coupon.domain.dto.CouponIssueResponse;
-import com.freshmarket.coupon.domain.entity.Coupon;
 import com.freshmarket.coupon.domain.entity.CouponScope;
-import com.freshmarket.coupon.domain.entity.DiscountType;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
@@ -32,7 +30,6 @@ import com.freshmarket.coupon.domain.issue.IssueOutcome;
 import com.freshmarket.coupon.domain.issue.IssueTicket;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
 import com.freshmarket.coupon.domain.redis.SeqOutcome;
-import com.freshmarket.coupon.domain.repository.CouponRepository;
 import com.freshmarket.member.MemberApi;
 import com.freshmarket.member.MemberInfo;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,7 +50,7 @@ class CouponIssueServiceTest {
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 6, 1, 12, 0);
 
     @Mock
-    private CouponRepository couponRepository;
+    private CouponCache couponCache;
 
     @Mock
     private MemberApi memberApi;
@@ -69,15 +66,16 @@ class CouponIssueServiceTest {
     @BeforeEach
     void setUp() {
         CouponIssueProperties properties = new CouponIssueProperties(
-                Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000, Duration.ofMillis(100));
+                Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
+                Duration.ofMillis(100), Duration.ofSeconds(5));
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
-        sut = new CouponIssueService(couponRepository, memberApi, allocator, queue, properties, fixed);
+        sut = new CouponIssueService(couponCache, memberApi, allocator, queue, properties, fixed);
     }
 
     @Test
     void 없는_쿠폰이면_찾을_수_없다고_답한다() {
         // given
-        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.empty());
+        when(couponCache.find(COUPON_ID)).thenReturn(Optional.empty());
 
         // when, then
         assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
@@ -283,8 +281,8 @@ class CouponIssueServiceTest {
                 .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
     }
 
-    private void givenCoupon(Coupon coupon) {
-        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
+    private void givenCoupon(CachedCoupon coupon) {
+        when(couponCache.find(COUPON_ID)).thenReturn(Optional.of(coupon));
     }
 
     private void givenAllocated(SeqOutcome outcome) {
@@ -305,49 +303,21 @@ class CouponIssueServiceTest {
         return new MemberInfo(MEMBER_ID, "m@example.com", "회원", gradeId, true);
     }
 
-    private static Coupon defaultCoupon() {
+    private static CachedCoupon defaultCoupon() {
         return limitedCoupon(true, null, NOW.minusDays(1), NOW.plusDays(1));
     }
 
-    private static Coupon targetedCoupon(Long targetGradeId) {
+    private static CachedCoupon targetedCoupon(Long targetGradeId) {
         return limitedCoupon(true, targetGradeId, NOW.minusDays(1), NOW.plusDays(1));
     }
 
-    private static Coupon unlimitedCoupon() {
-        Coupon coupon = Coupon.draftUnlimited("일반 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
-                LocalDate.of(2026, 1, 1), LocalDate.of(2030, 1, 1));
-        setField(coupon, "id", COUPON_ID);
-        return coupon;
+    private static CachedCoupon unlimitedCoupon() {
+        return new CachedCoupon(COUPON_ID, CouponScope.ORDER, null, null, null, null, true);
     }
 
-    /*
-     * 팩터리는 초안으로 만든다. is_active 와 대상 등급은 사람이 켜고 고르는 값이라
-     * 생성 인자에 없어서 여기서 심는다.
-     */
-    private static Coupon limitedCoupon(boolean active, Long targetGradeId,
-                                        LocalDateTime issueStartAt, LocalDateTime issueEndAt) {
-        Coupon coupon = Coupon.draftLimited("선착순 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
-                LocalDate.of(2026, 1, 1), LocalDate.of(2030, 1, 1),
-                TOTAL_QUANTITY, issueStartAt, issueEndAt);
-        setField(coupon, "id", COUPON_ID);
-        setField(coupon, "active", active);
-        setField(coupon, "targetGradeId", targetGradeId);
-        return coupon;
-    }
-
-    private static void setField(Object target, String name, Object value) {
-        for (Class<?> type = target.getClass(); type != null; type = type.getSuperclass()) {
-            try {
-                Field field = type.getDeclaredField(name);
-                field.setAccessible(true);
-                field.set(target, value);
-                return;
-            } catch (NoSuchFieldException e) {
-                // 상위 클래스에 있을 수 있다. BaseMutableTimeEntity 가 id 를 갖는다
-            } catch (IllegalAccessException e) {
-                throw new IllegalStateException(name + " 을 심지 못했다", e);
-            }
-        }
-        throw new IllegalStateException(name + " 필드가 없다");
+    private static CachedCoupon limitedCoupon(boolean active, Long targetGradeId,
+                                              LocalDateTime issueStartAt, LocalDateTime issueEndAt) {
+        return new CachedCoupon(COUPON_ID, CouponScope.ORDER, TOTAL_QUANTITY,
+                issueStartAt, issueEndAt, targetGradeId, active);
     }
 }
