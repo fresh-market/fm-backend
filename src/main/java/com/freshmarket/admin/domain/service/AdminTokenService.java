@@ -267,7 +267,11 @@ public class AdminTokenService {
             refreshTokenRepository.deleteActiveKeyIfMatches(role, adminId, newHash);
 
         } catch (DataAccessException cleanupFailure) {
+            // 서버 내부에서 반복 재시도하지 않는다.
+            // 보상 결과를 확정할 수 없으면 결과 미확정 오류를 호출자에게 전달한다.
             log.warn("event=ADMIN_REFRESH_REDIS_COMPENSATION_FAILED adminId={}", adminId, cleanupFailure);
+            recordFailureAuditSafely(adminId, "REDIS_COMPENSATION_FAILED");
+            throw resultUnknown(cleanupFailure);
         }
     }
 

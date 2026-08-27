@@ -227,6 +227,26 @@ class AdminTokenServiceTest {
     }
 
     @Test
+    void redis_rotation_보상삭제가_실패하면_서버에서_재시도하지_않고_결과_미확정으로_실패한다() {
+        when(refreshTokenRepository.find(OLD_REFRESH_TOKEN)).thenReturn(Optional.of(adminRefreshTokenData()));
+        when(refreshTokenRepository.compareAndRotate(eq(OLD_REFRESH_TOKEN), anyString(), any()))
+                .thenReturn(RotateOutcome.success(
+                        new RefreshTokenData(1L, "ROLE_ADMIN", TokenType.ADMIN, false)));
+        when(adminTokenRepository.rotateKnownAdmin(eq(1L), anyString(), anyString(), any(), any()))
+                .thenThrow(new AdminException(AdminTokenErrorCode.REFRESH_TOKEN_INVALID));
+        doThrow(new DataAccessResourceFailureException("redis cleanup failed"))
+                .when(refreshTokenRepository).deleteByHash(anyString());
+
+        assertThatThrownBy(() -> sut.reissue(OLD_REFRESH_TOKEN))
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminTokenErrorCode.REFRESH_TOKEN_RESULT_UNKNOWN);
+
+        verify(refreshTokenRepository).deleteByHash(anyString());
+        verify(adminAuditLogRepository).save(any(AdminAuditLog.class));
+    }
+
+    @Test
     void redis_rotation_timeout이고_신규_token을_확인하지_못하면_db_fallback하지_않고_결과_미확정으로_실패한다() {
         RefreshTokenData adminData = new RefreshTokenData(1L, "ROLE_ADMIN", TokenType.ADMIN, false);
         when(refreshTokenRepository.find(OLD_REFRESH_TOKEN)).thenReturn(Optional.of(adminData));
