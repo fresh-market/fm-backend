@@ -4,7 +4,7 @@ import com.freshmarket.admin.domain.dto.AdminRegistrationRequest;
 import com.freshmarket.admin.domain.dto.AdminRegistrationResponse;
 import com.freshmarket.admin.domain.entity.Admin;
 import com.freshmarket.admin.domain.entity.AdminAuditLog;
-import com.freshmarket.admin.domain.exception.AdminRegistrationErrorCode;
+import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
 import com.freshmarket.admin.domain.repository.AdminRepository;
@@ -41,11 +41,11 @@ public class AdminRegistrationService {
         Objects.requireNonNull(request, "request");
 
         if (!SUPER_ADMIN_AUTHORITY.equals(issuerRole)) {
-            throw new AdminException(AdminRegistrationErrorCode.SUPER_ADMIN_REQUIRED);
+            throw new AdminException(AdminErrorCode.SUPER_ADMIN_REQUIRED);
         }
 
         if (adminRepository.findByLoginId(request.loginId()).isPresent()) {
-            throw new AdminException(AdminRegistrationErrorCode.LOGIN_ID_DUPLICATED);
+            throw new AdminException(AdminErrorCode.LOGIN_ID_DUPLICATED);
         }
 
         String passwordHash = passwordEncoder.encode(request.initialPassword());
@@ -57,7 +57,7 @@ public class AdminRegistrationService {
             // 그 예외를 API 계약의 ADMIN-006으로 변환하기 위해 flush까지 이 메서드 안에서 수행한다.
             saved = adminRepository.saveAndFlush(admin);
         } catch (DataIntegrityViolationException e) {
-            throw new AdminException(AdminRegistrationErrorCode.LOGIN_ID_DUPLICATED, e);
+            throw new AdminException(AdminErrorCode.LOGIN_ID_DUPLICATED, e);
         }
 
         adminAuditLogRepository.save(AdminAuditLog.of(

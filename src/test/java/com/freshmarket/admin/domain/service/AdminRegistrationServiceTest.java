@@ -13,7 +13,7 @@ import com.freshmarket.admin.domain.dto.AdminRegistrationResponse;
 import com.freshmarket.admin.domain.entity.Admin;
 import com.freshmarket.admin.domain.entity.AdminAuditLog;
 import com.freshmarket.admin.domain.entity.AdminRole;
-import com.freshmarket.admin.domain.exception.AdminRegistrationErrorCode;
+import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
 import com.freshmarket.admin.domain.repository.AdminRepository;
@@ -65,7 +65,7 @@ class AdminRegistrationServiceTest {
         assertThatThrownBy(() -> service.register(ISSUER_ADMIN_ID, "ROLE_ADMIN", request))
                 .isInstanceOf(AdminException.class)
                 .extracting(e -> ((AdminException) e).getErrorCode())
-                .isEqualTo(AdminRegistrationErrorCode.SUPER_ADMIN_REQUIRED);
+                .isEqualTo(AdminErrorCode.SUPER_ADMIN_REQUIRED);
 
         verify(adminRepository, never()).saveAndFlush(any(Admin.class));
     }
@@ -79,7 +79,7 @@ class AdminRegistrationServiceTest {
         assertThatThrownBy(() -> service.register(ISSUER_ADMIN_ID, SUPER_ADMIN, request))
                 .isInstanceOf(AdminException.class)
                 .extracting(e -> ((AdminException) e).getErrorCode())
-                .isEqualTo(AdminRegistrationErrorCode.LOGIN_ID_DUPLICATED);
+                .isEqualTo(AdminErrorCode.LOGIN_ID_DUPLICATED);
 
         verify(adminRepository, never()).saveAndFlush(any(Admin.class));
     }
@@ -94,7 +94,7 @@ class AdminRegistrationServiceTest {
         assertThatThrownBy(() -> service.register(ISSUER_ADMIN_ID, SUPER_ADMIN, request))
                 .isInstanceOf(AdminException.class)
                 .extracting(e -> ((AdminException) e).getErrorCode())
-                .isEqualTo(AdminRegistrationErrorCode.LOGIN_ID_DUPLICATED);
+                .isEqualTo(AdminErrorCode.LOGIN_ID_DUPLICATED);
 
         verify(adminAuditLogRepository, never()).save(any(AdminAuditLog.class));
     }
