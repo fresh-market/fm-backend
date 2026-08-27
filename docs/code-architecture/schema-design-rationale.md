@@ -342,8 +342,19 @@ UNIQUE (pg_tid)   한 PG 거래가 두 주문에 붙는 것
 그 해석은 관리자가 대상을 실수로 지웠을 때 전 상품 할인으로 바뀌고, 그 사고가 조용하다.
 대상이 필수라야 `order_item` 이 복합 외래 키로 대상 여부를 강제할 수 있기도 하다.
 
-**`scope` 만 행에 남는다.** 나머지 일곱과 달리 이것은 스냅샷이 아니라 **복합 외래 키의 한 칸**이라,
-`coupon.scope` 와 같기를 강제하는 역할을 한다.
+**`scope` 만 행에 남는다.** 나머지 일곱과 달리 이것은 스냅샷이 아니라 **복합 외래 키의 한 칸**이다.
+사슬이 두 마디이고, 아래쪽이 더 중요하다.
+
+```
+coupon (coupon_id, scope)
+   ^ fk_mc_coupon (coupon_id, scope)          발급분의 범위가 쿠폰과 어긋날 수 없다
+member_coupon (member_coupon_id, scope)
+   ^ fk_order_coupon_scope                    ITEM 쿠폰을 주문 전체에 못 붙인다
+orders (member_coupon_id, coupon_scope)
+```
+
+`orders.coupon_scope` 가 `'ORDER'` 로 고정돼 있어, 이 외래 키가 **`ITEM` 쿠폰을 주문 전체 할인으로 붙이는 것을 DB 에서 막는다.**
+`member_coupon.scope` 를 빼면 그 검사가 앱으로 넘어간다.
 
 ```sql
 FOREIGN KEY (coupon_id, scope) REFERENCES coupon (coupon_id, scope)
