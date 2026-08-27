@@ -30,6 +30,10 @@ import software.amazon.awssdk.core.exception.SdkException;
  * 자체는 5분(s3.presigned-url-expiry-seconds)이면 만료되지만, 업로드는 그 안에 성공하고도 확정
  * 통지만 유실될 수 있어 더 넉넉히 잡는다. INF-11-12(조회 시점 확정)는 이 코드베이스에 없으므로
  * 대상 밖이다.
+ *
+ * 팀 방침(배치 사용 최소화)에 따라 배치 실행 주기를 하루 한 번(PendingProductImageCleanupScheduler)
+ * 으로 늘리면서, 유예 시간도 24시간에서 3시간으로 줄였다 — 실행이 뜸해진 만큼 유예 시간까지 길면
+ * 고아 행이 남아있는 기간(유예 시간 + 배치 주기)이 지나치게 늘어난다.
  */
 @Slf4j
 @Service
@@ -44,7 +48,7 @@ public class PendingProductImageCleanupService {
 
     public PendingProductImageCleanupService(ProductImageRepository productImageRepository,
             ImageStorageClient imageStorageClient, Clock clock,
-            @Value("${upload.product-image.pending-cleanup-grace-hours:24}") long graceHours) {
+            @Value("${upload.product-image.pending-cleanup-grace-hours:3}") long graceHours) {
         this.productImageRepository = productImageRepository;
         this.imageStorageClient = imageStorageClient;
         this.clock = clock;
