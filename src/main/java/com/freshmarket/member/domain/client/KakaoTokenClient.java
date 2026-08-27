@@ -1,5 +1,6 @@
 package com.freshmarket.member.domain.client;
 
+import com.freshmarket.common.logging.PiiMasker;
 import com.freshmarket.member.domain.exception.AuthErrorCode;
 import com.freshmarket.member.domain.exception.AuthException;
 import com.freshmarket.member.domain.oauth.KakaoTokenResponse;
@@ -13,6 +14,7 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 /**
  * 카카오 OIDC 토큰교환(POST {tokenUri}) 호출 전용 클라이언트.
@@ -47,6 +49,14 @@ public class KakaoTokenClient {
                     .bodyToMono(KakaoTokenResponseBody.class)
                     .map(KakaoTokenResponseBody::toRecord)
                     .block();
+        } catch (WebClientResponseException e) {
+            // 카카오가 응답은 줬지만 거절한 경우(예: invalid_grant, 만료된 code) — 연결 자체가
+            // 안 된 것과는 원인이 다르므로 상태코드를 남긴다. 바디는 unlink/logout과 같은 이유로
+            // (SEC-4-02) 통째로 가린다.
+            String rawBody = e.getResponseBodyAsString();
+            log.warn("event=KAKAO_LOGIN_FAILED reason=TOKEN_EXCHANGE_REJECTED status={} bodyLength={} body={}",
+                    e.getStatusCode(), rawBody == null ? 0 : rawBody.length(), PiiMasker.redact(rawBody), e);
+            throw new AuthException(AuthErrorCode.KAKAO_UNAVAILABLE, e);
         } catch (WebClientException e) {
             log.warn("event=KAKAO_LOGIN_FAILED reason=TOKEN_ENDPOINT_UNREACHABLE", e);
             throw new AuthException(AuthErrorCode.KAKAO_UNAVAILABLE, e);
