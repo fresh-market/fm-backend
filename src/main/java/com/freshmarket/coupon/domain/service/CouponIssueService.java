@@ -17,6 +17,7 @@ import com.freshmarket.coupon.domain.issue.CouponIssueQueue;
 import com.freshmarket.coupon.domain.issue.IssueOutcome;
 import com.freshmarket.coupon.domain.issue.IssueTicket;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
+import com.freshmarket.coupon.domain.redis.CouponSeqUnavailableException;
 import com.freshmarket.coupon.domain.redis.SeqOutcome;
 import com.freshmarket.member.MemberApi;
 import com.freshmarket.member.MemberInfo;
@@ -64,13 +65,26 @@ public class CouponIssueService {
             throw new CouponException(CouponErrorCode.CONGESTED);
         }
 
-        return switch (allocator.allocate(couponId, memberId, coupon.totalQuantity())) {
+        return switch (allocateSeq(couponId, memberId, coupon.totalQuantity())) {
             case SeqOutcome.Allocated allocated -> record(coupon, memberId, allocated.seq());
             case SeqOutcome.AlreadyIssued issued -> CouponIssueResponse.alreadyIssued(issued.seq());
             case SeqOutcome.SoldOut ignored -> throw new CouponException(CouponErrorCode.SOLD_OUT);
             // 준비 전이거나 재건 중이다. 재고는 있을 수 있으므로 최종이 아니다
             case SeqOutcome.NotPrepared ignored -> throw new CouponException(CouponErrorCode.CONGESTED);
         };
+    }
+
+    /*
+     * Redis 가 답하지 않거나 회로가 열려 있으면 순번을 못 받는다.
+     * 재고는 남아 있을 수 있으므로 소진이 아니고, 대체 순번 발급기를 두지 않기로 했으므로
+     * 여기서 끊는다. 이미 큐에 들어간 요청은 이 경로와 무관하게 그대로 발급된다.
+     */
+    private SeqOutcome allocateSeq(long couponId, long memberId, int issueLimit) {
+        try {
+            return allocator.allocate(couponId, memberId, issueLimit);
+        } catch (CouponSeqUnavailableException e) {
+            throw new CouponException(CouponErrorCode.CONGESTED, e);
+        }
     }
 
     private void verifyIssuable(CachedCoupon coupon, long memberId) {

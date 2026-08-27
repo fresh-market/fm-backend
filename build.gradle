@@ -75,6 +75,14 @@ dependencies {
     implementation 'com.github.ben-manes.caffeine:caffeine'
 
     /*
+     * 선착순 발급의 Redis 호출에만 회로를 건다.
+     * 상태 전이(닫힘 -> 열림 -> 반열림)와 슬라이딩 윈도우 집계를 직접 짜면 틀리기 쉽고,
+     * 정작 장애 때 처음 도는 코드라 그 위험을 안 지는 편이 낫다. Boot BOM 이 관리하지 않아
+     * 버전을 직접 적는다.
+     */
+    implementation 'io.github.resilience4j:resilience4j-circuitbreaker:2.3.0'
+
+    /*
      * 인증 방식은 아직 확정 항목이 아니다.
      * infra 의 기술스택 확정문서 8장이 "프로젝트 적용 시 채워야 할 항목" 으로 남겨 두었다.
      * 지금은 서버 세션을 두지 않는 구성으로 시작하고, 확정되면 SecurityConfig 를 그에 맞춘다.

@@ -29,6 +29,7 @@ import com.freshmarket.coupon.domain.issue.CouponIssueQueue;
 import com.freshmarket.coupon.domain.issue.IssueOutcome;
 import com.freshmarket.coupon.domain.issue.IssueTicket;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
+import com.freshmarket.coupon.domain.redis.CouponSeqUnavailableException;
 import com.freshmarket.coupon.domain.redis.SeqOutcome;
 import com.freshmarket.member.MemberApi;
 import com.freshmarket.member.MemberInfo;
@@ -210,6 +211,24 @@ class CouponIssueServiceTest {
 
         // then
         assertThat(response).isEqualTo(new CouponIssueResponse(6, true));
+        verify(queue, never()).submit(any());
+    }
+
+    /*
+     * Redis 가 답하지 않거나 회로가 열렸다.
+     * 재고는 남아 있을 수 있으므로 소진이 아니고, 큐에도 안 넣는다.
+     */
+    @Test
+    void 순번을_못_받으면_혼잡으로_답하고_큐에_안_넣는다() {
+        // given
+        givenCoupon(defaultCoupon());
+        when(queue.hasRoom()).thenReturn(true);
+        when(allocator.allocate(COUPON_ID, MEMBER_ID, TOTAL_QUANTITY))
+                .thenThrow(new CouponSeqUnavailableException("회로가 열렸다", new IllegalStateException()));
+
+        // when, then
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
         verify(queue, never()).submit(any());
     }
 
