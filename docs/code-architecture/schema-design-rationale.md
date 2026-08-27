@@ -1618,7 +1618,18 @@ DATETIME(6) 전환        시각 컬럼 79 개
 계산 컬럼 6 개
 ```
 
-현재 규모는 **표 32, 제약 136, 인덱스 50** 이다.
+현재 규모는 **표 32, 제약 132, 인덱스 50** 이다. `V1__init_schema.sql` 에 `V30` 을 얹은 상태를
+MySQL 8.4 에 올려 센 값이다. 세는 방식은 이렇다.
+
+```
+표       information_schema.tables
+제약     CHECK 83 + FOREIGN KEY 49.  PK 와 UNIQUE 는 인덱스 쪽에서 센다
+인덱스   UNIQUE KEY 43 + KEY idx_ 7
+```
+
+`V30` 이 `member_coupon` 의 CHECK 다섯을 걷어 제약이 137 에서 132 로 줄었다.
+그 뒤 마이그레이션이 표를 둘 더한다(`kakao_unlink_failure`, `option_availability_sync_failure`).
+**이 문서가 세는 것은 `V1` 이 그리는 뼈대이고, 그 뒤 변경은 위 목록이 갖는다.**
 
 정적으로 확인한 것은 이렇다. 매번 스크립트로 다시 돌린다.
 
