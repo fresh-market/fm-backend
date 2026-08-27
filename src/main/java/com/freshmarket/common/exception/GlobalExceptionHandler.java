@@ -4,6 +4,8 @@ import com.freshmarket.common.response.ResponseEnvelope;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -30,6 +32,9 @@ import java.util.stream.Collectors;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    // 재시도까지 기다릴 초. 선착순처럼 몰리는 경로에서 곧바로 되돌아오는 것을 늦춘다
+    private static final int RETRY_AFTER_SECONDS = 1;
 
     // 도메인이 스스로 정의한 실패이므로 상태와 문구를 ErrorCode 에 맡긴다
     @ExceptionHandler(BusinessException.class)
@@ -142,7 +147,17 @@ public class GlobalExceptionHandler {
     }
 
     private ResponseEntity<ResponseEnvelope<Void>> toResponse(ErrorCode errorCode) {
-        return ResponseEntity.status(errorCode.getHttpStatus())
-                .body(ResponseEnvelope.fail(errorCode));
+        HttpStatus status = errorCode.getHttpStatus();
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(status);
+
+        /*
+         * 잠시 뒤면 되는 상태에는 언제 다시 오라는 값을 붙인다.
+         * 도메인 지식이 아니라 상태 코드가 정하는 것이라 여기에 둔다. 이것이 없으면 클라이언트가
+         * 곧바로 다시 눌러, 몰려서 못 받은 요청이 다시 몰리는 원인이 된다.
+         */
+        if (status == HttpStatus.SERVICE_UNAVAILABLE || status == HttpStatus.TOO_MANY_REQUESTS) {
+            builder.header(HttpHeaders.RETRY_AFTER, String.valueOf(RETRY_AFTER_SECONDS));
+        }
+        return builder.body(ResponseEnvelope.fail(errorCode));
     }
 }

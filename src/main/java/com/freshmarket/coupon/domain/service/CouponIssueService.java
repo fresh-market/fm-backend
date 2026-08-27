@@ -1,0 +1,131 @@
+package com.freshmarket.coupon.domain.service;
+
+import java.time.Clock;
+import java.time.LocalDateTime;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+import com.freshmarket.common.exception.CommonErrorCode;
+import com.freshmarket.coupon.domain.dto.CouponIssueResponse;
+import com.freshmarket.coupon.domain.entity.Coupon;
+import com.freshmarket.coupon.domain.exception.CouponErrorCode;
+import com.freshmarket.coupon.domain.exception.CouponException;
+import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
+import com.freshmarket.coupon.domain.issue.CouponIssueQueue;
+import com.freshmarket.coupon.domain.issue.IssueOutcome;
+import com.freshmarket.coupon.domain.issue.IssueTicket;
+import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
+import com.freshmarket.coupon.domain.redis.SeqOutcome;
+import com.freshmarket.coupon.domain.repository.CouponRepository;
+import com.freshmarket.member.MemberApi;
+import com.freshmarket.member.MemberInfo;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+
+/**
+ * 선착순 발급의 네 단계를 잇는다. 자격을 보고, 순번을 받고, 큐에 넣고, 결과를 응답으로 바꾼다.
+ *
+ * <p>트랜잭션이 없다. 쓰기는 플러시 스레드가 자기 커넥션으로 하고 이 메서드는 큐에 넣고 기다릴
+ * 뿐이다. 여기서 트랜잭션을 열면 기다리는 내내 커넥션을 쥐어, 5장의 커넥션 예산을 요청 수만큼
+ * 먹는다({@code docs/coupon/coupon.md} 5장).
+ */
+@Service
+@RequiredArgsConstructor
+public class CouponIssueService {
+
+    private final CouponRepository couponRepository;
+    private final MemberApi memberApi;
+    private final CouponSeqAllocator allocator;
+    private final CouponIssueQueue queue;
+    private final CouponIssueProperties properties;
+    private final Clock clock;
+
+    /**
+     * 이 회원에게 쿠폰 한 장을 발급한다.
+     *
+     * @return 순번과, 그것이 이번에 받은 것인지 원래 갖고 있던 것인지
+     * @throws CouponException 소진(최종)이거나 혼잡(다시 시도할 값이 있다)일 때
+     */
+    public CouponIssueResponse issue(long couponId, long memberId) {
+        Coupon coupon = couponRepository.findById(couponId)
+                .orElseThrow(() -> new CouponException(CouponErrorCode.COUPON_NOT_FOUND));
+        verifyIssuable(coupon, memberId);
+
+        /*
+         * 자리를 순번보다 먼저 본다.
+         * 순번을 받고 나서 큐에 못 넣으면 그 번호를 반납해야 하는데, 순서를 뒤집으면 그 경로가
+         * 아예 안 생긴다.
+         */
+        if (!queue.hasRoom()) {
+            throw new CouponException(CouponErrorCode.CONGESTED);
+        }
+
+        return switch (allocator.allocate(couponId, memberId, coupon.getTotalQuantity())) {
+            case SeqOutcome.Allocated allocated -> record(coupon, memberId, allocated.seq());
+            case SeqOutcome.AlreadyIssued issued -> CouponIssueResponse.alreadyIssued(issued.seq());
+            case SeqOutcome.SoldOut ignored -> throw new CouponException(CouponErrorCode.SOLD_OUT);
+            // 준비 전이거나 재건 중이다. 재고는 있을 수 있으므로 최종이 아니다
+            case SeqOutcome.NotPrepared ignored -> throw new CouponException(CouponErrorCode.CONGESTED);
+        };
+    }
+
+    private void verifyIssuable(Coupon coupon, long memberId) {
+        if (!coupon.isLimited()) {
+            throw new CouponException(CouponErrorCode.NOT_LIMITED);
+        }
+        if (!coupon.isActive() || !coupon.isIssuableAt(LocalDateTime.now(clock))) {
+            throw new CouponException(CouponErrorCode.NOT_ISSUABLE);
+        }
+        verifyTargetGrade(coupon, memberId);
+    }
+
+    /*
+     * 대상 등급이 걸려 있지 않으면 회원을 아예 읽지 않는다.
+     * 이 읽기는 DB 왕복이라 선착순 경로에서 되도록 피한다. 대부분의 선착순 쿠폰은 등급을 안 건다.
+     */
+    private void verifyTargetGrade(Coupon coupon, long memberId) {
+        if (coupon.getTargetGradeId() == null) {
+            return;
+        }
+        /*
+         * memberId 는 검증된 토큰에서 온다. 그런데도 회원이 없다면 발급 이후에 탈퇴한 것이라,
+         * 쿠폰이 아니라 자격 증명 쪽의 실패다.
+         */
+        MemberInfo member = memberApi.findMember(memberId)
+                .orElseThrow(() -> new CouponException(CommonErrorCode.UNAUTHENTICATED));
+        if (!coupon.isTargetGrade(member.memberGradeId())) {
+            throw new CouponException(CouponErrorCode.NOT_TARGET_GRADE);
+        }
+    }
+
+    private CouponIssueResponse record(Coupon coupon, long memberId, int issueSeq) {
+        IssueTicket ticket = IssueTicket.of(
+                coupon.getId(), memberId, coupon.getScope(), coupon.getTotalQuantity(), issueSeq);
+        queue.submit(ticket);
+        return waitFor(ticket);
+    }
+
+    private CouponIssueResponse waitFor(IssueTicket ticket) {
+        try {
+            IssueOutcome outcome = ticket.future()
+                    .get(properties.requestBudget().toMillis(), TimeUnit.MILLISECONDS);
+            return switch (outcome) {
+                case IssueOutcome.Issued issued -> CouponIssueResponse.issued(issued.seq());
+                case IssueOutcome.AlreadyIssued already -> CouponIssueResponse.alreadyIssued(already.seq());
+                case IssueOutcome.Congested ignored -> throw new CouponException(CouponErrorCode.CONGESTED);
+            };
+        } catch (TimeoutException e) {
+            /*
+             * 예산 안에 못 끝냈다. 이 스레드는 떠나지만 그 항목은 큐에 남아 결국 써진다.
+             * 사용자가 다시 오면 매핑이 같은 번호를 돌려주므로 번호가 새로 타지 않는다.
+             */
+            throw new CouponException(CouponErrorCode.CONGESTED, e);
+        } catch (ExecutionException e) {
+            throw new CouponException(CouponErrorCode.CONGESTED, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new CouponException(CouponErrorCode.CONGESTED, e);
+        }
+    }
+}
