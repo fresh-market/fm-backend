@@ -52,14 +52,29 @@ public class KakaoUnlinkClient {
             // 카카오 쪽 자유 형식 에러 메시지라 어떤 값이 실릴지 우리가 통제할 수 없으므로(부분
             // 마스킹이 애매한 경우, 다른 필터들의 REDACTED 관례와 동일하게) 통째로 가린다. 상태코드와
             // 바디 길이만 남겨도 "카카오가 몇 번대 에러로 몇 바이트짜리 응답을 줬는지"는 추적 가능하다.
-            String rawBody = e.getResponseBodyAsString();
-            log.error("event=KAKAO_UNLINK_FAILED status={} bodyLength={} body={} kakaoUserId={}",
-                    e.getStatusCode(), rawBody == null ? 0 : rawBody.length(),
-                    PiiMasker.redact(rawBody), PiiMasker.maskProviderId(kakaoUserId), e);
+            if (isAdminKeyRejected(e)) {
+                // (2026-08-27) 401/403은 이번 요청이 잘못된 게 아니라 Admin Key 자체가
+                // 무효/만료됐다는 뜻이다 — 재시도(스케줄러든 뭐든)로 절대 안 풀리는 설정
+                // 사고라, 다른 실패와 같은 이벤트명으로 묻히면 사람이 알아채기까지
+                // "계속 재시도만 실패하는" 상태가 길게 이어진다. 얼럿 룰이 이 이벤트명을
+                // 따로 잡을 수 있게 분리해서 남긴다.
+                log.error("event=KAKAO_ADMIN_KEY_REJECTED api=unlink status={} kakaoUserId={} — Admin Key 확인 필요",
+                        e.getStatusCode(), PiiMasker.maskProviderId(kakaoUserId), e);
+            } else {
+                String rawBody = e.getResponseBodyAsString();
+                log.error("event=KAKAO_UNLINK_FAILED status={} bodyLength={} body={} kakaoUserId={}",
+                        e.getStatusCode(), rawBody == null ? 0 : rawBody.length(),
+                        PiiMasker.redact(rawBody), PiiMasker.maskProviderId(kakaoUserId), e);
+            }
             throw new MemberException(MemberErrorCode.KAKAO_UNLINK_FAILED, e);
         } catch (Exception e) {
             log.error("event=KAKAO_UNLINK_FAILED kakaoUserId={}", PiiMasker.maskProviderId(kakaoUserId), e);
             throw new MemberException(MemberErrorCode.KAKAO_UNLINK_FAILED, e);
         }
+    }
+
+    private static boolean isAdminKeyRejected(WebClientResponseException e) {
+        int status = e.getStatusCode().value();
+        return status == 401 || status == 403;
     }
 }
