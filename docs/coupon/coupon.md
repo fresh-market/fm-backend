@@ -194,6 +194,10 @@ UPDATE member_coupon SET status = 'EXPIRED', updated_at = NOW(6)
 
 ### 자격 확인이 보는 것
 
+1번이 보는 기간은 `coupon.issue_start_at` 과 `issue_end_at` 이다. 둘 다 `NULL` 이면 제한이 없고, `issue_end_at` 이 `NULL` 이면 소진까지 연다.
+
+**이 체크가 아래 "이벤트 종료 후" 의 TTL 이 기대는 안전장치다.** `issue_end_at` 이 지난 요청이 여기서 안 걸리면, 키가 만료된 뒤에 `INCR` 이 1 을 내준다.
+
 1번이 보는 스위치는 **`coupon.is_active` 하나뿐이다.**
 
 `coupon_product_option.is_active` 라는 같은 이름의 컬럼이 있지만 그것은 **쿠폰을 주문에 적용할 때** 보는 값이라 발급과 무관하다. 발급 로직이 대상 옵션을 조회할 이유가 없다. 근거는 [schema-design-rationale.md](../code-architecture/schema-design-rationale.md) 의 "같은 이름의 is_active 가 둘이다" 에 있다.
@@ -375,7 +379,7 @@ HSET coupon:{id}:seq 5001 "6:1" 5002 "7:1" ...
 
 **세 키는 함께 살고 함께 죽는다.** `coupon:{id}:seq`, `coupon:{id}:free`, 카운터 중 하나만 사라지면 나머지가 거짓말을 한다.
 
-**수명은 이벤트 종료 절차가 정한다.** TTL 을 걸지 않고 종료 시 세 키를 함께 지운다. 순서와 이유는 아래 "이벤트 종료 후" 에 있다.
+**수명은 이벤트 종료 절차가 정한다.** 배치가 세 키를 함께 지우고, 그것이 안 돌았을 때를 위해 `issue_end_at + 1분` 의 TTL 을 그물로 건다. 순서와 이유는 아래 "이벤트 종료 후" 에 있다.
 
 **여기의 `DECR` 은 안전하다.** 위에서 `DECR` 로는 못 고친다고 한 것은 DB 를 갔다 온 뒤의 얘기다. 그 사이에 남들이 `INCR` 해서 맨 위가 내가 아니게 된다. 이 자리는 스크립트 안이라 `INCR` 과 `DECR` 사이에 아무도 끼어들 수 없어 **맨 위가 나인 것이 확실하다.** `DECR` 이 성립하는 조건은 "아직 아무도 지나가지 않았다" 이고, 원자 스크립트 안이 그것을 만족하는 유일한 자리다.
 
@@ -404,13 +408,31 @@ SELECT issue_seq FROM member_coupon WHERE coupon_id = ? AND member_id = ?;
 **순서가 있다.** 키를 먼저 지우면 지각 요청이 카운터 없는 Redis 를 친다.
 
 ```
-1  관리자가 coupon.is_active 를 끈다
+1  is_active 를 끈다.  관리자가 누르거나, 소진되면 배치가 끈다
 2  진행 중인 배치가 결판날 때까지 기다린다
-3  종료 처리가 issued_quantity 를 실제 발급 수로 맞춘다
-4  종료 처리가 세 키를 UNLINK 한다
+3  배치가 issued_quantity 를 실제 발급 수로 맞춘다
+4  배치가 세 키를 UNLINK 한다
 ```
 
-**3과 4를 누가 실행하는지는 아직 정하지 않았다.** 관리자 동작이 바로 이어서 돌릴 수도 있고 배치가 주기로 훑을 수도 있다. 어느 쪽이든 1번 뒤라는 순서만 지키면 된다.
+**소진되면 배치가 끈다.** 관리자가 누르지 않아도 끝나게 하는 장치다.
+
+```sql
+UPDATE coupon c SET is_active = FALSE, updated_at = NOW(6)
+ WHERE is_active = TRUE AND total_quantity IS NOT NULL
+   AND (SELECT COUNT(*) FROM member_coupon WHERE coupon_id = c.coupon_id) >= total_quantity;
+```
+
+**발급 수는 실제 행 수라 구멍이 안 잡힌다.** 반납된 번호가 남아 있으면 `COUNT < total` 이라 안 꺼진다. 정말 다 나갔을 때만 꺼진다.
+
+**정리 대상은 DB 로 찾는다.** Redis 키가 남아 있는지로 찾지 않는다.
+
+```sql
+SELECT coupon_id FROM coupon c
+ WHERE is_active = FALSE AND total_quantity IS NOT NULL
+   AND issued_quantity <> (SELECT COUNT(*) FROM member_coupon WHERE coupon_id = c.coupon_id);
+```
+
+키로 찾으면 **TTL 이 키를 먼저 지웠을 때 대상을 놓쳐** 3번을 건너뛴다. DB 만 보면 TTL 길이와 배치 주기가 서로 묶이지 않는다. `is_active = FALSE` 조건이 발급 중인 쿠폰을 건드리지 않게 지킨다.
 
 **1번이 먼저인 이유.** 새 요청을 1단계에서 끊는다. 다만 그 순간 **이미 서버 안에 들어와 1단계를 통과한 요청들이 남아 있고**, `is_active` 를 캐시해서 보는 버전이면 그 TTL 만큼 더 통과한다.
 
@@ -422,7 +444,18 @@ SELECT issue_seq FROM member_coupon WHERE coupon_id = ? AND member_id = ?;
 
 `DEL` 이 아니라 `UNLINK` 를 쓴다. 1만 필드 해시를 그 자리에서 해제하지 않고 백그라운드로 넘긴다.
 
-**TTL 은 걸지 않는다.** 값을 정하려면 이벤트 기간을 알아야 하고 세 키에 일관되게 걸어야 하는데, 하나라도 어긋나면 **이벤트 도중 한 키만 사라진다.** 막으려는 것이 700KB 남짓의 누수라 거래가 안 맞는다. 지우지 못한 키는 TTL 로 덮지 말고 관측으로 잡는다.
+**TTL 은 그물로만 건다.** 위 절차가 안 돌았을 때를 위한 것이고 주 경로가 아니다.
+
+```
+issue_end_at 이 있다    EXPIREAT (issue_end_at + 1분)
+issue_end_at 이 NULL    걸지 않는다.  끝나는 시각이 없어 기준이 없다
+```
+
+**`EXPIREAT` 를 쓴다.** 절대 시각이라 스크립트가 몇 번 불려도 값이 같다. `EXPIRE` 로 상대 초를 걸면 부를 때마다 갱신되어 **"마지막 발급 후 1분" 이 되고**, 발급이 잠깐 뜸해지면 그때 사라진다.
+
+**1분은 꼬리를 덮는 값이다.** `issue_end_at` 직전에 1단계를 통과한 요청이 Redis 에 닿는 데까지, 그리고 마지막 배치가 실패해 반납하는 데까지다. 배치 윈도우와 커밋과 캐시 지연을 합쳐도 초 단위다.
+
+**이 TTL 은 1단계의 기간 체크에 기댄다.** 마감이 지난 요청이 거기서 안 걸리면 키가 만료된 뒤에 `INCR` 이 1 을 내준다.
 
 3번은 아래와 같다. `coupon.issued_quantity` 를 실제 발급 수로 맞춘다.
 
