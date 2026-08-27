@@ -56,6 +56,9 @@ public enum MemberErrorCode implements ErrorCode {
     ADDRESS_LIMIT_EXCEEDED(HttpStatus.CONFLICT, "MEMBER-016", "배송지는 최대 10개까지 등록할 수 있습니다."),
     KAKAO_UNLINK_FAILURE_NOT_FOUND(HttpStatus.NOT_FOUND, "MEMBER-017", "카카오 연결 해제 실패 기록을 찾을 수 없습니다."),
     KAKAO_UNLINK_FAILURE_NOT_GAVE_UP(HttpStatus.CONFLICT, "MEMBER-018", "아직 포기 처리된 카카오 연결 해제 실패 기록이 아닙니다."),
+    // (2026-08-27) 로그아웃도 unlink처럼 서킷브레이커 대상이라, 내부에서 삼키지 않고 던져야
+    // CB가 실패를 인지한다 — KakaoLogoutClient/KakaoLogoutEventListener 참고.
+    KAKAO_LOGOUT_FAILED(HttpStatus.BAD_GATEWAY, "MEMBER-019", "카카오 로그아웃 요청에 실패했습니다."),
     ;
 
     private final HttpStatus httpStatus;
