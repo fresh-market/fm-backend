@@ -20,7 +20,7 @@ public enum AdminErrorCode implements ErrorCode {
 
     SUPER_ADMIN_REQUIRED(HttpStatus.FORBIDDEN, "ADMIN-005", "최고관리자 권한이 필요합니다."),
 
-    LOGIN_ID_DUPLICATED(HttpStatus.CONFLICT, "ADMIN-006", "이미 사용 중인 관리자 아이디입니다.");
+    LOGIN_ID_DUPLICATED(HttpStatus.CONFLICT, "ADMIN-006", "이미 사용 중인 관리자 아이디입니다. 다른 아이디를 사용해 주세요.");
 
     private final HttpStatus httpStatus;
     private final String code;
