@@ -156,8 +156,9 @@ public class CouponIssueFlusher implements SmartLifecycle {
             bulkRepository.insertAll(batch);
         } catch (DataAccessException e) {
             /*
-             * 한 행이 걸리면 문장 전체가 실패해 아무것도 안 들어갔다.
              * 어느 행이 왜 걸렸는지는 여기서 알 수 없으므로 한 건씩 다시 넣어 가른다.
+             * 앞선 배치가 일부는 넣었을 수 있다. 그래서 다시 넣다 걸린 것이 남의 행인지 이 요청
+             * 자신의 행인지를 resolveDuplicate 가 순번으로 갈라야 한다.
              */
             flushOneByOne(batch);
             return;
@@ -204,12 +205,24 @@ public class CouponIssueFlusher implements SmartLifecycle {
         }
 
         if (actualSeq.isPresent()) {
+            int actual = actualSeq.get();
+
             /*
-             * uk_mc_coupon_member 다. 이 회원은 이미 갖고 있었고 이번 번호는 아무도 안 썼다.
-             * 이 경로는 Redis 가 매핑을 잃은 뒤에 온 회원에게만 생긴다.
+             * 이번에 받은 번호로 이미 행이 있다. 앞선 시도가 썼고 확정 표시만 못 남긴 것이다.
+             * 그 번호는 살아 있으므로 반납하면 안 된다. 표시만 마저 남긴다.
              */
-            committer.returnAndRepair(ticket.couponId(), ticket.memberId(), ticket.issueSeq(), actualSeq.get());
-            ticket.complete(new IssueOutcome.AlreadyIssued(actualSeq.get()));
+            if (actual == ticket.issueSeq()) {
+                committer.markCommitted(ticket.couponId(), Map.of(ticket.memberId(), actual));
+                ticket.complete(new IssueOutcome.AlreadyIssued(actual));
+                return;
+            }
+
+            /*
+             * 원래 갖고 있던 번호가 따로 있다. 이번 번호는 아무도 안 썼으므로 반납한다.
+             * 이 경로는 Redis 가 매핑을 잃은 뒤에 다시 온 회원에게 생긴다.
+             */
+            committer.returnAndRepair(ticket.couponId(), ticket.memberId(), ticket.issueSeq(), actual);
+            ticket.complete(new IssueOutcome.AlreadyIssued(actual));
             return;
         }
 

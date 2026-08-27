@@ -102,6 +102,24 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
     }
 
     /*
+     * 같은 회원이 같은 번호로 다시 온 경우다. 앞선 시도가 이미 썼고 확정 표시만 못 남긴 것이다.
+     * 그 번호는 실제 행이 쓰고 있으므로 반납하면 다음 사람이 그것을 받아 충돌한다.
+     */
+    @Test
+    void 자기_번호로_다시_오면_반납하지_않는다() throws Exception {
+        결과를_기다린다(순번을_받은_요청(9101L, 1));
+        redisTemplate.opsForHash().put(SEQ, "9101", "1");
+
+        IssueTicket again = 순번을_받은_요청(9101L, 1);
+        IssueOutcome outcome = 결과를_기다린다(again);
+
+        assertThat(outcome).isEqualTo(new IssueOutcome.AlreadyIssued(1));
+        assertThat(redisTemplate.opsForZSet().score(FREE, "1")).isNull();
+        assertThat(redisTemplate.opsForHash().get(SEQ, "9101")).isEqualTo("1:1");
+        assertThat(발급된_행_수()).isEqualTo(1);
+    }
+
+    /*
      * uk_mc_coupon_seq 다. 그 번호는 남이 쓰고 있으므로 반납하면 안 된다.
      * 반납하면 또 다른 회원이 그 번호를 받아 같은 충돌을 되풀이한다.
      */

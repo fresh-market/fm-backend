@@ -26,8 +26,14 @@ import org.testcontainers.utility.DockerImageName;
 @ActiveProfiles("integrationTest")
 public abstract class IntegrationTestSupport {
 
+    /*
+     * 접속 URL 을 application.yml 이 아니라 컨테이너가 만든다.
+     * 그래서 운영에 건 접속 파라미터는 여기에도 걸어야 한다. 안 그러면 JDBC 배치가 테스트에서만
+     * 건별로 나가서, 실패 처리 분기가 운영과 다른 모양을 보고 검증된다.
+     */
     @ServiceConnection
-    protected static final MySQLContainer MYSQL = new MySQLContainer(DockerImageName.parse("mysql:8.4"));
+    protected static final MySQLContainer MYSQL = new MySQLContainer(DockerImageName.parse("mysql:8.4"))
+            .withUrlParam("rewriteBatchedStatements", "true");
 
     /*
      * Valkey 도 같은 이유로 여기서 한 번만 띄운다.
