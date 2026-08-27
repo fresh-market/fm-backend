@@ -33,10 +33,10 @@ public record AdminRegistrationRequest(
         AdminRole role
 ) {
 
-    // record 기본 toString()을 재정의해 초기 비밀번호가 로그에 노출되지 않도록 마스킹한다.
+    // record 기본 toString()을 재정의해 초기 비밀번호와 이름이 로그에 노출되지 않도록 마스킹한다.
     @Override
     public String toString() {
         return "AdminRegistrationRequest[loginId=" + loginId
-                + ", initialPassword=****, name=" + name + ", role=" + role + "]";
+                + ", initialPassword=****, name=****, role=" + role + "]";
     }
 }

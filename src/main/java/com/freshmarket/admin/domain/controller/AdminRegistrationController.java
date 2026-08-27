@@ -30,7 +30,7 @@ class AdminRegistrationController {
             summary = "관리자 계정 발급",
             description = "최고관리자만 사용할 수 있다. 초기 비밀번호는 BCrypt 해시로만 저장한다.")
     @ApiResponse(responseCode = "201", description = "계정 발급 성공")
-    @ApiResponse(responseCode = "403", description = "최고관리자가 아님 (ADMIN-005)")
+    @ApiResponse(responseCode = "403", description = "최고관리자 권한 필요 (ADMIN-005)")
     @ApiResponse(responseCode = "409", description = "로그인 아이디 중복 (ADMIN-006)")
     @PostMapping
     ResponseEntity<ResponseEnvelope<AdminRegistrationResponse>> register(

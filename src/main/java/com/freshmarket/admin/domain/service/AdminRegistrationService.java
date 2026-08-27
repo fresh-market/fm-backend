@@ -21,6 +21,7 @@ public class AdminRegistrationService {
 
     private static final String SUPER_ADMIN_AUTHORITY = "ROLE_SUPER_ADMIN";
     private static final String AUDIT_ACTION = "ADMIN_ACCOUNT_CREATE";
+    private static final int TRANSACTION_TIMEOUT_SECONDS = 5;
 
     private final AdminRepository adminRepository;
     private final AdminAuditLogRepository adminAuditLogRepository;
@@ -30,7 +31,7 @@ public class AdminRegistrationService {
      * 계정 발급과 감사 로그를 같은 DB 트랜잭션에 둔다.
      * 감사 로그 저장이 실패했는데 계정만 생성되면 최고관리자 행위 추적이 끊기므로 둘 중 하나라도 실패하면 함께 롤백한다.
      */
-    @Transactional(timeout = 5)
+    @Transactional(timeout = TRANSACTION_TIMEOUT_SECONDS)
     public AdminRegistrationResponse register(
             Long issuerAdminId,
             String issuerRole,
