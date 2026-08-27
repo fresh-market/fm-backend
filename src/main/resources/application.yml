@@ -172,9 +172,10 @@ resilience4j:
         # 트래픽이 뜸한 API라 백그라운드 스레드로 자동 전환할 필요가 없다 —
         # waitDuration이 지난 뒤 다음 실제 요청이 half-open 전환 여부를 판단한다
         automaticTransitionFromOpenToHalfOpenEnabled: false
-        # /actuator/health에 묶지 않는다 (INF-16과 같은 이유 — readiness의 diskSpace 화이트리스트
-        # 참고). 카카오 장애는 우리 배포/DB/주문과 무관한 제3자 장애라, 이걸로 health를 DOWN
-        # 시키면 배포 스모크나 ALB가 엉뚱하게 반응한다. 상태 확인은 Micrometer/Prometheus로 한다.
+        # /actuator/health에 묶지 않는다
+        # 카카오 장애는 우리 배포/DB/주문과 무관한 제3자 장애라
+        # 이걸로 health를 DOWN시키면 배포 스모크나 ALB가 엉뚱하게 반응한다.
+        # 상태 확인은 Micrometer/Prometheus로 한다.
         registerHealthIndicator: false
         eventConsumerBufferSize: 100
     instances:

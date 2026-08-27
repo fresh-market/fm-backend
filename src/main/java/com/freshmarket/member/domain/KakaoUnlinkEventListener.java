@@ -3,6 +3,7 @@ package com.freshmarket.member.domain;
 import com.freshmarket.common.logging.PiiMasker;
 import com.freshmarket.member.domain.client.KakaoUnlinkClient;
 import com.freshmarket.member.domain.service.KakaoUnlinkRetryService;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -27,10 +28,20 @@ public class KakaoUnlinkEventListener {
     private final KakaoUnlinkClient kakaoUnlinkClient;
     private final KakaoUnlinkRetryService kakaoUnlinkRetryService;
 
+    /*
+     * (2026-08-27) CallNotPermittedException(서킷 OPEN이라 카카오한테 요청 자체를 안 보낸 경우)을
+     * 일반 실패와 분리해서 로그로 남긴다 — 이후 처리(recordFailure로 아웃박스 기록)는 동일하다.
+     * 순수 로그 구분용이라 이 분리 자체가 재시도 동작을 바꾸진 않는다(카운트 관련 처리는
+     * KakaoUnlinkRetryService.retryOne()에서 이미 갈라뒀다).
+     */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handle(MemberWithdrawalEvent event) {
         try {
             kakaoUnlinkClient.unlink(event.kakaoUserId());
+        } catch (CallNotPermittedException e) {
+            log.warn("event=KAKAO_UNLINK_CIRCUIT_OPEN memberId={} kakaoUserId={} — 호출 자체를 안 하고 아웃박스로",
+                    event.memberId(), PiiMasker.maskProviderId(event.kakaoUserId()));
+            kakaoUnlinkRetryService.recordFailure(event.memberId(), event.kakaoUserId());
         } catch (Exception e) {
             log.warn("event=KAKAO_UNLINK_FAILED memberId={} kakaoUserId={} — 아웃박스에 기록, 스케줄러가 재시도",
                     event.memberId(), PiiMasker.maskProviderId(event.kakaoUserId()), e);
