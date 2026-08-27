@@ -52,11 +52,14 @@ import org.springframework.transaction.annotation.Transactional;
  * "영속되는 시각" 계산에만 쓰고, JwtTokenProvider 자체는 Clock을 안 받는다). 두 브랜치를 합칠 때
  * 충돌을 줄이려고 이 범위에 맞췄다 — JwtTokenProvider.java의 관련 주석 참고.
  *
- * (2026-08-25 추가) revoke()가 DB 백업/Redis 정리 중 하나라도 실패하면, 무효화됐어야 할
+ * (2026-08-27 변경) revoke()가 DB 백업/Redis 정리 중 하나라도 실패하면, 무효화됐어야 할
  * refreshToken이 그대로 남아 재발급에 쓰일 수 있다(Redis 정리 실패면 Redis가 멀쩡한 동안에도,
  * DB 백업 정리 실패면 나중에 Redis 완전장애 시 reissueViaDbFallback()이 여전히 믿어버린다).
- * 그 실패를 RefreshTokenRevokeRetryService(아웃박스)로 넘겨 스케줄러가 재시도하게 한다 —
- * KakaoUnlinkEventListener/KakaoUnlinkRetryService와 같은 패턴.
+ * 예전엔 그 실패를 RefreshTokenRevokeRetryService(아웃박스)로 넘겨 스케줄러가 재시도하게
+ * 했지만, 배치가 돌 때까지(최대 10분) 무효화됐어야 할 토큰이 조용히 살아있는 창을 감수하는
+ * 대신 — 그 자리에서 AuthException(LOGOUT_FAILED)을 던져 로그아웃 응답 자체를 실패시키고
+ * 클라이언트가 재시도하게 한다. revoke()가 @Transactional이라, 이 예외는 그 안에서 이미
+ * 반영된 DB 쓰기(예: clearRefreshToken 성공 후 Redis 삭제만 실패한 경우)까지 함께 롤백한다.
  */
 @Slf4j
 @Service
@@ -70,7 +73,6 @@ public class MemberTokenService {
     private final MemberRepository memberRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
-    private final RefreshTokenRevokeRetryService refreshTokenRevokeRetryService;
 
     public record IssueResult(String accessToken, long expiresInSeconds) {
     }
@@ -214,6 +216,9 @@ public class MemberTokenService {
      * 항상 빈 값이 된다. findById()는 이 폴백이 실제로 필요할 때(activeKey 미스)와
      * logoutExternalSession=true일 때만 부른다 — 평소(Redis 정상, 내부 로그아웃)엔 여기서
      * DB 조회가 추가로 생기지 않는다.
+     *
+     * (2026-08-27 변경) DB 백업 삭제/Redis 삭제 중 하나라도 실패하면 AuthException(LOGOUT_FAILED)을
+     * 던져 즉시 로그아웃 실패 응답으로 끝낸다 — 재시도 아웃박스로 미루지 않는다(클래스 주석 참고).
      */
     @Transactional
     public void revoke(Long memberId, String role, boolean logoutExternalSession) {
@@ -224,24 +229,21 @@ public class MemberTokenService {
             log.warn("event=REDIS_LOOKUP_FAILED role={} id={} — 활성 해시 조회 실패, DB 백업 해시로 폴백 시도", role, memberId, e);
             hash = Optional.empty();
         }
-        // (2026-08-26 수정) Redis 조회가 "값 없음"이 아니라 예외로 실패한 경우에도 DB 백업
-        // 해시(Member.refreshTokenHash)로 폴백해야 한다 — 그러지 않으면 dbCleared/redisCleared 중
-        // 하나가 실패해도 hash가 비어 있어 recordFailure()가 호출되지 않고, Redis의
-        // refreshToken:{hash} 레코드가 안 지워진 채 재시도 아웃박스에도 안 남는 구멍이 생긴다.
+        // Redis 조회가 "값 없음"이 아니라 예외로 실패한 경우에도 DB 백업 해시(Member.refreshTokenHash)로
+        // 폴백해야 한다 — 그러지 않으면 정말로는 지워야 할 Redis의 refreshToken:{hash} 레코드가
+        // 어느 해시인지 몰라 deleteActiveKey()만 타고 그대로 남는다.
         if (hash.isEmpty()) {
             hash = memberRepository.findById(memberId).map(Member::getRefreshTokenHash);
             hash.ifPresent(h -> log.warn("event=ACTIVE_KEY_MISSING_DB_FALLBACK_USED role={} id={}", role, memberId));
         }
 
-        boolean dbCleared = true;
         try {
             memberRepository.clearRefreshToken(memberId);
         } catch (DataAccessException e) {
-            dbCleared = false;
-            log.warn("event=DB_BACKUP_DELETE_FAILED memberId={} — DB 백업 삭제 실패(재시도 아웃박스로 넘김)", memberId, e);
+            log.error("event=DB_BACKUP_DELETE_FAILED memberId={} — 로그아웃 실패로 응답", memberId, e);
+            throw new AuthException(AuthErrorCode.LOGOUT_FAILED, e);
         }
 
-        boolean redisCleared = true;
         try {
             if (hash.isPresent()) {
                 refreshTokenRepository.revokeIfActiveHashMatches(hash.get(), role, memberId);
@@ -249,15 +251,8 @@ public class MemberTokenService {
                 refreshTokenRepository.deleteActiveKey(role, memberId);
             }
         } catch (DataAccessException e) {
-            redisCleared = false;
-            log.warn("event=REDIS_DELETE_FAILED role={} id={} — 재시도 아웃박스로 넘김", role, memberId, e);
-        }
-
-        // (2026-08-25) 둘 중 하나라도 실패했으면 아웃박스에 남겨 스케줄러가 재시도하게 한다. hash가
-        // 없으면(Redis 조회 자체가 실패했거나 애초에 발급 이력이 없으면) 어느 해시를 조건으로 지울지
-        // 몰라 안전하게 재시도할 수 없으므로 건너뛴다 — RefreshTokenRevokeRetryService 클래스 주석 참고.
-        if (!dbCleared || !redisCleared) {
-            hash.ifPresent(h -> refreshTokenRevokeRetryService.recordFailure(memberId, role, h));
+            log.error("event=REDIS_DELETE_FAILED role={} id={} — 로그아웃 실패로 응답", role, memberId, e);
+            throw new AuthException(AuthErrorCode.LOGOUT_FAILED, e);
         }
 
         try {

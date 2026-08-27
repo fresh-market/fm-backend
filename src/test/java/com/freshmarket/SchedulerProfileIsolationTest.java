@@ -6,10 +6,8 @@ import static org.mockito.Mockito.mock;
 import com.freshmarket.config.SchedulingConfig;
 import com.freshmarket.member.domain.KakaoUnlinkRetryScheduler;
 import com.freshmarket.member.domain.KakaoUnlinkStuckReportScheduler;
-import com.freshmarket.member.domain.RefreshTokenRevokeRetryScheduler;
 import com.freshmarket.member.domain.service.KakaoUnlinkRetryService;
 import com.freshmarket.member.domain.service.KakaoUnlinkStuckReportService;
-import com.freshmarket.member.domain.service.RefreshTokenRevokeRetryService;
 import com.freshmarket.product.domain.batch.OptionAvailabilitySyncRetryService;
 import com.freshmarket.product.domain.batch.OptionAvailabilitySyncScheduler;
 import com.freshmarket.stock.domain.AdminLotExpireScheduler;
@@ -30,10 +28,9 @@ class SchedulerProfileIsolationTest {
  
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(KakaoUnlinkRetryService.class, () -> mock(KakaoUnlinkRetryService.class))
-            .withBean(RefreshTokenRevokeRetryService.class, () -> mock(RefreshTokenRevokeRetryService.class))
             .withBean(KakaoUnlinkStuckReportService.class, () -> mock(KakaoUnlinkStuckReportService.class))
             .withUserConfiguration(SchedulingConfig.class, KakaoUnlinkRetryScheduler.class,
-                    RefreshTokenRevokeRetryScheduler.class, KakaoUnlinkStuckReportScheduler.class);
+                    KakaoUnlinkStuckReportScheduler.class);
  
     private final ApplicationContextRunner lotExpireRunner = new ApplicationContextRunner()
             .withBean(AdminLotService.class, () -> mock(AdminLotService.class))
@@ -49,18 +46,16 @@ class SchedulerProfileIsolationTest {
             assertThat(context).doesNotHaveBean(SchedulingConfig.class);
             assertThat(context).doesNotHaveBean(ScheduledAnnotationBeanPostProcessor.class);
             assertThat(context).doesNotHaveBean(KakaoUnlinkRetryScheduler.class);
-            assertThat(context).doesNotHaveBean(RefreshTokenRevokeRetryScheduler.class);
             assertThat(context).doesNotHaveBean(KakaoUnlinkStuckReportScheduler.class);
         });
     }
- 
+
     @Test
     void batch_프로필이면_스케줄러가_켜진다() {
         runner.withPropertyValues("spring.profiles.active=batch").run(context -> {
             assertThat(context).hasSingleBean(SchedulingConfig.class);
             assertThat(context).hasSingleBean(ScheduledAnnotationBeanPostProcessor.class);
             assertThat(context).hasSingleBean(KakaoUnlinkRetryScheduler.class);
-            assertThat(context).hasSingleBean(RefreshTokenRevokeRetryScheduler.class);
             assertThat(context).hasSingleBean(KakaoUnlinkStuckReportScheduler.class);
         });
     }

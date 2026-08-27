@@ -35,17 +35,6 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     @Query("update Member m set m.refreshTokenHash = null, m.refreshTokenExpiresAt = null where m.id = :id")
     int clearRefreshToken(@Param("id") Long id);
 
-    // (2026-08-25) RefreshTokenRevokeRetryService 전용 조건부 삭제 — clearRefreshToken(id)와 달리
-    // "지금 DB에 남아있는 해시가 재시도 시점에 지우려는 그 해시와 같을 때만" 지운다. revoke() 직후
-    // 곧바로 도는 게 아니라 실패한 뒤 한참 지나(스케줄러 주기만큼) 재시도되므로, 그 사이 이
-    // 회원이 재로그인해서 refreshTokenHash가 새 값으로 덮어써졌을 수 있다 — 조건 없이 memberId만
-    // 보고 지우면 그 새 세션까지 지워버리는 역설이 생긴다. 이미 다른 값으로 바뀌었다면(=이 실패
-    // 건은 이미 의미가 없어졌다면) rows-affected 0으로 조용히 끝난다.
-    @Modifying
-    @Query("update Member m set m.refreshTokenHash = null, m.refreshTokenExpiresAt = null "
-            + "where m.id = :id and m.refreshTokenHash = :hash")
-    int clearRefreshTokenIfMatches(@Param("id") Long id, @Param("hash") String hash);
-
     // (2026-08-19 재도입) Redis가 완전히 죽으면 opaque 토큰은 그 문자열만 봐서는 누구 건지 알 방법이
     // 없다 — 그래서 해시로 회원을 거꾸로 찾을 수 있는 이 조회가 유일한 신원 확인 수단이다.
     // refresh_token_hash에 인덱스가 없으면 매번 풀스캔이라 V4 마이그레이션으로 인덱스를 추가했다.
