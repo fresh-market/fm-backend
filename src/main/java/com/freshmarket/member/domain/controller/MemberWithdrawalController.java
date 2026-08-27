@@ -2,7 +2,7 @@ package com.freshmarket.member.domain.controller;
 
 import com.freshmarket.common.auth.AuthCookieFactory;
 import com.freshmarket.common.auth.CustomUserDetails;
-import com.freshmarket.member.domain.service.MemberWithdrawalService;
+import com.freshmarket.member.domain.service.withdrawal.MemberWithdrawalService;
 import com.freshmarket.member.domain.dto.MemberWithdrawalRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;

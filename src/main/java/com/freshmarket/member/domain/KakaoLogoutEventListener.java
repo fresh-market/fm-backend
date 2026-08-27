@@ -1,6 +1,6 @@
 package com.freshmarket.member.domain;
 
-import com.freshmarket.member.domain.client.KakaoLogoutClient;
+import com.freshmarket.member.infrastructure.kakao.client.KakaoLogoutClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;

@@ -4,7 +4,7 @@ import com.freshmarket.common.auth.CustomUserDetails;
 import com.freshmarket.common.response.PageResponse;
 import com.freshmarket.common.response.ResponseEnvelope;
 import com.freshmarket.member.domain.entity.Address;
-import com.freshmarket.member.domain.service.AddressService;
+import com.freshmarket.member.domain.service.address.AddressService;
 import com.freshmarket.member.domain.dto.AddressCreateRequest;
 import com.freshmarket.member.domain.dto.AddressResponse;
 import com.freshmarket.member.domain.dto.AddressUpdateRequest;

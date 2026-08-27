@@ -2,7 +2,7 @@ package com.freshmarket.member.domain.controller;
 
 import com.freshmarket.common.auth.CustomUserDetails;
 import com.freshmarket.common.response.ResponseEnvelope;
-import com.freshmarket.member.domain.service.MemberProfileUpdateService;
+import com.freshmarket.member.domain.service.profile.MemberProfileUpdateService;
 import com.freshmarket.member.domain.dto.MemberProfileUpdateRequest;
 import com.freshmarket.member.domain.dto.MemberResponse;
 import jakarta.validation.Valid;

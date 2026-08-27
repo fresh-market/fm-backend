@@ -1,8 +1,8 @@
 package com.freshmarket.member.domain;
 
 import com.freshmarket.common.logging.PiiMasker;
-import com.freshmarket.member.domain.client.KakaoUnlinkClient;
-import com.freshmarket.member.domain.service.KakaoUnlinkRetryService;
+import com.freshmarket.member.domain.service.withdrawal.KakaoUnlinkRetryService;
+import com.freshmarket.member.infrastructure.kakao.client.KakaoUnlinkClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

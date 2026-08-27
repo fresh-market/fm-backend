@@ -1,7 +1,7 @@
 package com.freshmarket.member.domain.controller;
 
 import com.freshmarket.common.logging.PiiMasker;
-import com.freshmarket.member.domain.service.MemberWithdrawalService;
+import com.freshmarket.member.domain.service.withdrawal.MemberWithdrawalService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
