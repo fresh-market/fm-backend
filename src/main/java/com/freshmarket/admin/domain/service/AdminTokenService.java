@@ -14,6 +14,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.regex.Pattern;
+
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
@@ -30,7 +32,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class AdminTokenService {
 
-    private static final int MAX_REFRESH_TOKEN_LENGTH = 512;
+    private static final int REFRESH_TOKEN_LENGTH = 43;
+    private static final Pattern REFRESH_TOKEN_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{43}$");
 
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenRepository refreshTokenRepository;
@@ -232,8 +235,8 @@ public class AdminTokenService {
 
     private void validateRefreshToken(String refreshToken) {
         if (refreshToken == null
-                || refreshToken.isBlank()
-                || refreshToken.length() > MAX_REFRESH_TOKEN_LENGTH) {
+                || refreshToken.length() != REFRESH_TOKEN_LENGTH
+                || !REFRESH_TOKEN_PATTERN.matcher(refreshToken).matches()) {
             throw invalidRefreshToken();
         }
     }
