@@ -2,6 +2,7 @@ package com.freshmarket;
 
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.test.context.ActiveProfiles;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.mysql.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
@@ -28,7 +29,20 @@ public abstract class IntegrationTestSupport {
     @ServiceConnection
     protected static final MySQLContainer MYSQL = new MySQLContainer(DockerImageName.parse("mysql:8.4"));
 
+    /*
+     * Valkey 도 같은 이유로 여기서 한 번만 띄운다.
+     * 이것이 없으면 spring.data.redis 가 application.yml 의 기본값인 localhost:6379 를 보므로,
+     * 개발자 기계에 컨테이너가 떠 있는지에 따라 결과가 갈린다.
+     *
+     * name 을 주는 이유는 compose.yaml 이 레이블을 다는 이유와 같다. Spring 이 이미지 이름으로
+     * 서비스를 알아보는데 valkey 가 그 목록에 없어서, 어떤 접속인지 직접 알려야 한다.
+     */
+    @ServiceConnection(name = "redis")
+    protected static final GenericContainer<?> VALKEY =
+            new GenericContainer<>(DockerImageName.parse("valkey/valkey:9.0-alpine")).withExposedPorts(6379);
+
     static {
         MYSQL.start();
+        VALKEY.start();
     }
 }
