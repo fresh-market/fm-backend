@@ -70,7 +70,7 @@ public class Admin extends BaseMutableTimeEntity {
         return new Admin(loginId, passwordHash, name, role);
     }
 
-    Admin(String loginId, String passwordHash, String name, AdminRole role) {
+    private Admin(String loginId, String passwordHash, String name, AdminRole role) {
         validateLoginId(loginId);
         validatePasswordHash(passwordHash);
         validateName(name);

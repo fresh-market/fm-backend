@@ -4,10 +4,9 @@ import java.time.LocalDateTime;
 
 public final class AdminFixture {
 
-    // Admin 은 관리자 등록(계정 발급) 기능이 아직 없어 public 팩터리가 없다 (EC-3-08).
-    // 같은 패키지의 패키지 전용 생성자를 직접 호출한다 (Admin.java 주석 참고).
+    // 관리자 테스트 데이터도 운영 코드와 같은 공개 팩터리를 사용해 생성 규칙을 우회하지 않는다.
     public static Admin active(String loginId, String passwordHash, AdminRole role) {
-        return new Admin(loginId, passwordHash, "테스트관리자", role);
+        return Admin.register(loginId, passwordHash, "테스트관리자", role);
     }
 
     public static Admin inactive(String loginId, String passwordHash, AdminRole role) {
