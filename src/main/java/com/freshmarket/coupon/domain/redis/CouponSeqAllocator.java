@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 
-import org.springframework.beans.factory.annotation.Value;
+import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -27,12 +27,6 @@ public class CouponSeqAllocator {
 
     private static final String SCRIPT_PATH = "redis/scripts/coupon-issue-seq.lua";
 
-    private static final String KEY_PREFIX = "coupon:";
-    private static final String SEQ_SUFFIX = ":seq";
-    private static final String FREE_SUFFIX = ":free";
-    private static final String COUNTER_SUFFIX = ":counter";
-    private static final String PENDING_SUFFIX = ":pending";
-
     private static final String COMMITTED_DELIMITER = ":";
     private static final String SOLD_OUT = "-1";
     private static final String NOT_PREPARED = "-2";
@@ -41,15 +35,9 @@ public class CouponSeqAllocator {
     private final RedisScript<String> allocateScript;
     private final Duration reclaimAfter;
 
-    /*
-     * reclaimAfter 를 호출 인자가 아니라 설정으로 받는다.
-     * 회수의 안전은 모든 호출부가 같은 값을 쓰는 데 달려 있어서, 부를 때마다 넘기면 한 군데만
-     * 달라져도 아직 살아 있는 요청의 번호를 뺏는다. 요청 예산보다 길게 잡아야 한다.
-     */
-    public CouponSeqAllocator(StringRedisTemplate redisTemplate,
-                              @Value("${coupon.issue.reclaim-after:60s}") Duration reclaimAfter) {
+    public CouponSeqAllocator(StringRedisTemplate redisTemplate, CouponIssueProperties properties) {
         this.redisTemplate = redisTemplate;
-        this.reclaimAfter = reclaimAfter;
+        this.reclaimAfter = properties.reclaimAfter();
         this.allocateScript = loadAllocateScript();
     }
 
@@ -76,7 +64,8 @@ public class CouponSeqAllocator {
     public SeqOutcome allocate(long couponId, long memberId, int issueLimit) {
         String raw = redisTemplate.execute(
                 allocateScript,
-                List.of(seqKey(couponId), freeKey(couponId), counterKey(couponId), pendingKey(couponId)),
+                List.of(CouponSeqKeys.seq(couponId), CouponSeqKeys.free(couponId),
+                        CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId)),
                 String.valueOf(memberId),
                 String.valueOf(issueLimit),
                 String.valueOf(reclaimAfter.toMillis())
@@ -106,21 +95,5 @@ public class CouponSeqAllocator {
             return new SeqOutcome.Allocated(Integer.parseInt(raw));
         }
         return new SeqOutcome.AlreadyIssued(Integer.parseInt(raw.substring(0, delimiter)));
-    }
-
-    private String seqKey(long couponId) {
-        return KEY_PREFIX + couponId + SEQ_SUFFIX;
-    }
-
-    private String freeKey(long couponId) {
-        return KEY_PREFIX + couponId + FREE_SUFFIX;
-    }
-
-    private String counterKey(long couponId) {
-        return KEY_PREFIX + couponId + COUNTER_SUFFIX;
-    }
-
-    private String pendingKey(long couponId) {
-        return KEY_PREFIX + couponId + PENDING_SUFFIX;
     }
 }

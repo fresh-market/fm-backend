@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
 
 import com.freshmarket.IntegrationTestSupport;
+import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,6 +34,9 @@ class CouponSeqAllocatorIntegrationTest extends IntegrationTestSupport {
 
     @Autowired
     private StringRedisTemplate redisTemplate;
+
+    @Autowired
+    private CouponIssueProperties properties;
 
     @BeforeEach
     void 키를_비운다() {
@@ -146,6 +150,7 @@ class CouponSeqAllocatorIntegrationTest extends IntegrationTestSupport {
      * 시각을 Redis 가 스스로 매기므로 앱 시계를 흔들 수 없고, 흔들 필요도 없다.
      */
     private void 오래_묶인_것으로_만든다(long memberId) {
-        redisTemplate.opsForZSet().add(PENDING, String.valueOf(memberId), System.currentTimeMillis() - 600_000);
+        long wellPast = System.currentTimeMillis() - properties.reclaimAfter().toMillis() - 1_000;
+        redisTemplate.opsForZSet().add(PENDING, String.valueOf(memberId), wellPast);
     }
 }
