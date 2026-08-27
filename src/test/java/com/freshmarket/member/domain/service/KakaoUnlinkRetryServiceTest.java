@@ -11,6 +11,8 @@ import static org.mockito.Mockito.when;
 import com.freshmarket.member.domain.client.KakaoUnlinkClient;
 import com.freshmarket.member.domain.entity.KakaoUnlinkFailure;
 import com.freshmarket.member.domain.repository.KakaoUnlinkFailureRepository;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Optional;
@@ -97,6 +99,24 @@ class KakaoUnlinkRetryServiceTest {
         sut.retryAllPending();
 
         verify(outcomeService).markFailed(eq(10L), any(RuntimeException.class));
+        verify(outcomeService, never()).markSucceeded(any());
+    }
+
+    @Test
+    void 재시도가_서킷_OPEN으로_막히면_카운트를_올리지_않는다() {
+        KakaoUnlinkFailure failure = newFailure(10L, 1L, "kakao-1");
+        when(failureRepository.findByAttemptCountLessThanAndResolvedFalse(
+                KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS)).thenReturn(List.of(failure));
+        CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("kakaoUnlink-test");
+        circuitBreaker.transitionToOpenState();
+        doThrow(CallNotPermittedException.createCallNotPermittedException(circuitBreaker))
+                .when(kakaoUnlinkClient).unlink("kakao-1");
+
+        sut.retryAllPending();
+
+        // 카카오한테 물어보지도 못한 시도라 실패/성공 어느 쪽으로도 카운트를 반영하지 않는다 —
+        // attemptCount는 다음 사이클에서 다시 시도할 수 있게 그대로 남는다.
+        verify(outcomeService, never()).markFailed(any(), any());
         verify(outcomeService, never()).markSucceeded(any());
     }
 
