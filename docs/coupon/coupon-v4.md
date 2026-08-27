@@ -153,7 +153,7 @@ draftLimited  (.. + totalQuantity, issueStartAt/EndAt)  선착순 쿠폰
 
 [coupon.md](coupon.md) 2장의 R5 가 조건부 `UPDATE` 로 지키기로 한 것이라서다. 엔티티에 상태 변경 메서드를 두면 **읽고 -> 바꾸고 -> 저장하는 경로가 열리고**, 그 사이에 남이 끼어들 수 있다. 메서드를 아예 안 두면 그 경로가 생기지 않는다.
 
-### 순번 확보 Lua (`src/main/resources/redis/coupon-issue-seq.lua`)
+### 순번 확보 Lua (`src/main/resources/redis/scripts/coupon-issue-seq.lua`)
 
 [coupon.md](coupon.md) 3장의 설계를 그대로 옮겼다. **네 키를 한 번에 다루는 것이 핵심**이고, 그래서 스크립트여야 한다. 나눠 부르면 그 사이에 끼어들 틈이 생긴다.
 
@@ -194,6 +194,19 @@ pending  정렬집합  아직 커밋 안 된 회원.  점수 = 번호를 준 시
 
 기준 시간 값은 3장에 열어 뒀다. **하한은 요청 예산이다.** 그보다 짧으면 아직 살아 있는 요청의 번호를 뺏어 둘이 같은 번호로 `INSERT` 하고 `uk_mc_coupon_seq` 에 걸린다.
 
+#### 시계는 Redis 것을 쓴다
+
+```lua
+local t = redis.call('TIME')
+local now = t[1] * 1000 + math.floor(t[2] / 1000)
+```
+
+처음에는 앱이 `Clock` 으로 시각을 넘겼다. **점수를 쓰는 인스턴스와 그것을 재는 인스턴스가 달라서 그러면 안 된다.**
+
+한 대만 시계가 어긋나도 그 인스턴스는 모든 `pending` 을 오래된 것으로 보고, **방금 번호를 받아 살아 있는 요청들의 번호를 연달아 뺏는다.** 이 시각은 앱이 한 번도 해석하지 않고 Redis 안에서만 비교되므로 앱에서 댈 이유가 없다.
+
+`TIME` 은 쓰기 앞에서도 쓸 수 있다. 효과 복제가 기본이라 복제본에도 계산된 점수가 그대로 간다.
+
 #### 문서 스크립트에 없는 줄이 하나 있다
 
 ```lua
@@ -205,24 +218,77 @@ if seq and not string.find(seq, ':') then
 
 #### 검증
 
-Valkey 9.0 컨테이너에 올려 `--eval` 로 확인했다.
-
-```
-카운터 없음 -> -2                    가드가 산다
-첫 발급 -> 1, 같은 회원 재요청 -> 1   새 번호를 안 태운다
-소진 -> -1, 카운터는 3 그대로         DECR 이 되돌린다
-free 에 2번 반납 -> 다음 사람이 2     반납분이 먼저 나간다
-확정 표시가 붙은 회원 -> "1:1"        그 자리에서 이미 발급으로 답한다
-기준 시간 전 -> -1 / 후 -> 회수       경계가 맞는다
-```
+`CouponSeqAllocatorIntegrationTest` 가 실제 Valkey 로 여덟 갈래를 짚는다. 아래 래퍼 절에 목록이 있다.
 
 **회수는 연쇄된다.** 회수해서 받은 요청도 `pending` 에 들어가므로, 그것도 안 끝내면 다음 사람에게 넘어간다. 의도한 동작이고 **번호가 계속 흘러 재고가 안 묶인다.**
+
+### 래퍼 (`CouponSeqAllocator`)
+
+스크립트를 부르고 반환 문자열을 갈래로 바꾸는 것이 전부다. **판단은 전부 스크립트에 있고 여기에는 없다.**
+
+`RefreshTokenRepository` 를 본떠 만들었다가 다시 짰다. 그 클래스의 모양이 이 자리에 안 맞는 데가 셋이었다.
+
+#### 결과를 봉인 계층으로 받는다
+
+```java
+public sealed interface SeqOutcome {
+    record Allocated(int seq)     implements SeqOutcome { }
+    record AlreadyIssued(int seq) implements SeqOutcome { }
+    record SoldOut()              implements SeqOutcome { }
+    record NotPrepared()          implements SeqOutcome { }
+}
+```
+
+열거형과 `Integer seq` 로 두면 **순번이 없는 갈래에서도 `seq()` 를 부를 수 있고 `null` 이 나온다.** 봉인 계층은 순번을 있는 갈래에만 두고, 호출부가 `switch` 로 받을 때 빠뜨린 갈래를 컴파일러가 잡는다. **네 갈래가 그대로 네 응답이 되므로 빠뜨리면 안 되는 자리다.**
+
+`SoldOut` 과 `NotPrepared` 를 가른 것이 이 타입의 이유다. `Optional` 하나로는 **"다 팔렸다"(최종, 4xx)와 "다시 시도할 값이 있다"(503)가 같은 값**이 된다.
+
+#### 스크립트를 기동 때 읽는다
+
+`setLocation()` 으로 걸어 두면 **첫 실행에서 파일을 읽는다.** 패키징이 어긋났을 때 그 사실을 이벤트 첫 요청에서 알게 되고, 그때는 모든 요청이 같이 터진다. 생성자에서 다 읽어 **기동이 대신 실패하게** 했다.
+
+#### 회수 기준은 인자가 아니라 설정이다
+
+```java
+@Value("${coupon.issue.reclaim-after:60s}") Duration reclaimAfter
+```
+
+**회수의 안전은 모든 호출부가 같은 값을 쓰는 데 달려 있다.** 부를 때마다 넘기게 두면 한 군데만 달라져도 살아 있는 요청의 번호를 뺏는다. `issueLimit` 은 쿠폰마다 다르므로 인자로 남겼다.
+
+지금은 기본값 `60s` 뿐이다. 3장에 열어 둔 값이라 `application-coupon.yml` 을 만들 때 그리로 옮긴다.
+
+#### 이름과 나머지
+
+```
+CouponIssueSeqRepository -> CouponSeqAllocator   저장소가 아니라 할당기다
+@Repository -> @Component                        예외 변환은 템플릿이 이미 한다
+nil 을 NotPrepared 로 흘리기 -> 예외              스크립트와 어긋난 것이라 재시도에 묻히면 안 된다
+```
+
+#### 테스트는 통합 소스셋에 둔다
+
+Lua 와 Java 가 맞물리는 자리라 **단위 테스트로는 못 잡는다.** KEYS 와 ARGV 의 순서, 반환 문자열의 해석, 회수 경계는 어느 한쪽만 고쳐도 조용히 어긋난다.
+
+```
+카운터가 없으면 순번을 내주지 않는다
+순번은 1부터 차례로 나간다
+같은 회원이 다시 요청하면 같은 번호를 받는다
+한도를 넘으면 소진이고 카운터가 부풀지 않는다
+반납된 순번이 새 번호보다 먼저 나간다
+커밋이 끝난 회원은 이미 발급으로 답한다
+묶인 순번은 기준 시간이 지나야 회수된다
+확정 표시가 붙은 것은 회수하지 않는다
+```
+
+**`IntegrationTestSupport` 에 Valkey 컨테이너를 더했다.** 없으면 `spring.data.redis` 가 `application.yml` 의 기본값인 `localhost:6379` 를 봐서, 개발자 기계에 컨테이너가 떠 있는지에 따라 결과가 갈린다. MySQL 과 같은 이유로 JVM 당 한 번만 띄운다.
+
+`@ServiceConnection(name = "redis")` 로 이름을 준 것은 `compose.yaml` 이 레이블을 다는 이유와 같다. **Spring 이 이미지 이름으로 서비스를 알아보는데 valkey 가 그 목록에 없다.**
 
 ### 다음
 
 ```
-래퍼            StringRedisTemplate + DefaultRedisScript.  반환 네 갈래를 타입으로 받는다
 큐와 플러시      2장 목록의 나머지
-문서 맞추기      coupon.md 3장 스크립트에 확정 표시 가드 반영
+확정 표시와 반납  플러시 구조가 정해져야 시그니처가 나온다
+문서 맞추기      coupon.md 3장 스크립트에 확정 표시 가드와 TIME 반영
                  "푸는 시점은 소진 순간이다" 를 트리거와 조건으로 나눠 쓰기
 ```
