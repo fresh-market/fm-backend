@@ -22,7 +22,17 @@ public enum CouponErrorCode implements ErrorCode {
     // 재고가 없다. 최종이라 다시 시도해도 달라지지 않는다
     SOLD_OUT(HttpStatus.CONFLICT, "COUPON-005", "쿠폰이 모두 소진되었습니다."),
     // 재고는 있는데 지금 처리하지 못했다. 다시 시도할 값이 있다
-    CONGESTED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON-006", "요청이 몰려 처리하지 못했습니다. 잠시 후 다시 시도해주세요.");
+    CONGESTED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON-006", "요청이 몰려 처리하지 못했습니다. 잠시 후 다시 시도해주세요."),
+    /*
+     * 관리자가 이미 시작한 이벤트의 발급 시각을 바꾸려 했다.
+     * 시작 전에는 얼마든지 바꿀 수 있다.
+     */
+    ISSUE_PERIOD_LOCKED(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-007", "이미 시작한 이벤트의 발급 시각은 바꿀 수 없습니다."),
+    /*
+     * 관리자가 소진 전이고 마감 전인 이벤트를 끄려 했다.
+     * 약속한 이벤트를 관리자가 도중에 흔들지 못하게 막는다.
+     */
+    EVENT_NOT_CLOSABLE(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-008", "소진되지 않았고 마감 시각도 지나지 않아 종료할 수 없습니다.");
 
     private final HttpStatus httpStatus;
     private final String code;

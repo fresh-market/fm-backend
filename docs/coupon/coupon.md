@@ -628,9 +628,9 @@ SELECT issue_seq FROM member_coupon WHERE coupon_id = ? AND member_id = ?;
 **마감 시각이 지나면 배치가 끈다.** 관리자가 누르지 않아도 끝나게 하는 장치다.
 
 ```sql
-UPDATE coupon SET is_active = FALSE, updated_at = NOW(6)
+UPDATE coupon SET is_active = FALSE, updated_at = :now
  WHERE is_active = TRUE AND total_quantity IS NOT NULL
-   AND issue_end_at IS NOT NULL AND issue_end_at <= NOW(6);
+   AND issue_end_at IS NOT NULL AND issue_end_at <= :now;
 ```
 
 **배치는 소진으로 끝내지 않는다.** 카운터가 한도를 넘어도 반납된 번호가 다시 나갈 수 있어 최종이 아니기 때문이다. 배치가 보는 것은 **마감 시각 하나뿐**이다.
@@ -644,13 +644,27 @@ UPDATE coupon SET is_active = FALSE, updated_at = NOW(6)
 ```sql
 SELECT coupon_id FROM coupon c
  WHERE is_active = FALSE AND total_quantity IS NOT NULL
-   AND updated_at < NOW(6) - INTERVAL 60 SECOND
+   AND updated_at < :closedBefore   -- 앱이 지금 - 60초로 계산해 넘긴다
+   AND updated_at > :closedAfter    -- 앱이 지금 - 7일로 계산해 넘긴다
    AND issued_quantity <> (SELECT COUNT(*) FROM member_coupon WHERE coupon_id = c.coupon_id);
 ```
+
+**시각은 앱이 넘긴다.** `NOW()` 를 쓰면 **MySQL 서버의 시간대가 판정에 끼어든다.** 앱은 `issue_end_at` 과 `updated_at` 을 자기 기본 시간대의 벽시계로 쓰는데, DB 가 다른 시간대면 그 둘을 견주는 순간 시차만큼 어긋난다. 배포 환경이 우연히 같은 시간대라 안 드러날 뿐이고, 개발자 기계에서는 실제로 어긋난다.
+
+**순번 확보 스크립트와 반대 선택이다.** 그쪽은 인스턴스 A 가 쓴 점수를 B 가 재므로 Redis 시계를 써야 했고, 여기는 **같은 앱이 쓴 값을 같은 앱이 견주므로** 앱 시계가 맞다.
 
 키로 찾으면 **TTL 이 키를 먼저 지웠을 때 대상을 놓쳐** 3번을 건너뛴다. DB 만 보면 TTL 길이와 배치 주기가 서로 묶이지 않는다. `is_active = FALSE` 조건이 발급 중인 쿠폰을 건드리지 않게 지킨다.
 
 **`updated_at` 조건이 2번의 대기를 만든다.** 이것이 없으면 배치가 방금 끈 쿠폰을 같은 실행에서 정리해 대기가 0 이 되고, 관리자가 끈 직후에 배치가 돌아도 마찬가지다. 60초는 배치 윈도우와 커밋과 캐시 지연을 합친 것보다 한참 크다.
+
+**상한이 비용을 이력 크기에서 떼어 낸다.** 하한만 두면 3년 전에 끝난 이벤트까지 후보가 되고, DB 가 그 쿠폰마다 `member_coupon` 을 다시 센다. 한 번 맞춘 쿠폰은 두 값이 같아 결과에서 빠지지만, **빠졌다는 것을 알아내려고 DB 가 매번 센다.** 그래서 배치가 도는 비용이 운영 기간을 따라 자란다.
+
+```
+하한 60초   진행 중인 플러시가 결판날 시간을 준다.  짧으면 도는 배치를 건드린다
+상한 7일    배치가 멈춰 있어도 따라잡을 수 있는 기간.  짧으면 그 사이 것을 영영 놓친다
+```
+
+**상한을 넘겨 놓친 쿠폰은 `issued_quantity` 가 어긋난 채 남는다.** 발급 경로는 그 값을 안 보므로 발급이 틀어지지 않고, Redis 키는 TTL 이 따로 치운다. 남는 어긋남은 10장의 정합성 검증이 잡아낸다. 배치가 7일 내내 실패하는 상황이라면 그것 자체가 먼저 알려져야 할 장애다.
 
 **1번이 먼저인 이유.** 새 요청을 1단계에서 끊는다. 다만 그 순간 **이미 서버 안에 들어와 1단계를 통과한 요청들이 남아 있고**, `is_active` 를 캐시해서 보는 버전이면 그 TTL 만큼 더 통과한다.
 
