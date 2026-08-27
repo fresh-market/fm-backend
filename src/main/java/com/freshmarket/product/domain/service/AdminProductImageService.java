@@ -14,6 +14,10 @@ import com.freshmarket.product.domain.exception.ProductErrorCode;
 import com.freshmarket.product.domain.exception.ProductException;
 import com.freshmarket.product.domain.repository.ProductImageRepository;
 import com.freshmarket.product.domain.repository.ProductRepository;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -51,18 +55,23 @@ public class AdminProductImageService {
     private final ProductRepository productRepository;
     private final ProductImageRepository productImageRepository;
     private final ImageStorageClient imageStorageClient;
+    private final Clock clock;
     private final Set<String> allowedContentTypes;
     private final long maxSizeBytes;
+    private final Duration stalePendingThreshold;
 
     public AdminProductImageService(ProductRepository productRepository,
-            ProductImageRepository productImageRepository, ImageStorageClient imageStorageClient,
+            ProductImageRepository productImageRepository, ImageStorageClient imageStorageClient, Clock clock,
             @Value("${upload.product-image.allowed-content-types}") String allowedContentTypesCsv,
-            @Value("${upload.product-image.max-size-bytes}") long maxSizeBytes) {
+            @Value("${upload.product-image.max-size-bytes}") long maxSizeBytes,
+            @Value("${upload.product-image.stale-pending-minutes:10}") long stalePendingMinutes) {
         this.productRepository = productRepository;
         this.productImageRepository = productImageRepository;
         this.imageStorageClient = imageStorageClient;
+        this.clock = clock;
         this.allowedContentTypes = Set.of(allowedContentTypesCsv.split(","));
         this.maxSizeBytes = maxSizeBytes;
+        this.stalePendingThreshold = Duration.ofMinutes(stalePendingMinutes);
         validateExtensionMappingCoversConfig();
     }
 
@@ -105,6 +114,7 @@ public class AdminProductImageService {
         }
         validateContentType(request.contentType());
         validateContentLength(request.contentLength());
+        resolveStalePending(productId);
 
         String objectKey = generateObjectKey(request.contentType());
         ProductImage image = ProductImage.register(productId, request.requestId(), objectKey);
@@ -127,6 +137,61 @@ public class AdminProductImageService {
         String uploadUrl = imageStorageClient.createPresignedPutUrl(image.getObjectKey(), contentType,
                 contentLength);
         return AdminProductImageUploadUrlResponse.of(image, uploadUrl);
+    }
+
+    /*
+     * (INF-11-13 보완) 확정 통지가 유실된 PENDING 행은 원래 하루 한 번 도는 정리 배치
+     * (PendingProductImageCleanupScheduler)만이 걸러낸다. 이 메서드는 새 스케줄러를 추가하지 않고,
+     * 같은 상품에 이미지를 또 올리려는 — 즉 이미 일어나는 — 요청에 곁다리로 얹어서, 그 상품의 오래된
+     * PENDING 잔여물을 배치를 기다리지 않고 먼저 치운다. idx_product_image_pending 인덱스가
+     * 애초에 이 용도("조회 확정 대상 조회")까지 염두에 두고 설계됐다(V1 마이그레이션 주석).
+     *
+     * 실행 횟수를 늘리는 게 아니라 이미 있는 트래픽에 태우는 것이라, 하루 배치 1개라는 스케줄
+     * 개수는 그대로다. 다만 이 상품이 다시 건드려질 때만 작동하므로 배치를 대체하지는 못한다 —
+     * 아예 재방문이 없는 상품의 고아 행은 여전히 배치가 최종적으로 처리한다.
+     */
+    private void resolveStalePending(Long productId) {
+        LocalDateTime cutoff = LocalDateTime.now(clock).minus(stalePendingThreshold);
+        for (ProductImage image : productImageRepository.findByProductIdAndUploadStatus(productId,
+                UploadStatus.PENDING)) {
+            if (image.getCreatedAt().isBefore(cutoff)) {
+                attemptResolvePending(image);
+            }
+        }
+    }
+
+    /*
+     * attemptResolvePending()은 confirm()과 달리 클라이언트가 기다리는 요청이 아니다 — 여기서
+     * 못 끝내도 예외를 던지지 않고 다음 안전망(정리 배치)에 넘긴다.
+     */
+    private void attemptResolvePending(ProductImage image) {
+        Optional<S3ObjectMetadata> maybeMetadata;
+        try {
+            maybeMetadata = imageStorageClient.headObject(image.getObjectKey());
+        } catch (SdkException e) {
+            log.warn("event=IMAGE_STALE_PENDING_HEAD_OBJECT_FAILED imageId={} objectKey={} statusCode={}",
+                    image.getId(), image.getObjectKey(), statusCodeOf(e), e);
+            return;
+        }
+        if (maybeMetadata.isEmpty()) {
+            // 아직 업로드가 안 됐다(혹은 실패했다) — 끝내 안 오면 정리 배치가 유예 시간 이후 처리한다.
+            return;
+        }
+
+        S3ObjectMetadata metadata = maybeMetadata.get();
+        if (metadata.contentLength() > maxSizeBytes || !allowedContentTypes.contains(metadata.contentType())) {
+            imageStorageClient.deleteObject(image.getObjectKey());
+            return;
+        }
+
+        try {
+            confirmOrThrow(image.getId());
+        } catch (ProductException e) {
+            // 그 사이 클라이언트가 먼저 확정했거나(정상 종료) delete()가 먼저 지웠다 — 보조 수단이라
+            // 둘 다 무해하므로 삼킨다.
+            log.debug("event=IMAGE_STALE_PENDING_RESOLVE_SKIPPED imageId={} reason={}", image.getId(),
+                    e.getErrorCode());
+        }
     }
 
     /*

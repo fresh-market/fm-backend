@@ -23,6 +23,10 @@ import com.freshmarket.product.domain.exception.ProductErrorCode;
 import com.freshmarket.product.domain.exception.ProductException;
 import com.freshmarket.product.domain.repository.ProductImageRepository;
 import com.freshmarket.product.domain.repository.ProductRepository;
+import java.time.Clock;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -42,14 +46,17 @@ class AdminProductImageServiceTest {
 
     private static final String ALLOWED_CONTENT_TYPES = "image/jpeg,image/png,image/webp";
     private static final long MAX_SIZE_BYTES = 1_048_576L;
+    private static final long STALE_PENDING_MINUTES = 10L;
+    private static final LocalDateTime NOW = LocalDateTime.of(2026, 8, 27, 12, 0);
 
     private final ProductRepository productRepository = mock(ProductRepository.class);
     private final ProductImageRepository productImageRepository = mock(ProductImageRepository.class);
     private final ImageStorageClient imageStorageClient = mock(ImageStorageClient.class);
+    private final Clock clock = Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
 
     private final AdminProductImageService adminProductImageService = new AdminProductImageService(
-            productRepository, productImageRepository, imageStorageClient,
-            ALLOWED_CONTENT_TYPES, MAX_SIZE_BYTES);
+            productRepository, productImageRepository, imageStorageClient, clock,
+            ALLOWED_CONTENT_TYPES, MAX_SIZE_BYTES, STALE_PENDING_MINUTES);
 
     // ---- 생성자 ----
 
@@ -57,8 +64,8 @@ class AdminProductImageServiceTest {
     void 허용된_콘텐츠_타입에_대응하는_확장자가_없으면_기동_시점에_실패한다() {
         // given — 설정에만 새 타입(image/gif)을 추가하고 확장자 맵은 안 늘린 상황을 재현한다
         assertThatThrownBy(() -> new AdminProductImageService(
-                productRepository, productImageRepository, imageStorageClient,
-                "image/jpeg,image/gif", MAX_SIZE_BYTES))
+                productRepository, productImageRepository, imageStorageClient, clock,
+                "image/jpeg,image/gif", MAX_SIZE_BYTES, STALE_PENDING_MINUTES))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("image/gif");
     }
@@ -69,6 +76,8 @@ class AdminProductImageServiceTest {
     void 업로드_URL을_발급한다() {
         // given
         when(productRepository.existsById(1L)).thenReturn(true);
+        when(productImageRepository.findByProductIdAndUploadStatus(1L, UploadStatus.PENDING))
+                .thenReturn(List.of());
         when(imageStorageClient.createPresignedPutUrl(any(), any(), anyLong()))
                 .thenReturn("https://s3.example.com/signed");
         AdminProductImageCreateUploadUrlRequest request =
@@ -153,6 +162,8 @@ class AdminProductImageServiceTest {
         ProductImage existing = imageFixture(88L, 1L, "products/ab/existing.jpg", UUID.randomUUID());
         when(productImageRepository.findByRequestIdAndProductId("req-1", 1L))
                 .thenReturn(Optional.empty(), Optional.of(existing));
+        when(productImageRepository.findByProductIdAndUploadStatus(1L, UploadStatus.PENDING))
+                .thenReturn(List.of());
         when(productImageRepository.save(any())).thenThrow(new DataIntegrityViolationException(
                 "Duplicate entry 'req-1' for key 'product_image.uk_product_image_request_id'"));
         when(imageStorageClient.createPresignedPutUrl("products/ab/existing.jpg", "image/jpeg", 100_000L))
@@ -173,6 +184,8 @@ class AdminProductImageServiceTest {
         // 재조회해도 없다면 그 requestId는 다른 상품 소속이라는 뜻이다(클라이언트의 잘못된 재사용)
         when(productRepository.existsById(1L)).thenReturn(true);
         when(productImageRepository.findByRequestIdAndProductId("req-1", 1L)).thenReturn(Optional.empty());
+        when(productImageRepository.findByProductIdAndUploadStatus(1L, UploadStatus.PENDING))
+                .thenReturn(List.of());
         when(productImageRepository.save(any())).thenThrow(new DataIntegrityViolationException(
                 "Duplicate entry 'req-1' for key 'product_image.uk_product_image_request_id'"));
         AdminProductImageCreateUploadUrlRequest request =
@@ -182,6 +195,93 @@ class AdminProductImageServiceTest {
         assertThatThrownBy(() -> adminProductImageService.createUploadUrl(1L, request))
                 .isInstanceOf(ProductException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ProductErrorCode.IMAGE_REQUEST_ID_ALREADY_USED);
+    }
+
+    // ---- createUploadUrl()의 resolveStalePending() 곁다리 동작 ----
+
+    @Test
+    void URL_발급_중_같은_상품의_오래된_PENDING이_업로드돼_있으면_스스로_확정한다() {
+        // given — 유예 시간(10분)을 넘긴 PENDING 행이 이 상품에 남아있는 상황
+        when(productRepository.existsById(1L)).thenReturn(true);
+        ProductImage stale = imageFixture(77L, 1L, "products/ab/stale.jpg", UUID.randomUUID());
+        ReflectionTestUtils.setField(stale, "createdAt", NOW.minusMinutes(20));
+        when(productImageRepository.findByProductIdAndUploadStatus(1L, UploadStatus.PENDING))
+                .thenReturn(List.of(stale));
+        when(imageStorageClient.headObject("products/ab/stale.jpg"))
+                .thenReturn(Optional.of(new S3ObjectMetadata(100_000L, "image/jpeg")));
+        when(productImageRepository.confirmIfPending(77L, UploadStatus.PENDING, UploadStatus.CONFIRMED))
+                .thenReturn(1);
+        when(imageStorageClient.createPresignedPutUrl(any(), any(), anyLong()))
+                .thenReturn("https://s3.example.com/signed");
+        AdminProductImageCreateUploadUrlRequest request =
+                new AdminProductImageCreateUploadUrlRequest("req-1", "image/jpeg", 100_000L);
+
+        // when
+        adminProductImageService.createUploadUrl(1L, request);
+
+        // then — 새 발급 자체와는 무관하게, 곁다리로 오래된 행을 먼저 확정한다
+        verify(productImageRepository).confirmIfPending(77L, UploadStatus.PENDING, UploadStatus.CONFIRMED);
+    }
+
+    @Test
+    void URL_발급_중_유예_시간_안의_PENDING은_건드리지_않는다() {
+        // given — 아직 유예 시간(10분)이 안 지난, 진행 중일 수 있는 다른 업로드
+        when(productRepository.existsById(1L)).thenReturn(true);
+        ProductImage recent = imageFixture(77L, 1L, "products/ab/recent.jpg", UUID.randomUUID());
+        ReflectionTestUtils.setField(recent, "createdAt", NOW.minusMinutes(2));
+        when(productImageRepository.findByProductIdAndUploadStatus(1L, UploadStatus.PENDING))
+                .thenReturn(List.of(recent));
+        when(imageStorageClient.createPresignedPutUrl(any(), any(), anyLong()))
+                .thenReturn("https://s3.example.com/signed");
+        AdminProductImageCreateUploadUrlRequest request =
+                new AdminProductImageCreateUploadUrlRequest("req-1", "image/jpeg", 100_000L);
+
+        // when
+        adminProductImageService.createUploadUrl(1L, request);
+
+        // then
+        verify(imageStorageClient, never()).headObject(any());
+    }
+
+    @Test
+    void URL_발급_중_오래된_PENDING이_아직_업로드_안됐으면_그대로_둔다() {
+        // given — HeadObject 404(빈 값). 정리 배치가 유예 시간 이후 마저 처리한다
+        when(productRepository.existsById(1L)).thenReturn(true);
+        ProductImage stale = imageFixture(77L, 1L, "products/ab/stale.jpg", UUID.randomUUID());
+        ReflectionTestUtils.setField(stale, "createdAt", NOW.minusMinutes(20));
+        when(productImageRepository.findByProductIdAndUploadStatus(1L, UploadStatus.PENDING))
+                .thenReturn(List.of(stale));
+        when(imageStorageClient.headObject("products/ab/stale.jpg")).thenReturn(Optional.empty());
+        when(imageStorageClient.createPresignedPutUrl(any(), any(), anyLong()))
+                .thenReturn("https://s3.example.com/signed");
+        AdminProductImageCreateUploadUrlRequest request =
+                new AdminProductImageCreateUploadUrlRequest("req-1", "image/jpeg", 100_000L);
+
+        // when
+        adminProductImageService.createUploadUrl(1L, request);
+
+        // then
+        verify(productImageRepository, never()).confirmIfPending(any(), any(), any());
+    }
+
+    @Test
+    void URL_발급_중_오래된_PENDING의_S3_조회가_실패해도_새_발급은_실패하지_않는다() {
+        // given — 곁다리 작업이라, 실패해도 요청 자체를 막지 않는다
+        when(productRepository.existsById(1L)).thenReturn(true);
+        ProductImage stale = imageFixture(77L, 1L, "products/ab/stale.jpg", UUID.randomUUID());
+        ReflectionTestUtils.setField(stale, "createdAt", NOW.minusMinutes(20));
+        when(productImageRepository.findByProductIdAndUploadStatus(1L, UploadStatus.PENDING))
+                .thenReturn(List.of(stale));
+        when(imageStorageClient.headObject("products/ab/stale.jpg"))
+                .thenThrow(SdkClientException.create("Unable to execute HTTP request"));
+        when(imageStorageClient.createPresignedPutUrl(any(), any(), anyLong()))
+                .thenReturn("https://s3.example.com/signed");
+        AdminProductImageCreateUploadUrlRequest request =
+                new AdminProductImageCreateUploadUrlRequest("req-1", "image/jpeg", 100_000L);
+
+        // when, then — 예외 없이 새 URL 발급까지 끝난다
+        AdminProductImageUploadUrlResponse response = adminProductImageService.createUploadUrl(1L, request);
+        assertThat(response.uploadUrl()).isEqualTo("https://s3.example.com/signed");
     }
 
     // ---- confirm() ----
