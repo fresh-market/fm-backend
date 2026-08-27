@@ -561,20 +561,33 @@ Redis          왕복이 하나 더 는다.  DB 를 걷어낸 값이 절반만 �
 
 TTL 은 5초에서 시작한다. **이 값이 곧 앱이 마감을 넘겨 발급을 받아 주는 시간**이고, 종료 절차의 1분 TTL 안에 넉넉히 들어간다.
 
-**요청 스레드가 `computeIfAbsent` 안에서 DB 를 읽게 하면 안 된다.** `ConcurrentHashMap` 이 그 함수를 실행하는 동안 버킷 모니터를 잡고 있어서, 요청 스레드가 그 안에서 DB 를 기다리면 **가상 스레드가 캐리어를 못 놓고 핀된다**(Java 21).
+##### 값을 모니터 안에서 계산하지 않는다
+
+`ConcurrentHashMap` 은 `computeIfAbsent` 나 `compute` 가 도는 동안 **버킷 모니터를 잡는다.** 요청 스레드가 그 안에서 DB 를 기다리면 **가상 스레드가 캐리어를 못 놓고 핀된다**(Java 21).
+
+**이건 라이브러리 선택 문제가 아니다.** 직접 만들든 Caffeine 의 동기 `get(key, loader)` 를 쓰든, 값 계산이 모니터 안에서 돌면 똑같이 핀된다. 로딩 API 를 쓰느냐가 갈림이다.
+
+처음에는 `ConcurrentHashMap` 으로 직접 만들어 `get` 과 `put` 을 나눠 썼다. 핀은 피했지만 **캐시가 빈 순간 여러 요청 스레드가 같이 DB 를 읽는 것**을 대가로 받아들였다.
+
+**Caffeine 의 `AsyncCache` 가 그 대가 없이 둘 다 준다.**
 
 ```java
-CachedCoupon hit = cache.get(couponId);   // ConcurrentHashMap 이 get 에서는 모니터를 안 잡는다
-if (hit != null && !hit.expired(now)) {
-    return hit;
-}
-CachedCoupon loaded = load(couponId);      // 요청 스레드가 아무 모니터도 안 쥔 채로 DB 를 읽는다
-cache.put(couponId, loaded);               // put 도 모니터를 잡지만 그 안에서 I/O 가 없다
+CachedCoupon loaded = cache.get(couponId,
+        (id, executor) -> CompletableFuture.supplyAsync(() -> load(id), executor)).join();
 ```
 
-대가는 **캐시가 빈 순간 여러 요청 스레드가 같이 DB 를 읽는 것**이다. 그 읽기는 멱등이고 결과가 같으며, 그 몰림은 쿠폰당 TTL 마다 한 번뿐이다.
+**맵에 담기는 값이 결과가 아니라 `CompletableFuture` 다.** `ConcurrentHashMap` 이 모니터를 쥐고 있는 동안 하는 일이 future 하나를 만들어 넣는 것뿐이고, 실제 읽기는 그 바깥에서 돈다. 기다리는 요청 스레드도 `join()` 이 `LockSupport.park` 라 캐리어를 반납한다.
 
-**앱이 캐시를 직접 만든다.** 이 프로젝트에는 캐시 라이브러리가 없고, 캐시가 하나뿐이며 TTL 도 하나라 라이브러리가 벌어 줄 것이 적다.
+```
+직접 만든 것   핀 없음.  TTL 마다 여러 스레드가 같이 읽는다
+AsyncCache     핀 없음.  먼저 온 하나만 읽고 나머지는 그 future 를 기다린다
+```
+
+TTL 5초에 초당 수천이면 그 몰림이 **5초마다, 인스턴스 수만큼** 곱해진다. 없앨 수 있는데 두고 있던 것이라 바꿨다.
+
+**executor 를 따로 준다.** Caffeine 의 기본값이 공용 `ForkJoinPool` 인데, 그 풀은 CPU 작업 기준으로 크기가 잡혀 있어 **JDBC 블로킹이 거기서 막히면 다른 작업까지 굶는다.** 가상 스레드 실행기를 준다.
+
+크기 기반 축출과 적중률 통계(`recordStats`)도 함께 딸려 온다.
 
 **순서를 지켰다.** 얼어붙는다는 전제는 관리자 API 가 그렇게 막을 때만 참이라, 그 규칙이 코드로 선 뒤에 얹었다.
 

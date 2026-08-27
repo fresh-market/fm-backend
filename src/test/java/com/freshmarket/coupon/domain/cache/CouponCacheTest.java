@@ -13,6 +13,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import com.freshmarket.coupon.domain.entity.Coupon;
 import com.freshmarket.coupon.domain.entity.CouponScope;
@@ -148,6 +152,41 @@ class CouponCacheTest {
 
         // then
         verify(couponRepository, times(2)).findById(COUPON_ID);
+    }
+
+    /*
+     * 이것 때문에 직접 만든 것을 Caffeine 으로 바꿨다.
+     * 캐시가 빈 순간에 여러 요청 스레드가 몰려도 DB 를 읽는 것은 하나뿐이고 나머지는 그 결과를
+     * 함께 기다린다. TTL 마다 한 번씩 오는 몰림이 인스턴스 수만큼 곱해지는 것을 없앤다.
+     */
+    @Test
+    void 동시에_몰려도_DB_는_한_번만_읽는다() throws Exception {
+        // given 읽기가 느리게 끝나도록 붙잡아 둔다
+        CountDownLatch 읽기를_붙잡는다 = new CountDownLatch(1);
+        when(couponRepository.findById(COUPON_ID)).thenAnswer(invocation -> {
+            읽기를_붙잡는다.await();
+            return Optional.of(coupon(true));
+        });
+
+        // when 스무 스레드가 같은 쿠폰을 동시에 찾는다
+        int 요청_수 = 20;
+        CountDownLatch 다_들어왔다 = new CountDownLatch(요청_수);
+        CountDownLatch 다_끝났다 = new CountDownLatch(요청_수);
+        try (ExecutorService 스레드들 = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (int i = 0; i < 요청_수; i++) {
+                스레드들.submit(() -> {
+                    다_들어왔다.countDown();
+                    sut.find(COUPON_ID);
+                    다_끝났다.countDown();
+                });
+            }
+            assertThat(다_들어왔다.await(5, TimeUnit.SECONDS)).isTrue();
+            읽기를_붙잡는다.countDown();
+            assertThat(다_끝났다.await(5, TimeUnit.SECONDS)).isTrue();
+        }
+
+        // then
+        verify(couponRepository, times(1)).findById(COUPON_ID);
     }
 
     @Test
