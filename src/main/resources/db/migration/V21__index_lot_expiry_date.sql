@@ -16,14 +16,17 @@
 -- 쓰기)마다 인덱스를 갱신하게 된다. 하루 한 번 도는 배치를 위해 치를 값이 아니다.
 -- expiry_date 는 입고 후 바뀌지 않아 유지 비용이 입고 시점뿐이다.
 --
--- 만료 배치용 idx_lot_status_expiry(status, expiry_date) 와 겹쳐 보이지만 서로를 대신하지
--- 못한다. 만료 배치(findByStatusAndExpiryDateBefore)는 평범한 JPQL 이라 status 가 맨몸이어서
+-- 만료 배치용으로 idx_lot_status_expiry(status, expiry_date) 가 별도 브랜치에 올라와 있다
+-- (feat/lot-expire-performance, 아직 develop 미머지). 겹쳐 보이지만 서로를 대신하지 못한다.
+-- 만료 배치(findByStatusAndExpiryDateBefore)는 Spring Data 파생 메서드라 status 가 맨몸이어서
 -- 그 인덱스의 선두 컬럼을 등치로 쓸 수 있지만, 이 배치는 CollationExpressions 가 status 를
 -- collate() 로 감싸 선두 컬럼을 쓸 수 없다. 반대로 이 인덱스를 만료 배치가 쓰면
 -- expiry_date < today 가 과거 전체라 선택도가 낮아 이득이 없다.
 --
--- 근본 해결은 CollationExpressions 가 콜레이션을 컬럼이 아니라 값 쪽에 붙이게 고쳐
--- 인덱스 하나로 두 배치를 모두 받는 것이다. 공용 유틸이라 팀 합의가 필요해 여기서는
--- 각자 필요한 인덱스를 두고, 통합은 후속 과제로 남긴다.
+-- CollationExpressions 가 콜레이션을 컬럼이 아니라 값 쪽에 붙이게 고치면 인덱스 하나로 두
+-- 배치를 모두 받을 수 있다. 조회 성능 차이는 크지 않다 — 미래 4일 구간이라 status 를 더 걸러도
+-- 줄어드는 행이 얼마 안 된다. 이득은 stock_lot 에 인덱스를 하나만 두는 쪽이다.
+-- 미룬 이유는 팀 합의가 아니라 검증이다: 값 쪽으로 옮겨도 QueryDSL 의 stringValue() 가
+-- cast() 를 씌우면 결국 인덱스를 못 탄다. EXPLAIN 으로 확인한 뒤 별도 PR 로 다룬다.
 
 CREATE INDEX idx_lot_expiry_date ON stock_lot (expiry_date);
