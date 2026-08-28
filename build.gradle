@@ -88,6 +88,14 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
     /*
+     * 로컬(JVM) 캐시. 인스턴스 사이에 공유할 필요가 없고 값이 하루 동안 불변인 조회에 쓴다
+     * (CampaignTargetLotCacheRepository). Redis 는 인스턴스 간 공유와 원자적 회전이 필요한
+     * 인증 쪽 상태를 맡고, 이쪽은 네트워크 왕복 없이 읽는 것이 목적이라 저장소를 나눈다.
+     * 버전은 Spring Boot BOM 이 관리한다.
+     */
+    implementation 'com.github.ben-manes.caffeine:caffeine'
+
+    /*
      * JwtTokenProvider가 io.jsonwebtoken(JJWT) 0.12.x 플루언트 API(Jwts.builder()...signWith(),
      * Jwts.parser()...parseSignedClaims())를 쓴다. api는 컴파일 타임에, impl/jackson은 런타임에만
      * 필요하다(서명 클레임 직렬화에 Jackson을 쓴다).
