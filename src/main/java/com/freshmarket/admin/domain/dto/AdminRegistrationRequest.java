@@ -13,6 +13,9 @@ public record AdminRegistrationRequest(
         @Schema(description = "관리자 로그인 아이디", example = "admin.lee")
         @NotBlank(message = "아이디를 입력해 주세요.")
         @Size(max = 50, message = "아이디는 50자를 넘을 수 없습니다.")
+        @Pattern(
+                regexp = "^[A-Za-z0-9._-]+$",
+                message = "아이디는 영문, 숫자, 마침표, 밑줄, 하이픈만 사용할 수 있습니다.")
         String loginId,
 
         @Schema(description = "초기 비밀번호", example = "Freshman!2026")
@@ -26,6 +29,9 @@ public record AdminRegistrationRequest(
         @Schema(description = "관리자 이름", example = "이관리")
         @NotBlank(message = "이름을 입력해 주세요.")
         @Size(max = 50, message = "이름은 50자를 넘을 수 없습니다.")
+        @Pattern(
+                regexp = "^[\\p{L}\\p{M} .'-]+$",
+                message = "이름에는 문자, 공백, 마침표, 작은따옴표, 하이픈만 사용할 수 있습니다.")
         String name,
 
         @Schema(description = "관리자 권한", example = "ADMIN")

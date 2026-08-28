@@ -24,7 +24,7 @@ class AdminRegistrationSecurityConfig {
             throws Exception {
         return defaults.apply(http)
                 .securityMatcher("/v1/admin/admins", "/v1/admin/admins/**")
-                .csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))
+                .csrf(csrf -> csrf.csrfTokenRepository(new CookieCsrfTokenRepository()))
                 .authorizeHttpRequests(auth -> auth.anyRequest().hasAuthority(ADMIN))
                 .build();
     }

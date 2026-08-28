@@ -23,6 +23,8 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 class AdminRegistrationServiceTest {
 
@@ -33,8 +35,13 @@ class AdminRegistrationServiceTest {
     private final AdminRepository adminRepository = mock(AdminRepository.class);
     private final AdminAuditLogRepository adminAuditLogRepository = mock(AdminAuditLogRepository.class);
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private final AdminRegistrationService service = new AdminRegistrationService(
-            adminRepository, adminAuditLogRepository, passwordEncoder);
+            adminRepository, adminAuditLogRepository, passwordEncoder, transactionManager);
+
+    AdminRegistrationServiceTest() {
+        when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+    }
 
     @Test
     void 최고관리자는_관리자_계정을_발급할_수_있다() {
