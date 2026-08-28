@@ -103,6 +103,16 @@ public class CouponCache {
         return Optional.ofNullable(loaded);
     }
 
+    /**
+     * 지표를 붙이려는 쪽에 캐시를 그대로 내준다.
+     *
+     * <p>여기에 {@code MeterRegistry} 를 들이지 않으려고 이렇게 뒀다. 이 클래스가 하는 일은
+     * 쿠폰을 들고 있는 것이고, 그것을 어떻게 재는지는 다른 관심사다.
+     */
+    public com.github.benmanes.caffeine.cache.Cache<Long, CachedCoupon> forMetrics() {
+        return cache.synchronous();
+    }
+
     /** 관리자가 이벤트를 열고 닫거나 시각을 바꾼 뒤에 부른다. 이 인스턴스의 사본만 지운다. */
     public void evict(long couponId) {
         cache.synchronous().invalidate(couponId);
