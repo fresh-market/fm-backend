@@ -14,9 +14,12 @@ import java.util.Arrays;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.netty.http.client.HttpClient;
 
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAnyPackage;
+import static com.tngtech.archunit.lang.conditions.ArchConditions.callMethod;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
@@ -195,6 +198,22 @@ class ArchitectureTest {
             .that().resideInAnyPackage(BASE + ".common..", BASE + ".config..")
             .should().dependOnClassesThat()
             .resideInAPackage(BASE + ".*.domain..")
+            .allowEmptyShould(true);
+
+    /*
+     * 외부 API용 WebClient는 반드시 config 패키지(WebClientConfig.commonBuilder())를 거쳐서
+     * 만든다.
+     *
+     * WebClient.builder()를 직접 부르거나 HttpClient.create()로 커넥터를 새로 만들면
+     * WebClientConfig의 공통 계층(타임아웃/커넥션풀/트레이싱/로깅)이 조용히 빠진다 — 컴파일도
+     * 런타임도 에러 없이 그냥 무방비 상태로 배포된다. 이 규칙이 그 실수를 빌드 타임에 잡는다.
+     * config 패키지 자신은 예외(공통 계층을 정의하는 곳이라 여기서만 필요).
+     */
+    @ArchTest
+    static final ArchRule WebClient는_직접_생성하지_않는다 = noClasses()
+            .that().resideOutsideOfPackage(BASE + ".config..")
+            .should(callMethod(WebClient.class, "builder")
+                    .or(callMethod(HttpClient.class, "create")))
             .allowEmptyShould(true);
 
     private static final DescribedPredicate<JavaClass> 스케줄_메서드를_가진다 =

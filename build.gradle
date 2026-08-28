@@ -119,6 +119,21 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
 
     /*
+     * Boot 4가 아웃바운드 WebClient 자동구성(WebClientAutoConfiguration,
+     * org.springframework.boot.webclient.WebClientCustomizer)을 spring-boot-webflux와
+     * 별도 모듈(spring-boot-webclient)로 쪼개놨다 — 위 webflux 스타터만으로는 이 모듈이
+     * 안 끌려온다. WebClientConfig의 defaultExternalApiCustomizer(공통 타임아웃/풀/필터)가
+     * 실제로 적용되려면 이 스타터가 필요하다.
+     */
+    implementation 'org.springframework.boot:spring-boot-starter-webclient'
+
+    /*
+     * 카카오 OIDC 외부 API(로그인 토큰교환/로그아웃/unlink) 서킷브레이커.
+     * Boot 4는 spring-boot-starter-webflux(위)와 별도로 spring-boot4 전용 아티팩트가 있다
+     * (spring-boot-starter-resilience4j가 아니라 spring-boot3용과 나뉘어 있음).
+     */
+    implementation 'io.github.resilience4j:resilience4j-spring-boot4:2.4.0'
+    /*
      * 상품 이미지 업로드(#21). S3Presigner로 업로드 URL을 발급하고, HeadObject로 실제 업로드를
      * 확인한다(백엔드공통_이미지저장소_설계.md 6.2절). presigned POST 생성 기능은 Java SDK v2에
      * 없어 PUT만 쓴다 — 그래서 s3 모듈 하나로 충분하다(별도 presigner 아티팩트가 없다).

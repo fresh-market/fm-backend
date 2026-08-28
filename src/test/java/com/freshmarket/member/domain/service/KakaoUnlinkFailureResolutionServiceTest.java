@@ -32,7 +32,7 @@ class KakaoUnlinkFailureResolutionServiceTest {
     @Test
     void 포기_건을_해소_처리한다() {
         KakaoUnlinkFailure failure = KakaoUnlinkFailure.record(1L, "kakao-1");
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS; i++) {
             failure.markRetryFailed();
         }
         when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
@@ -46,7 +46,7 @@ class KakaoUnlinkFailureResolutionServiceTest {
     void 미해소_포기_건을_페이지로_조회한다() {
         PageRequest pageable = PageRequest.of(0, 20);
         KakaoUnlinkFailure failure = KakaoUnlinkFailure.record(1L, "kakao-1");
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS; i++) {
             failure.markRetryFailed();
         }
         when(failureRepository.findByAttemptCountGreaterThanEqualAndResolvedFalse(
