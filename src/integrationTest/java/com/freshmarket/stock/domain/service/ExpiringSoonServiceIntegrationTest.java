@@ -10,8 +10,11 @@ import com.freshmarket.product.domain.repository.CategoryRepository;
 import com.freshmarket.product.domain.repository.ProductOptionRepository;
 import com.freshmarket.product.domain.repository.ProductRepository;
 import com.freshmarket.stock.domain.dto.ExpiringSoonResponse;
+import com.freshmarket.stock.domain.entity.CampaignTargetLot;
 import com.freshmarket.stock.domain.entity.StockLot;
+import com.freshmarket.stock.domain.repository.CampaignTargetLotRepository;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,7 +26,13 @@ import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-// 소비기한 임박 판정과 커서 페이지네이션이 실제 DB 로 정확히 계산되는지 검증한다
+/*
+ * 회원용 조회가 확정된 캠페인 대상(campaign_target_lot)만 읽는지, 커서 페이지네이션이
+ * 실제 DB 로 정확히 도는지 검증한다.
+ *
+ * 임박 판정을 여기서 하지 않으므로, 테스트도 로트를 만들어 "임박해지길" 기대하지 않고
+ * 캠페인 대상 행을 직접 넣어 검증한다 — 대상 선정 자체는 CampaignTargetLotBatchIntegrationTest 가 본다.
+ */
 @SpringBootTest
 @Transactional
 @Sql("/sql/product-test-supplier.sql")
@@ -47,9 +56,13 @@ class ExpiringSoonServiceIntegrationTest {
     private StockLotRepository stockLotRepository;
 
     @Autowired
+    private CampaignTargetLotRepository campaignTargetLotRepository;
+
+    @Autowired
     private CategoryRepository categoryRepository;
 
     private static final Long SUPPLIER_ID = 999999L;
+    private static final LocalDate TODAY = LocalDate.now();
 
     private Long fruitCategoryId() {
         return categoryRepository.findAll().stream()
@@ -59,118 +72,91 @@ class ExpiringSoonServiceIntegrationTest {
                 .getId();
     }
 
-    private Long saveOptionWithLot(String name, int saleAvailableDays, LocalDate expiryDate) {
+    /*
+     * 상품·옵션·로트를 만들고, 그 로트를 오늘자 캠페인 대상으로 확정해 둔다.
+     * 배치를 돌리는 대신 확정 결과를 직접 넣는다 — 이 테스트가 보는 것은 조회 쪽이다.
+     */
+    private void saveTargetLot(String name, int targetRank) {
         Long categoryId = fruitCategoryId();
         Product product = productRepository.save(Product.register(
-                "req-" + name, "P-" + name, name, categoryId, SUPPLIER_ID,
-                StorageType.COLD, saleAvailableDays));
+                "req-" + name, "P-" + name, name, categoryId, SUPPLIER_ID, StorageType.COLD, 10));
         ProductOption option = productOptionRepository.save(
                 ProductOption.register(product.getId(), "1kg", 10000));
-        stockLotRepository.save(StockLot.register(
-                "lot-req-" + name, option.getId(), LocalDate.now().minusDays(1), expiryDate, 100));
-        return option.getId();
+        StockLot lot = stockLotRepository.save(StockLot.register(
+                "lot-req-" + name, option.getId(), TODAY.minusDays(2), TODAY.plusDays(12), 100));
+        campaignTargetLotRepository.save(CampaignTargetLot.register(
+                TODAY, lot.getId(), new BigDecimal("0.0500"), 70, targetRank));
     }
 
     @Test
-    void 판매_마감_기한이_임박_범위_안이면_조회된다() {
-        // given — 소비기한 오늘+13일, saleAvailableDaysFromExpiry=10
-        //         판매 마감 기한 = 오늘+13 - 10 = 오늘+3, withinDays 기본값 3 이내라 임박
-        saveOptionWithLot("감귤", 10, LocalDate.now().plusDays(13));
-
-        // when
+    void 오늘_확정된_대상이_없으면_빈_목록을_준다() {
         CursorPageResponse<ExpiringSoonResponse> result =
-                expiringSoonService.getExpiringSoonProducts(3, null, null, 20);
+                expiringSoonService.getExpiringSoonProducts(null, null, 20);
 
-        // then
+        assertThat(result.items()).isEmpty();
+    }
+
+    @Test
+    void 확정된_대상_상품을_돌려준다() {
+        saveTargetLot("감귤", 1);
+
+        CursorPageResponse<ExpiringSoonResponse> result =
+                expiringSoonService.getExpiringSoonProducts(null, null, 20);
+
         assertThat(result.items()).hasSize(1);
         assertThat(result.items().get(0).productName()).isEqualTo("감귤");
     }
 
     @Test
-    void 판매_마감_기한이_임박_범위_밖이면_조회되지_않는다() {
-        // given — 소비기한 오늘+30일, saleAvailableDaysFromExpiry=3
-        //         판매 마감 기한 = 오늘+30 - 3 = 오늘+27, withinDays 기본값 3 을 훨씬 넘음
-        saveOptionWithLot("복숭아", 3, LocalDate.now().plusDays(30));
+    void 대상이_아닌_로트는_임박해도_노출되지_않는다() {
+        // given — 소비기한이 임박 구간(D+12)에 있지만 campaign_target_lot 에 없는 로트
+        Long categoryId = fruitCategoryId();
+        Product product = productRepository.save(Product.register(
+                "req-비대상", "P-비대상", "비대상", categoryId, SUPPLIER_ID, StorageType.COLD, 10));
+        ProductOption option = productOptionRepository.save(
+                ProductOption.register(product.getId(), "1kg", 10000));
+        stockLotRepository.save(StockLot.register(
+                "lot-req-비대상", option.getId(), TODAY.minusDays(2), TODAY.plusDays(12), 100));
 
         // when
         CursorPageResponse<ExpiringSoonResponse> result =
-                expiringSoonService.getExpiringSoonProducts(3, null, null, 20);
+                expiringSoonService.getExpiringSoonProducts(null, null, 20);
 
-        // then
+        // then — 확정본에 없으면 임박 여부와 무관하게 안 나온다
         assertThat(result.items()).isEmpty();
     }
 
     @Test
-    void withinDays를_직접_지정하면_그_기준으로_판정한다() {
-        // given — 판매 마감 기한이 오늘+8일인 상품. 기본값(3)으로는 안 걸리지만 10으로는 걸린다
-        saveOptionWithLot("사과", 5, LocalDate.now().plusDays(13));
-
-        // when
-        CursorPageResponse<ExpiringSoonResponse> withDefaultDays =
-                expiringSoonService.getExpiringSoonProducts(3, null, null, 20);
-
-        // then
-        assertThat(withDefaultDays.items()).isEmpty();
-    }
-
-    @Test
-    void withinDays를_늘리면_더_넓은_범위가_임박으로_판정된다() {
-        // given
-        saveOptionWithLot("사과", 5, LocalDate.now().plusDays(13));
-
-        // when
-        CursorPageResponse<ExpiringSoonResponse> withTenDays =
-                expiringSoonService.getExpiringSoonProducts(10, null, null, 20);
-
-        // then
-        assertThat(withTenDays.items()).hasSize(1);
-    }
-
-    @Test
     void 카테고리로_거를_수_있다() {
-        // given
-        Long categoryId = fruitCategoryId();
-        saveOptionWithLot("배", 10, LocalDate.now().plusDays(13));
+        saveTargetLot("배", 1);
 
-        // when
         CursorPageResponse<ExpiringSoonResponse> matched =
-                expiringSoonService.getExpiringSoonProducts(3, categoryId, null, 20);
+                expiringSoonService.getExpiringSoonProducts(fruitCategoryId(), null, 20);
         CursorPageResponse<ExpiringSoonResponse> unmatched =
-                expiringSoonService.getExpiringSoonProducts(3, 999999L, null, 20);
+                expiringSoonService.getExpiringSoonProducts(999999L, null, 20);
 
-        // then
         assertThat(matched.items()).hasSize(1);
         assertThat(unmatched.items()).isEmpty();
     }
 
     @Test
-    void 임박_상품이_없으면_빈_목록을_준다() {
-        // when
-        CursorPageResponse<ExpiringSoonResponse> result =
-                expiringSoonService.getExpiringSoonProducts(3, null, null, 20);
-
-        // then
-        assertThat(result.items()).isEmpty();
-    }
-
-    @Test
     void 결과가_pageSize보다_많으면_다음_페이지_토큰으로_이어서_조회된다() {
-        // given — 옵션 3개, pageSize 1
-        saveOptionWithLot("감귤", 10, LocalDate.now().plusDays(13));
-        saveOptionWithLot("복숭아", 10, LocalDate.now().plusDays(13));
-        saveOptionWithLot("사과", 10, LocalDate.now().plusDays(13));
+        // given — 대상 3건, pageSize 1
+        saveTargetLot("감귤", 1);
+        saveTargetLot("복숭아", 2);
+        saveTargetLot("사과", 3);
 
         // when — 1페이지
         CursorPageResponse<ExpiringSoonResponse> firstPage =
-                expiringSoonService.getExpiringSoonProducts(3, null, null, 1);
+                expiringSoonService.getExpiringSoonProducts(null, null, 1);
 
         // then
         assertThat(firstPage.items()).hasSize(1);
         assertThat(firstPage.nextPageToken()).isNotNull();
 
         // when — 2페이지, 1페이지와 겹치지 않아야 한다
-        CursorPageResponse<ExpiringSoonResponse> secondPage = expiringSoonService
-                .getExpiringSoonProducts(3, null, firstPage.nextPageToken(), 1);
+        CursorPageResponse<ExpiringSoonResponse> secondPage =
+                expiringSoonService.getExpiringSoonProducts(null, firstPage.nextPageToken(), 1);
 
         // then
         assertThat(secondPage.items()).hasSize(1);

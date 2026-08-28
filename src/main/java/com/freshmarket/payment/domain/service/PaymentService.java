@@ -2,7 +2,6 @@ package com.freshmarket.payment.domain.service;
 
 import com.freshmarket.payment.PaymentRequest;
 import com.freshmarket.payment.PaymentResult;
-import com.freshmarket.payment.PaymentApprovedEvent;
 import com.freshmarket.payment.domain.PaymentPreparation;
 import com.freshmarket.payment.domain.client.PaymentGatewayApproval;
 import com.freshmarket.payment.domain.entity.Payment;
@@ -14,7 +13,6 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.Optional;
 import java.time.Clock;
 import java.time.LocalDateTime;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,7 +23,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class PaymentService {
 
     private final PaymentRepository paymentRepository;
-    private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
 
     // PG 호출 전에 PENDING 행을 별도 트랜잭션으로 확정한다. 외부 호출 동안 DB 트랜잭션을 잡지 않는다.
@@ -61,8 +58,6 @@ public class PaymentService {
 
         log.info("event=PAYMENT_PAID paymentId={} orderId={} amount={} method={}",
                 payment.getId(), payment.getOrderId(), payment.getAmount(), payment.getMethod());
-        eventPublisher.publishEvent(new PaymentApprovedEvent(
-                payment.getId(), payment.getOrderId(), payment.getPaidAt()));
 
         return PaymentResult.from(payment);
     }

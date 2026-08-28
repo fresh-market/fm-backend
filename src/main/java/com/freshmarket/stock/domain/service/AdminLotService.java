@@ -2,24 +2,29 @@ package com.freshmarket.stock.domain.service;
 
 import static com.freshmarket.common.exception.ConstraintViolations.isConstraintViolation;
 
+import com.freshmarket.common.response.PageCursor;
+import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.OptionAvailabilityChangedEvent;
 import com.freshmarket.product.ProductApi;
 import com.freshmarket.stock.domain.dto.AdminLotCreateRequest;
+import com.freshmarket.stock.domain.dto.AdminLotDisposeRequest;
 import com.freshmarket.stock.domain.dto.AdminLotExpireResponse;
 import com.freshmarket.stock.domain.dto.AdminLotListResponse;
 import com.freshmarket.stock.domain.dto.AdminLotResponse;
+import com.freshmarket.stock.domain.entity.DisposalReason;
 import com.freshmarket.stock.domain.entity.LotStatus;
 import com.freshmarket.stock.domain.entity.StockLot;
 import com.freshmarket.stock.domain.entity.StockMovement;
 import com.freshmarket.stock.domain.exception.StockErrorCode;
 import com.freshmarket.stock.domain.exception.StockException;
+import com.freshmarket.stock.domain.repository.StockLotQueryRepository;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -27,7 +32,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
-// 관리자 화면에서 로트를 입고 등록하고, 조회하고, 만료 처리하는 기능을 담당한다
+// 관리자 화면에서 로트를 입고 등록하고, 조회하고, 폐기·만료 처리하는 기능을 담당한다
+@Slf4j
 @Service
 @Transactional(readOnly = true)
 public class AdminLotService {
@@ -36,16 +42,22 @@ public class AdminLotService {
     // 같은 패키지의 AdminLotServiceTest가 오케스트레이션(청크 반복 횟수) 검증에 그대로 참조한다
     static final int EXPIRE_CHUNK_SIZE = 1000;
 
+    // (API-3-04) 로트별 조회의 기본/최대 페이지 크기. AdminProductSearchCondition과 같은 값을 쓴다
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 100;
+
     private final StockLotRepository stockLotRepository;
+    private final StockLotQueryRepository stockLotQueryRepository;
     private final StockMovementRepository stockMovementRepository;
     private final ProductApi productApi;
     private final ApplicationEventPublisher eventPublisher;
     private final AdminLotExpireChunkService adminLotExpireChunkService;
 
-    public AdminLotService(StockLotRepository stockLotRepository,
+    public AdminLotService(StockLotRepository stockLotRepository, StockLotQueryRepository stockLotQueryRepository,
             StockMovementRepository stockMovementRepository, ProductApi productApi,
             ApplicationEventPublisher eventPublisher, AdminLotExpireChunkService adminLotExpireChunkService) {
         this.stockLotRepository = stockLotRepository;
+        this.stockLotQueryRepository = stockLotQueryRepository;
         this.stockMovementRepository = stockMovementRepository;
         this.productApi = productApi;
         this.eventPublisher = eventPublisher;
@@ -89,12 +101,13 @@ public class AdminLotService {
                 throw new StockException(StockErrorCode.OPTION_NOT_FOUND, e);
             }
             /*
-             * 알려진 제약(uk_lot_request_id, fk_lot_option) 위반이 아니면 원인을 알 수 없는 실패다.
-             * Spring의 DataIntegrityViolationException을 그대로 던지면 저장소 계층의 예외 타입이 서비스
-             * 경계 밖으로 새어나가므로, 원인은 유지한 채(cause) 더 명확한 메시지로 감싸서 던진다.
+             * (CMP-4-04) 알려진 제약(uk_lot_request_id, fk_lot_option) 위반이 아니면 원인을 알 수
+             * 없는 실패다. DB 예외 메시지는 로그에만 남기고, 클라이언트로 나가는 예외는 고정 문구의
+             * StockException이라 GlobalExceptionHandler가 ErrorCode의 고정 문구만 응답에 싣는다.
              */
-            throw new IllegalStateException(
-                    "로트 저장 중 알 수 없는 제약 위반이 발생했다: " + e.getMostSpecificCause().getMessage(), e);
+            log.error("event=LOT_SAVE_UNKNOWN_CONSTRAINT_VIOLATION requestId={} optionId={} cause={}",
+                    request.requestId(), optionId, e.getMostSpecificCause().getMessage(), e);
+            throw new StockException(StockErrorCode.UNKNOWN_CONSTRAINT_VIOLATION, e);
         } catch (PessimisticLockingFailureException e) {
             return responseOfInProgressRetry(request.requestId(), optionId, e);
         }
@@ -127,14 +140,14 @@ public class AdminLotService {
      * 처리된다 — 클라이언트는 실패 시 그대로 재요청하면 된다.
      */
     public AdminLotExpireResponse expireLots() {
-        List<StockLot> allExpired = new ArrayList<>();
+        int expiredCount = 0;
         List<StockLot> chunk;
         do {
             chunk = adminLotExpireChunkService.expireChunk(EXPIRE_CHUNK_SIZE);
-            allExpired.addAll(chunk);
+            expiredCount += chunk.size();
         } while (chunk.size() == EXPIRE_CHUNK_SIZE);
 
-        return AdminLotExpireResponse.of(allExpired);
+        return AdminLotExpireResponse.of(expiredCount);
     }
 
     /*
@@ -163,7 +176,107 @@ public class AdminLotService {
     }
 
     /*
-     * 상품의 로트 전체를 소비기한 오름차순(FEFO)으로 조회한다.
+     * 로트를 폐기 처리하고 DISPOSE 변동 이력을 함께 남긴다(stock.md "폐기").
+     * 같은 requestId로 재시도가 오면(API-5-07, AIP-155) 다시 차감하지 않고 최초 결과를 그대로
+     * 돌려준다 — register()와 같은 이유·같은 이중 방어 구조다(사전 조회 + save() 시점 유니크 위반).
+     *
+     * RETURNED(재입고하지 않은 회수품)는 애초에 이 로트의 가용 수량으로 들어온 적이 없어서 수량을
+     * 바꾸지 않는다 — stock.md, chk_movement_delta(DB)가 DISPOSE+RETURNED는 qty_after=qty_before를
+     * 강제한다. 그 외 사유는 실제로 잔량에서 차감한다.
+     *
+     * 이 로트가 다 소진되고(availableQty=0) 그 옵션에 남은 AVAILABLE 로트가 없으면 품절 이벤트를
+     * 발행한다 — register()가 입고 시 항상 soldOut=false를 발행하는 것의 반대 경로다.
+     */
+    @Transactional
+    public AdminLotResponse dispose(Long lotId, Long adminId, AdminLotDisposeRequest request) {
+        Optional<StockMovement> existingMovement = stockMovementRepository.findByRequestId(request.requestId());
+        if (existingMovement.isPresent()) {
+            return responseOfExistingDisposal(existingMovement.get(), lotId);
+        }
+
+        StockLot stockLot = findLotForUpdate(lotId);
+
+        int qtyBefore = stockLot.getAvailableQty();
+        int qtyAfter;
+        if (request.disposalReason() == DisposalReason.RETURNED) {
+            qtyAfter = qtyBefore;
+        } else {
+            if (request.quantity() > qtyBefore) {
+                throw new StockException(StockErrorCode.DISPOSAL_QUANTITY_EXCEEDS_LOT);
+            }
+            stockLot.dispose(request.quantity());
+            qtyAfter = stockLot.getAvailableQty();
+        }
+
+        StockMovement movement = StockMovement.dispose(request.requestId(), stockLot.getId(), request.quantity(),
+                qtyBefore, qtyAfter, adminId, request.disposalReason(), request.reason());
+        try {
+            stockMovementRepository.save(movement);
+        } catch (DataIntegrityViolationException e) {
+            if (isConstraintViolation(e, "uk_movement_request_id")) {
+                return stockMovementRepository.findByRequestId(request.requestId())
+                        .map(existing -> responseOfExistingDisposal(existing, lotId))
+                        .orElseThrow(() -> {
+                            /*
+                             * (CMP-4-04) requestId는 로그에만 남긴다. 클라이언트로 나가는 예외는
+                             * StockException이라 GlobalExceptionHandler가 ErrorCode의 고정 문구만
+                             * 응답에 싣는다(요청 값을 그대로 실은 문구가 밖으로 새지 않는다).
+                             */
+                            log.error("event=DISPOSAL_REQUEST_ID_CONFLICT_NOT_FOUND requestId={}",
+                                    request.requestId());
+                            return new StockException(StockErrorCode.DISPOSAL_IN_PROGRESS);
+                        });
+            }
+            /*
+             * (CMP-4-04) 알려진 제약(uk_movement_request_id) 위반이 아니면 원인을 알 수 없는
+             * 실패다. DB 예외 메시지는 로그에만 남기고, 응답에는 ErrorCode의 고정 문구만 나간다.
+             */
+            log.error("event=DISPOSAL_SAVE_UNKNOWN_CONSTRAINT_VIOLATION requestId={} lotId={} cause={}",
+                    request.requestId(), lotId, e.getMostSpecificCause().getMessage(), e);
+            throw new StockException(StockErrorCode.UNKNOWN_CONSTRAINT_VIOLATION, e);
+        }
+
+        if (qtyBefore != qtyAfter && qtyAfter == 0 && !stockLotRepository.existsByProductOptionIdAndStatus(
+                stockLot.getProductOptionId(), LotStatus.AVAILABLE)) {
+            eventPublisher.publishEvent(
+                    new OptionAvailabilityChangedEvent(stockLot.getProductOptionId(), true, LocalDateTime.now()));
+        }
+
+        return AdminLotResponse.of(stockLot);
+    }
+
+    /*
+     * 같은 requestId를 다른 lotId로 재사용했으면 클라이언트의 잘못된 재사용이다 — 엉뚱한 로트의
+     * 결과를 성공 응답으로 돌려주는 대신 명확한 충돌 오류로 알려준다(register()의
+     * findByRequestIdOrThrow와 같은 이유).
+     */
+    private AdminLotResponse responseOfExistingDisposal(StockMovement movement, Long expectedLotId) {
+        if (!movement.getStockLotId().equals(expectedLotId)) {
+            throw new StockException(StockErrorCode.REQUEST_ID_ALREADY_USED);
+        }
+        return stockLotRepository.findById(movement.getStockLotId())
+                .map(AdminLotResponse::of)
+                .orElseThrow(() -> new IllegalStateException(
+                        "폐기 이력이 가리키는 로트를 찾을 수 없다: " + movement.getStockLotId()));
+    }
+
+    /*
+     * 락 대기 타임아웃/교착은 도메인 밖으로 raw 타입을 새어나가게 두지 않고 재시도 가능한 오류로 감싼다.
+     * 조회 자체가 쓰기 락이라 같은 로트를 건드리는 reserve/confirm/release/expire와 경합하면
+     * 여기서 실패할 수 있다 — 그 사이 beforeQty가 낡은 값이 되는 걸 막기 위한 것이라, 실패하면
+     * 재시도를 안내한다.
+     */
+    private StockLot findLotForUpdate(Long lotId) {
+        try {
+            return stockLotRepository.findByIdForUpdate(lotId)
+                    .orElseThrow(() -> new StockException(StockErrorCode.LOT_NOT_FOUND));
+        } catch (PessimisticLockingFailureException e) {
+            throw new StockException(StockErrorCode.DISPOSAL_IN_PROGRESS, e);
+        }
+    }
+
+    /*
+     * 상품의 로트를 소비기한 오름차순(FEFO)으로 커서 기반 페이지네이션 조회한다 (API-3-04, API-5-01).
      * productId 존재 여부는 옵션 ID 목록이 비어있는지로 판정한다 — 상품 등록 시 옵션이 최소 1개
      * 필수이고(AdminProductCreateRequest.options가 @NotEmpty) 옵션 삭제 기능이 아직 없어서,
      * 지금은 "상품이 있으면 옵션도 항상 1개 이상 있다"는 불변식이 성립한다. 옵션 삭제 기능이
@@ -171,20 +284,40 @@ public class AdminLotService {
      *
      * 옵션 목록 조회와 로트 조회가 별개의 쿼리 두 번이라, 격리수준을 REPEATABLE_READ로 명시해서
      * 두 쿼리가 같은 트랜잭션 안에서 일관된 스냅샷을 보게 강제한다 — DB 기본값에 기대지 않는다.
+     * 리포지토리가 pageSize + 1건을 주므로 초과분을 잘라내고 다음 페이지 여부를 판단한다.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public AdminLotListResponse findAllByProduct(Long productId, boolean availableOnly) {
+    public AdminLotListResponse findAllByProduct(Long productId, boolean availableOnly, PageCursor cursor,
+            int pageSize) {
         List<Long> optionIds = productApi.findOptionIds(productId);
         if (optionIds.isEmpty()) {
             throw new StockException(StockErrorCode.OPTION_NOT_FOUND);
         }
 
-        List<StockLot> lots = availableOnly
-                ? stockLotRepository.findByProductOptionIdInAndStatusOrderByExpiryDateAsc(optionIds,
-                        LotStatus.AVAILABLE)
-                : stockLotRepository.findByProductOptionIdInOrderByExpiryDateAsc(optionIds);
+        int effectivePageSize = resolvePageSize(pageSize);
+        List<StockLot> found = stockLotQueryRepository.findByProductOptionIds(optionIds, availableOnly, cursor,
+                effectivePageSize);
 
-        return AdminLotListResponse.of(lots);
+        boolean hasNext = found.size() > effectivePageSize;
+        List<StockLot> page = hasNext ? found.subList(0, effectivePageSize) : found;
+
+        return AdminLotListResponse.of(page, nextTokenOf(page, hasNext));
+    }
+
+    private static int resolvePageSize(int pageSize) {
+        if (pageSize <= 0) {
+            return DEFAULT_PAGE_SIZE;
+        }
+        return Math.min(pageSize, MAX_PAGE_SIZE);
+    }
+
+    // 다음 페이지 토큰. 마지막 행의 소비기한과 id로 커서를 만든다(정렬이 expiryDate asc, id asc 고정)
+    private static String nextTokenOf(List<StockLot> page, boolean hasNext) {
+        if (!hasNext || page.isEmpty()) {
+            return null;
+        }
+        StockLot last = page.get(page.size() - 1);
+        return PageTokens.encode(new PageCursor(last.getId(), last.getExpiryDate().toString()));
     }
 
     // optionId가 productId 소속으로 실제 존재하는지 확인한다

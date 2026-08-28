@@ -6,6 +6,7 @@ import jakarta.persistence.LockModeType;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -44,8 +45,17 @@ public interface StockLotRepository extends JpaRepository<StockLot, Long> {
     List<StockLot> findByStatusAndExpiryDateBefore(@Param("status") LotStatus status, @Param("date") LocalDate date,
             Pageable pageable);
 
-    // 이 옵션에 status인 로트가 하나라도 남아있는지 확인한다. 만료 처리 후 품절 여부 판단에 쓰인다
+    // 이 옵션에 status인 로트가 하나라도 남아있는지 확인한다. 만료·폐기 처리 후 품절 여부 판단에 쓰인다
     boolean existsByProductOptionIdAndStatus(Long productOptionId, LotStatus status);
+
+    /*
+     * (PERF-4-01) 위 exists 조회를 옵션 수만큼 반복하는 대신, 여러 옵션 중 아직 status인 로트가
+     * 남아있는 옵션만 한 번에 추려낸다 — AdminLotExpireChunkService처럼 청크 안 여러 옵션의 품절
+     * 여부를 한꺼번에 판단해야 할 때 쓴다.
+     */
+    @Query("select distinct s.productOptionId from StockLot s where s.productOptionId in :productOptionIds and s.status = :status")
+    Set<Long> findProductOptionIdsByProductOptionIdInAndStatus(
+            @Param("productOptionIds") List<Long> productOptionIds, @Param("status") LotStatus status);
 
     // FEFO 배분 순서. idx_lot_fefo(product_option_id, status, expiry_date)를 그대로 탄다
     List<StockLot> findByProductOptionIdAndStatusOrderByExpiryDateAsc(Long productOptionId, LotStatus status);
@@ -76,10 +86,13 @@ public interface StockLotRepository extends JpaRepository<StockLot, Long> {
     @Query("select s from StockLot s where s.id in :ids order by s.id")
     List<StockLot> findAllByIdForUpdate(@Param("ids") List<Long> ids);
 
-    // 옵션 ID 목록에 속한 로트 전체를 소비기한 오름차순으로 조회한다 (FEFO 순서)
-    List<StockLot> findByProductOptionIdInOrderByExpiryDateAsc(List<Long> productOptionIds);
-
-    // 위와 같되 상태로도 거른다. availableOnly=true일 때 AVAILABLE만 보는 데 쓰인다
-    List<StockLot> findByProductOptionIdInAndStatusOrderByExpiryDateAsc(List<Long> productOptionIds,
-            LotStatus status);
+    /*
+     * 로트 하나에 쓰기 락을 건다(CategoryRepository/MemberRepository의 findByIdForUpdate와 같은
+     * 취지). 폐기는 조회한 available_qty를 그대로 stock_movement 원장에 남기는데, 락 없는 조회 뒤에
+     * 별도 UPDATE를 하면 그 사이 reserve/release 등 다른 트랜잭션이 값을 바꿔 원장이 실제 이력과
+     * 어긋날 수 있다. 락을 걸어 읽은 값이 커밋까지 그대로 유지되게 한다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select s from StockLot s where s.id = :id")
+    Optional<StockLot> findByIdForUpdate(@Param("id") Long id);
 }
