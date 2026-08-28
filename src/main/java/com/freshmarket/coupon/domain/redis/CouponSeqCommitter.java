@@ -1,7 +1,9 @@
 package com.freshmarket.coupon.domain.redis;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -65,11 +67,29 @@ public class CouponSeqCommitter {
         String member = String.valueOf(memberId);
         try {
             redisTemplate.opsForZSet().add(CouponSeqKeys.free(couponId), String.valueOf(burnedSeq), burnedSeq);
+            inheritCounterTtl(couponId);
             redisTemplate.opsForHash().put(CouponSeqKeys.seq(couponId), member, actualSeq + COMMITTED_SUFFIX);
             redisTemplate.opsForZSet().remove(CouponSeqKeys.pending(couponId), member);
         } catch (DataAccessException e) {
             log.warn("event=COUPON_SEQ_REPAIR_FAILED couponId={} memberId={} burnedSeq={}",
                     couponId, memberId, burnedSeq, e);
+        }
+    }
+
+    /**
+     * 방금 만들었을지 모르는 {@code free} 에 나머지 셋과 같은 수명을 물려준다.
+     *
+     * <p><b>이 메서드가 {@code free} 를 만드는 유일한 자리다.</b> 순번 확보 스크립트는 꺼내 쓰기만
+     * 하고 만들지 않으므로, 여기서 안 걸면 그 키에는 만료가 영영 안 붙는다. 종료 배치가 지우기는
+     * 하지만 그것이 안 돌았을 때의 그물이 넷 중 하나만 비어 있게 된다.
+     *
+     * <p>남은 시간을 읽어 상대 시각으로 다시 거는 것은 절대 시각을 읽는 명령을 스프링이 안
+     * 내주기 때문이다. 밀리초 단위로 어긋나지만 꼬리가 1분이라 잴 값이 아니다.
+     */
+    private void inheritCounterTtl(long couponId) {
+        Long remaining = redisTemplate.getExpire(CouponSeqKeys.counter(couponId), TimeUnit.MILLISECONDS);
+        if (remaining != null && remaining > 0) {
+            redisTemplate.expire(CouponSeqKeys.free(couponId), Duration.ofMillis(remaining));
         }
     }
 

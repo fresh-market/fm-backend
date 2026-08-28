@@ -2,6 +2,7 @@ package com.freshmarket.coupon.domain.issue;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -31,6 +32,7 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
 
     private static final String SEQ = "coupon:9001:seq";
     private static final String FREE = "coupon:9001:free";
+    private static final String COUNTER = "coupon:9001:counter";
     private static final String PENDING = "coupon:9001:pending";
 
     @Autowired
@@ -44,7 +46,7 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
 
     @BeforeEach
     void 키를_비운다() {
-        redisTemplate.delete(List.of(SEQ, FREE, "coupon:9001:counter", PENDING));
+        redisTemplate.delete(List.of(SEQ, FREE, COUNTER, PENDING));
     }
 
     @Test
@@ -134,6 +136,23 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
         assertThat(redisTemplate.opsForZSet().score(FREE, "1")).isNull();
         assertThat(redisTemplate.opsForHash().get(SEQ, "9102")).isNull();
         assertThat(발급된_행_수()).isEqualTo(1);
+    }
+
+    /*
+     * free 를 만드는 자리는 여기 하나뿐이다. 순번 확보 스크립트는 꺼내 쓰기만 하고 만들지 않는다.
+     * 그래서 이 자리가 수명을 안 물려주면 네 키 중 free 에만 만료가 영영 안 붙는다.
+     */
+    @Test
+    void 반납한_번호를_담는_키가_카운터의_수명을_물려받는다() throws Exception {
+        redisTemplate.opsForValue().set(COUNTER, "0");
+        redisTemplate.expire(COUNTER, Duration.ofMinutes(10));
+        결과를_기다린다(순번을_받은_요청(9101L, 1));
+        redisTemplate.opsForHash().delete(SEQ, "9101");
+
+        결과를_기다린다(순번을_받은_요청(9101L, 7));
+
+        assertThat(redisTemplate.opsForZSet().score(FREE, "7")).isEqualTo(7.0);
+        assertThat(redisTemplate.getExpire(FREE, TimeUnit.SECONDS)).isNotNull().isBetween(1L, 600L);
     }
 
     /*

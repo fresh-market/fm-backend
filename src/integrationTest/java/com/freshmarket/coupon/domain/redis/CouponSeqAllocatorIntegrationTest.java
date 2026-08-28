@@ -2,7 +2,9 @@ package com.freshmarket.coupon.domain.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import com.freshmarket.IntegrationTestSupport;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
@@ -46,6 +48,43 @@ class CouponSeqAllocatorIntegrationTest extends IntegrationTestSupport {
     // 카운터가 서야 이벤트가 시작된 것이다. 이 준비 절차를 배치가 맡는다
     private void 이벤트를_연다() {
         redisTemplate.opsForValue().set(COUNTER, "0");
+    }
+
+    // 준비 단계가 카운터에만 수명을 건다. 나머지 셋은 아직 없어 그때는 걸 수 없다
+    private void 수명이_있는_이벤트를_연다() {
+        이벤트를_연다();
+        redisTemplate.expire(COUNTER, Duration.ofMinutes(10));
+    }
+
+    private Long 남은_수명(String key) {
+        return redisTemplate.getExpire(key, TimeUnit.SECONDS);
+    }
+
+    /*
+     * 네 키는 함께 살고 함께 죽어야 한다. 하나만 남으면 나머지가 거짓말을 한다.
+     *
+     * 준비 단계에서는 카운터에만 걸 수 있다. 나머지 셋이 그때 없어서 EXPIREAT 이 아무 일도
+     * 안 하기 때문이다. 그래서 만드는 자리가 카운터의 만료 시각을 물려받는지를 여기서 본다.
+     */
+    @Test
+    void 만들어지는_키가_카운터의_수명을_물려받는다() {
+        수명이_있는_이벤트를_연다();
+
+        allocator.allocate(COUPON_ID, 1L, ISSUE_LIMIT);
+
+        assertThat(남은_수명(SEQ)).isNotNull().isBetween(1L, 600L);
+        assertThat(남은_수명(PENDING)).isNotNull().isBetween(1L, 600L);
+    }
+
+    // 마감이 없으면 카운터에도 수명이 없다. 물려줄 것이 없으므로 나머지도 안 건다
+    @Test
+    void 카운터에_수명이_없으면_아무_키에도_안_건다() {
+        이벤트를_연다();
+
+        allocator.allocate(COUPON_ID, 1L, ISSUE_LIMIT);
+
+        assertThat(남은_수명(SEQ)).isEqualTo(-1L);
+        assertThat(남은_수명(PENDING)).isEqualTo(-1L);
     }
 
     @Test

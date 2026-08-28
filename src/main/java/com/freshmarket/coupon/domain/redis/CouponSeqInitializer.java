@@ -44,6 +44,11 @@ public class CouponSeqInitializer {
     /**
      * 카운터에 만료 시각을 다시 건다. 관리자가 발급 시각을 바꾼 뒤에 부른다.
      *
+     * <p><b>여기서 걸 수 있는 것은 카운터뿐이다.</b> 나머지 셋은 이 시점에 아직 없고, 없는 키에
+     * {@code EXPIREAT} 은 아무 일도 안 한다. 그래서 셋은 만드는 자리가 이 값을 물려받는다.
+     * 순번 확보 스크립트가 {@code seq} 와 {@code pending} 을, {@link CouponSeqCommitter} 가
+     * {@code free} 를 맡는다. 카운터가 넷의 수명을 들고 있는 셈이다.
+     *
      * <p>이 메서드가 {@code EXPIREAT} 으로 절대 시각을 건다. {@code EXPIRE} 로 상대 초를 걸면
      * 부를 때마다 갱신되어 <b>"마지막 발급 후 1분"</b> 이 되고, 발급이 잠깐 뜸해지면 그때 사라진다.
      *
