@@ -10,7 +10,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.freshmarket.payment.PaymentMethod;
-import com.freshmarket.payment.PaymentApprovedEvent;
 import com.freshmarket.payment.PaymentRequest;
 import com.freshmarket.payment.PaymentResult;
 import com.freshmarket.payment.PaymentStatus;
@@ -30,7 +29,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
@@ -39,15 +37,12 @@ class PaymentServiceTest {
     @Mock
     private PaymentRepository paymentRepository;
 
-    @Mock
-    private ApplicationEventPublisher eventPublisher;
-
     private PaymentService sut;
 
     @BeforeEach
     void setUp() {
         Clock clock = Clock.fixed(Instant.parse("2026-08-22T00:00:00Z"), ZoneId.of("Asia/Seoul"));
-        sut = new PaymentService(paymentRepository, eventPublisher, clock);
+        sut = new PaymentService(paymentRepository, clock);
     }
 
     @Test
@@ -109,7 +104,6 @@ class PaymentServiceTest {
         assertThat(result.status()).isEqualTo(PaymentStatus.PAID);
         assertThat(result.pgTid()).isEqualTo("mock_123");
         assertThat(result.paidAt()).isEqualTo(paidAt);
-        verify(eventPublisher).publishEvent(new PaymentApprovedEvent(10L, 1L, paidAt));
     }
 
     @Test

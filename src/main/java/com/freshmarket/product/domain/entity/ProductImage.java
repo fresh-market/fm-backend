@@ -22,9 +22,14 @@ import org.hibernate.annotations.UuidGenerator;
 public class ProductImage extends BaseMutableTimeEntity {
 
     private static final int OBJECT_KEY_MAX_LENGTH = 255;
+    private static final int REQUEST_ID_MAX_LENGTH = 100;
 
     @Column(name = "product_id", nullable = false)
     private Long productId;
+
+    // 업로드 URL 발급(createUploadUrl) 재시도 감지용 요청 식별자(클라이언트 생성). stock_lot.requestId와 같은 목적이다
+    @Column(name = "request_id", nullable = false, length = REQUEST_ID_MAX_LENGTH)
+    private String requestId;
 
     /*
      * 업로드 세션 식별자(스키마 명세상 UUID v7, INF-11-04). product_image_id(리소스 식별자)와 달리,
@@ -51,10 +56,12 @@ public class ProductImage extends BaseMutableTimeEntity {
     @Column(name = "is_main", nullable = false)
     private boolean isMain;
 
-    private ProductImage(Long productId, String objectKey) {
+    private ProductImage(Long productId, String requestId, String objectKey) {
         validateProductId(productId);
+        validateRequestId(requestId);
         validateObjectKey(objectKey);
         this.productId = productId;
+        this.requestId = requestId;
         this.objectKey = objectKey;
         this.sortOrder = 0;
         // uploadId 는 여기서 채우지 않는다. @UuidGenerator 가 INSERT 시점에 값을 넣는다(save() 이후에 읽을 수 있다)
@@ -63,8 +70,8 @@ public class ProductImage extends BaseMutableTimeEntity {
     }
 
     // 업로드 URL을 발급하며 이미지 행을 만든다. 이 시점엔 S3에 실제로 올라갔는지 모른다(PENDING)
-    public static ProductImage register(Long productId, String objectKey) {
-        return new ProductImage(productId, objectKey);
+    public static ProductImage register(Long productId, String requestId, String objectKey) {
+        return new ProductImage(productId, requestId, objectKey);
     }
 
     // S3 HeadObject로 실제 업로드를 확인한 뒤 호출한다. PENDING 상태에서만 확정할 수 있다
@@ -91,6 +98,16 @@ public class ProductImage extends BaseMutableTimeEntity {
     private static void validateProductId(Long productId) {
         if (productId == null) {
             throw new IllegalArgumentException("productId 는 필수다");
+        }
+    }
+
+    private static void validateRequestId(String requestId) {
+        if (requestId == null || requestId.isBlank()) {
+            throw new IllegalArgumentException("requestId 는 필수다");
+        }
+        if (requestId.length() > REQUEST_ID_MAX_LENGTH) {
+            throw new IllegalArgumentException(
+                    "requestId 는 " + REQUEST_ID_MAX_LENGTH + "자를 넘을 수 없다: " + requestId.length());
         }
     }
 

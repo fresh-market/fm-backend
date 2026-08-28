@@ -137,13 +137,9 @@ public class RefreshTokenRepository {
         redisTemplate.delete(activeKey(role, id));
     }
 
-    private String primaryKey(String tokenHash) {
-        return KEY_PREFIX + tokenHash;
-    }
+    private String primaryKey(String tokenHash) { return KEY_PREFIX + tokenHash; }
 
-    private String activeKey(String role, Long id) {
-        return ACTIVE_KEY_PREFIX + role + ":" + id;
-    }
+    private String activeKey(String role, Long id) { return ACTIVE_KEY_PREFIX + role + ":" + id; }
 
     private String serialize(Long memberId, String role, TokenType type, boolean remember) {
         return memberId + "|" + role + "|" + type.name() + "|" + remember;

@@ -395,6 +395,7 @@ class MemberTokenServiceTest {
 
         verify(memberRepository).clearRefreshToken(1L);
         verify(accessTokenValidAfterRepository).invalidateBefore(eq("ROLE_USER"), eq(1L), any(), any());
+        verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
     }
 
     @Test
