@@ -1242,6 +1242,26 @@ issued_quantity   종료 배치가 돌 기회를 가진 뒤
 300만 건에서 상태와 이력 대조 한 쿼리가 9초 안팎이고 전역 `socketTimeout` 이 10초다. **데이터가 더 늘면 그 쿼리가 먼저 끊긴다.** 배치 프로필의 `socketTimeout` 을 따로 늘리는 것이 그때의 대응이고, 지금은 상한을 아는 채로 둔다.
 
 
+### 관리자 API 인가
+
+부하 시험을 준비하다 찾았다. `AdminCouponEventController` 에 권한 애너테이션이 없고, 쿠폰 경로를 잡는 필터 체인도 없었다.
+
+```
+SecurityConfig 의 마지막 체인   anyRequest().authenticated()
+-> 로그인한 회원 아무나 이벤트를 열고 닫고 발급 시각을 바꿀 수 있었다
+```
+
+**이벤트를 여는 것은 Redis 카운터를 세우는 일이다.** 도는 이벤트에 그것을 다시 걸면 카운터가 0 으로 돌아가 선착순이 처음부터 다시 시작한다. 인가 구멍이 곧 재고 파괴 경로였다.
+
+도메인이 자기 경로의 인가를 소유하는 이 저장소의 규약대로 `CouponSecurityConfig` 를 뒀다.
+
+```
+/v1/coupons/*/issues      로그인한 회원.  자격 판정은 서비스가 따로 본다
+/v1/admin/coupons/**      hasRole("ADMIN").  SUPER_ADMIN 은 RoleHierarchy 가 포함시킨다
+```
+
+**시험이 그 구멍을 실제로 잡는지 확인했다.** 설정을 빼고 돌리니 회원 토큰으로 이벤트를 여는 시험과 발급 시각을 바꾸는 시험 둘이 그대로 실패했다. 인가 매트릭스는 도메인에 속한 검사가 아니라 베이스 패키지의 `SecurityAuthorizationIntegrationTest` 에 함께 둔다.
+
 ### 부하 시험 (로컬 리허설)
 
 절차와 회차 기록은 [loadtest/README.md](../../loadtest/README.md) 에 있다. 여기에는 **그 시험이 무엇을 답했고 무엇을 못 답했는지**만 적는다.
