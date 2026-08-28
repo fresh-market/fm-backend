@@ -1,6 +1,7 @@
 package com.freshmarket.member.domain.service;
 
 import com.freshmarket.common.auth.AuthCookieFactory;
+import com.freshmarket.common.auth.RedisFailureClassifier;
 import com.freshmarket.common.auth.jwt.AccessTokenValidAfterRepository;
 import com.freshmarket.common.auth.jwt.JwtTokenProvider;
 import com.freshmarket.common.auth.opaque.RefreshTokenRepository;
@@ -95,7 +96,7 @@ public class MemberTokenService {
         try {
             refreshTokenRepository.save(refreshToken, memberId, role, TokenType.MEMBER, rememberMe, ttl);
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_SAVE_FAILED role={} id={} — DB 백업만 반영됨", role, memberId, e);
+            log.warn("event=REDIS_SAVE_FAILED role={} id={} cause={} — DB 백업만 반영됨", role, memberId, RedisFailureClassifier.causeLabel(e), e);
         }
 
         response.addHeader(HttpHeaders.SET_COOKIE, authCookieFactory.refreshTokenCookie(refreshToken, rememberMe).toString());
@@ -119,7 +120,7 @@ public class MemberTokenService {
         try {
             outcome = refreshTokenRepository.compareAndRotate(oldRefreshToken, newRefreshToken, ttl);
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_CAS_FAILED — Redis 장애, DB 백업으로 재발급 폴백 시도", e);
+            log.warn("event=REDIS_CAS_FAILED cause={} — Redis 장애, DB 백업으로 재발급 폴백 시도", RedisFailureClassifier.causeLabel(e), e);
             return reissueViaDbFallback(oldRefreshToken, newRefreshToken, expiresAt);
         }
 
@@ -195,7 +196,7 @@ public class MemberTokenService {
             refreshTokenRepository.save(newRefreshToken, member.getId(), role, TokenType.MEMBER, false,
                     Duration.ofMillis(jwtTokenProvider.getRefreshTokenValidityMs()));
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_SAVE_FAILED_DURING_DB_FALLBACK memberId={} — DB만 반영됨", member.getId(), e);
+            log.warn("event=REDIS_SAVE_FAILED_DURING_DB_FALLBACK memberId={} cause={} — DB만 반영됨", member.getId(), RedisFailureClassifier.causeLabel(e), e);
         }
 
         return new ReissueResult(newAccessToken, jwtTokenProvider.getAccessTokenValidityMs() / 1000, newRefreshToken, false);
@@ -264,7 +265,7 @@ public class MemberTokenService {
             // 이미 로그아웃된 회원의 (아직 자연 만료 전) 액세스 토큰이 계속 통할 수 있다는
             // 것인데, 이건 JwtAuthenticationFilter.isValidAfterCutoff()가 Redis 장애 시 이미
             // fail-open으로 감수하기로 한 것과 같은 종류의 리스크라 새로 늘어나는 게 아니다.
-            log.warn("event=INVALIDATE_BEFORE_FAILED role={} id={}", role, memberId, e);
+            log.warn("event=INVALIDATE_BEFORE_FAILED role={} id={} cause={}", role, memberId, RedisFailureClassifier.causeLabel(e), e);
         }
 
         if (logoutExternalSession) {
@@ -281,8 +282,8 @@ public class MemberTokenService {
                 log.warn("event=DB_BACKUP_SAVE_SKIPPED memberId={} — 대상 행을 찾지 못함", memberId);
             }
         } catch (DataAccessException e) {
-            log.warn("event=DB_BACKUP_SAVE_FAILED memberId={} — Redis만 반영됨(DB 백업 유실 가능, 다음 쓰기 때 다시 시도됨)",
-                    memberId, e);
+            log.warn("event=DB_BACKUP_SAVE_FAILED memberId={} cause={} — Redis만 반영됨(DB 백업 유실 가능, 다음 쓰기 때 다시 시도됨)",
+                    memberId, RedisFailureClassifier.causeLabel(e), e);
         }
     }
 }

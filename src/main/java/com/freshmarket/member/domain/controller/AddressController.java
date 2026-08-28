@@ -8,6 +8,9 @@ import com.freshmarket.member.domain.service.AddressService;
 import com.freshmarket.member.domain.dto.AddressCreateRequest;
 import com.freshmarket.member.domain.dto.AddressResponse;
 import com.freshmarket.member.domain.dto.AddressUpdateRequest;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
@@ -35,11 +38,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/v1/members/me/addresses")
 @RequiredArgsConstructor
+@Tag(name = "배송지", description = "내 배송지 목록과 관리")
 class AddressController {
 
     private final AddressService addressService;
 
     @GetMapping
+    @Operation(summary = "내 배송지 목록 조회", description = "현재 회원의 배송지를 페이지 단위로 조회한다.")
+    @ApiResponse(responseCode = "200", description = "조회 성공")
     public ResponseEntity<ResponseEnvelope<PageResponse<AddressResponse>>> findMyAddresses(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             Pageable pageable
@@ -50,6 +56,9 @@ class AddressController {
     }
 
     @PostMapping
+    @Operation(summary = "배송지 등록")
+    @ApiResponse(responseCode = "201", description = "등록 성공")
+    @ApiResponse(responseCode = "400", description = "요청 값이 유효하지 않음")
     public ResponseEntity<ResponseEnvelope<AddressResponse>> create(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestBody @Valid AddressCreateRequest request
@@ -59,6 +68,9 @@ class AddressController {
     }
 
     @PatchMapping("/{addressId}")
+    @Operation(summary = "배송지 수정")
+    @ApiResponse(responseCode = "200", description = "수정 성공")
+    @ApiResponse(responseCode = "404", description = "배송지가 없거나 현재 회원의 배송지가 아님")
     public ResponseEntity<ResponseEnvelope<AddressResponse>> update(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long addressId,
@@ -69,6 +81,9 @@ class AddressController {
     }
 
     @DeleteMapping("/{addressId}")
+    @Operation(summary = "배송지 삭제")
+    @ApiResponse(responseCode = "204", description = "삭제 성공")
+    @ApiResponse(responseCode = "404", description = "배송지가 없거나 현재 회원의 배송지가 아님")
     public ResponseEntity<Void> delete(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long addressId
