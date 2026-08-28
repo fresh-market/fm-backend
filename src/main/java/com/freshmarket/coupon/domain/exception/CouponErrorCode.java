@@ -29,10 +29,10 @@ public enum CouponErrorCode implements ErrorCode {
      */
     ISSUE_PERIOD_LOCKED(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-007", "이미 시작한 이벤트의 발급 시각은 바꿀 수 없습니다."),
     /*
-     * 관리자가 소진 전이고 마감 전인 이벤트를 끄려 했다.
-     * 약속한 이벤트를 관리자가 도중에 흔들지 못하게 막는다.
+     * 관리자가 마감 대기가 끝나기 전에 이벤트를 끄려 했다.
+     * 약속한 이벤트를 관리자가 도중에 흔들지 못하게 막고, 진행 중인 발급이 결판나기를 기다린다.
      */
-    EVENT_NOT_CLOSABLE(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-008", "소진되지 않았고 마감 시각도 지나지 않아 종료할 수 없습니다."),
+    EVENT_NOT_CLOSABLE(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-008", "마감 시각에서 60초가 지나야 종료할 수 있습니다."),
     // 없는 발급분이거나 남의 것이다. 둘을 가르지 않아야 남의 쿠폰의 존재를 알아낼 수 없다
     MEMBER_COUPON_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON-009", "보유하지 않은 쿠폰입니다."),
     /*

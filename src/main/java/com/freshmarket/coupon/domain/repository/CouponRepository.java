@@ -45,22 +45,32 @@ public interface CouponRepository extends JpaRepository<Coupon, Long> {
     int activateIfInactive(@Param("couponId") long couponId, @Param("now") LocalDateTime now);
 
     /**
-     * 관리자가 이벤트를 끈다. 소진됐거나 마감 시각이 지났을 때만 꺼진다.
+     * 이벤트를 끈다. <b>마감 시각에서 대기 시간이 지나야 꺼진다.</b> 관리자와 배치가 같은 조건을 쓴다.
+     *
+     * <p>대기가 조건에 들어 있는 것이 이 갱신의 요점이다. 끄는 것과 발급 수를 맞추는 것을 한
+     * 트랜잭션으로 묶으려면 끄는 시점에 <b>실제 행 수가 더 이상 안 움직여야</b> 한다. 마감 뒤에도
+     * 진행 중인 플러시가 행을 더 넣으므로 그 결판을 기다린 뒤에 끈다.
+     *
+     * <p>소진을 조건에 두지 않는다. {@code free} 에 반납된 번호가 남아 있으면 스크립트가 그것을
+     * 다시 내주므로 소진이 최종이 아니고, <b>소진 뒤에도 스위치가 켜져 있어야 요청이 올 때 도는
+     * 회수가 묶인 번호를 되살린다.</b> 끄면 그 번호가 그대로 죽는다.
      *
      * <p>서비스가 같은 조건을 미리 보고 사유를 갈라 답한다. 여기 조건은 그 확인과 갱신 사이에
      * 남이 끼어드는 것을 막는 <b>경합 방어</b>다.
      *
+     * @param closableBefore 지금에서 대기 시간을 뺀 시각. 마감이 이보다 앞이어야 끌 수 있다
      * @return 1 이면 이 호출이 껐다. 0 이면 이미 꺼졌거나 아직 끌 수 없는 상태다
      */
     @Modifying(clearAutomatically = true)
     @Transactional
     @Query(value = """
-            UPDATE coupon c SET c.is_active = FALSE, c.updated_at = :now
-             WHERE c.coupon_id = :couponId AND c.is_active = TRUE
-               AND ((c.issue_end_at IS NOT NULL AND c.issue_end_at <= :now)
-                 OR (SELECT COUNT(*) FROM member_coupon mc WHERE mc.coupon_id = c.coupon_id) >= c.total_quantity)
+            UPDATE coupon SET is_active = FALSE, updated_at = :now
+             WHERE coupon_id = :couponId AND is_active = TRUE
+               AND issue_end_at IS NOT NULL AND issue_end_at <= :closableBefore
             """, nativeQuery = true)
-    int deactivateIfClosable(@Param("couponId") long couponId, @Param("now") LocalDateTime now);
+    int deactivateIfClosable(@Param("couponId") long couponId,
+                             @Param("closableBefore") LocalDateTime closableBefore,
+                             @Param("now") LocalDateTime now);
 
     /**
      * 관리자가 발급 시각을 바꾼다. 아직 시작하지 않은 이벤트만 바뀐다.
@@ -83,48 +93,28 @@ public interface CouponRepository extends JpaRepository<Coupon, Long> {
                                       @Param("now") LocalDateTime now);
 
     /**
-     * 배치가 마감 시각이 지난 이벤트를 끈다. 관리자가 누르지 않아도 끝나게 하는 장치다.
-     *
-     * <p>배치는 소진으로 끝내지 않는다. 카운터가 한도를 넘어도 {@code free} 에 반납된 번호가
-     * 남아 있으면 스크립트가 그것을 다시 내주므로 최종이 아니다. <b>배치가 보는 것은 마감 시각
-     * 하나뿐이다.</b>
-     */
-    @Modifying(clearAutomatically = true)
-    @Transactional
-    @Query(value = """
-            UPDATE coupon SET is_active = FALSE, updated_at = :now
-             WHERE is_active = TRUE AND total_quantity IS NOT NULL
-               AND issue_end_at IS NOT NULL AND issue_end_at <= :now
-            """, nativeQuery = true)
-    int deactivateFinishedEvents(@Param("now") LocalDateTime now);
-
-    /**
-     * 배치가 정리할 쿠폰을 찾는다. Redis 에 키가 남아 있는지로 찾지 않는다.
+     * 배치가 끌 이벤트를 찾는다. Redis 에 키가 남아 있는지로 찾지 않는다.
      *
      * <p>키로 찾으면 TTL 이 키를 먼저 지웠을 때 배치가 대상을 놓쳐 발급 수 맞추기를 건너뛴다.
      * 배치가 DB 만 보면 TTL 길이와 배치 주기가 서로 묶이지 않는다.
      *
-     * <p>하한 60초가 "진행 중인 배치가 결판날 때까지 기다린다" 를 만든다. 이것이 없으면 배치가
-     * 방금 끈 쿠폰을 같은 실행에서 정리해 대기가 0 이 된다. Redis 를 마지막으로 만지는 것은
-     * 요청 스레드의 순번 확보가 아니라 <b>플러시 스레드의 반납</b>이라, 그 커밋이나 실패까지
-     * 끝나야 Redis 호출이 다 끝난다.
+     * <p>대기 60초가 "진행 중인 배치가 결판날 때까지 기다린다" 를 만든다. Redis 를 마지막으로
+     * 만지는 것은 요청 스레드의 순번 확보가 아니라 <b>플러시 스레드의 반납</b>이라, 그 커밋이나
+     * 실패까지 끝나야 발급 행 수가 멈춘다.
      *
-     * <p>상한 7일이 비용을 이력 크기에서 떼어 낸다. 이것이 없으면 3년 전에 끝난 이벤트까지
-     * 후보가 되고, <b>DB 가 그 쿠폰마다 {@code member_coupon} 을 다시 센다.</b> 한 번 맞춘
-     * 쿠폰은 두 값이 같아져 결과에서 빠지지만, 빠졌다는 것을 알아내려고 DB 가 매번 센다.
+     * <p>상한을 안 둔다. 조건이 <b>아직 켜져 있는 이벤트</b>만 보므로 대상이 자연히 작고, 한 번
+     * 꺼진 쿠폰은 다음 실행부터 이 집합에서 빠진다. 꺼진 것까지 후보로 삼던 때는 비용이 이력을
+     * 따라 자라 상한이 필요했고, 그 상한을 넘긴 쿠폰은 어긋난 채 남았다.
      *
-     * <p>상한을 넘겨 놓친 쿠폰은 {@code issued_quantity} 가 어긋난 채 남는다. 요청 스레드가 그
-     * 값을 안 보므로 발급이 틀어지지 않고, Redis 키는 TTL 이 따로 치운다.
+     * @param closableBefore 지금에서 대기 시간을 뺀 시각
      */
     @Query(value = """
-            SELECT coupon_id FROM coupon c
-             WHERE is_active = FALSE AND total_quantity IS NOT NULL
-               AND updated_at < :closedBefore
-               AND updated_at > :closedAfter
-               AND issued_quantity <> (SELECT COUNT(*) FROM member_coupon WHERE coupon_id = c.coupon_id)
+            SELECT coupon_id FROM coupon
+             WHERE is_active = TRUE AND total_quantity IS NOT NULL
+               AND issue_end_at IS NOT NULL AND issue_end_at <= :closableBefore
+             ORDER BY coupon_id
             """, nativeQuery = true)
-    List<Long> findCleanupTargets(@Param("closedBefore") LocalDateTime closedBefore,
-                                  @Param("closedAfter") LocalDateTime closedAfter);
+    List<Long> findClosableEvents(@Param("closableBefore") LocalDateTime closableBefore);
 
     /**
      * 배치가 발급 수를 실제 행 수로 맞춘다.
@@ -144,14 +134,4 @@ public interface CouponRepository extends JpaRepository<Coupon, Long> {
              WHERE coupon_id = :couponId
             """, nativeQuery = true)
     int syncIssuedQuantity(@Param("couponId") long couponId);
-
-    /**
-     * 실제로 발급된 행 수를 센다. 관리자가 이벤트를 끌 수 있는지 판정할 때 쓴다.
-     *
-     * <p>행이 {@code total_quantity} 만큼 있으면 모든 번호가 행으로 실재하므로 스크립트가 회수할
-     * 것이 없다. 플러시 스레드가 밀린 만큼 이 값이 늦게 차지만, <b>관리자가 늦게 끄는 쪽이
-     * 안전하다.</b>
-     */
-    @Query(value = "SELECT COUNT(*) FROM member_coupon WHERE coupon_id = :couponId", nativeQuery = true)
-    int countIssued(@Param("couponId") long couponId);
 }

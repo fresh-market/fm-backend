@@ -30,7 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 않는다. 저장해 두고 다음 회차에서 재사용하면 "같은 데이터로 재실행하면 같은 결과" 가 깨진다.
  *
  * <p><b>고치는 배치와 섞지 않는다.</b> 검증이 고치면 두 번째 실행이 첫 번째와 다른 결과를 낸다.
- * 고치는 일은 이벤트 정리 배치와 9장의 회수가 맡는다.
+ * 고치는 일은 이벤트 종료 배치와 9장의 회수가 맡는다.
  */
 @Slf4j
 @Service

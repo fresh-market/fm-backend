@@ -111,65 +111,79 @@ class CouponEventServiceTest {
     }
 
     @Test
-    void 소진_전이고_마감_전이면_관리자가_끌_수_없다() {
+    void 마감_전이면_관리자가_끌_수_없다() {
         // given
         givenCoupon(limitedCoupon(true, NOW.plusDays(1)));
-        when(couponRepository.countIssued(COUPON_ID)).thenReturn(TOTAL_QUANTITY - 1);
 
         // when, then
         assertThatThrownBy(() -> sut.close(COUPON_ID))
                 .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.EVENT_NOT_CLOSABLE);
-        verify(couponRepository, never()).deactivateIfClosable(anyLong(), any());
+        verify(couponRepository, never()).deactivateIfClosable(anyLong(), any(), any());
     }
 
-    // 행이 총량만큼 실재하면 스크립트가 회수할 번호가 없어 최종이다
+    /*
+     * 마감은 지났지만 대기가 안 끝났다.
+     * 이때 끄면 아직 들어오는 플러시 때문에 발급 수를 잘못된 값으로 맞춘다.
+     */
     @Test
-    void 소진됐으면_마감_전이라도_끌_수_있다() {
+    void 마감_직후에는_아직_끌_수_없다() {
+        // given
+        givenCoupon(limitedCoupon(true, NOW.minusSeconds(30)));
+
+        // when, then
+        assertThatThrownBy(() -> sut.close(COUPON_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.EVENT_NOT_CLOSABLE);
+        verify(couponRepository, never()).deactivateIfClosable(anyLong(), any(), any());
+    }
+
+    /*
+     * 소진으로는 못 끈다.
+     * free 에 반납된 번호가 남아 있으면 스크립트가 다시 내주므로 소진이 최종이 아니고,
+     * 스위치가 켜져 있어야 요청이 올 때 도는 회수가 묶인 번호를 되살린다.
+     */
+    @Test
+    void 소진됐어도_마감_전이면_못_끈다() {
         // given
         givenCoupon(limitedCoupon(true, NOW.plusDays(1)));
-        when(couponRepository.countIssued(COUPON_ID)).thenReturn(TOTAL_QUANTITY);
-        when(couponRepository.deactivateIfClosable(eq(COUPON_ID), any())).thenReturn(1);
 
-        // when
-        sut.close(COUPON_ID);
-
-        // then
-        verify(couponRepository).deactivateIfClosable(eq(COUPON_ID), any());
+        // when, then
+        assertThatThrownBy(() -> sut.close(COUPON_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.EVENT_NOT_CLOSABLE);
     }
 
+    // 끄기와 발급 수 맞추기와 키 치우기가 한 트랜잭션이다. 나누면 껐는데 안 맞은 행이 남는다
     @Test
-    void 마감_시각이_지났으면_소진_전이라도_끌_수_있다() {
+    void 마감_대기가_끝나면_끄면서_발급_수를_맞추고_키를_치운다() {
         // given
-        givenCoupon(limitedCoupon(true, NOW.minusMinutes(1)));
-        when(couponRepository.deactivateIfClosable(eq(COUPON_ID), any())).thenReturn(1);
+        givenCoupon(limitedCoupon(true, NOW.minusMinutes(2)));
+        when(couponRepository.deactivateIfClosable(eq(COUPON_ID), any(), any())).thenReturn(1);
 
         // when
         sut.close(COUPON_ID);
 
         // then
-        verify(couponRepository).deactivateIfClosable(eq(COUPON_ID), any());
-        // 마감으로 이미 판정났으므로 굳이 세지 않는다
-        verify(couponRepository, never()).countIssued(anyLong());
+        verify(couponRepository).syncIssuedQuantity(COUPON_ID);
+        verify(seqInitializer).clear(COUPON_ID);
     }
 
     @Test
     void 이미_꺼진_이벤트를_또_끄면_아무것도_하지_않는다() {
         // given
-        givenCoupon(limitedCoupon(false, NOW.minusMinutes(1)));
+        givenCoupon(limitedCoupon(false, NOW.minusMinutes(2)));
 
         // when
         sut.close(COUPON_ID);
 
         // then
-        verify(couponRepository, never()).deactivateIfClosable(anyLong(), any());
+        verify(couponRepository, never()).deactivateIfClosable(anyLong(), any(), any());
     }
 
     // 확인과 갱신 사이에 남이 껐다. 결과가 같으므로 실패로 답하지 않는다
     @Test
     void 끄는_사이에_남이_먼저_꺼도_실패로_답하지_않는다() {
         // given
-        givenCoupon(limitedCoupon(true, NOW.minusMinutes(1)));
-        when(couponRepository.deactivateIfClosable(eq(COUPON_ID), any())).thenReturn(0);
+        givenCoupon(limitedCoupon(true, NOW.minusMinutes(2)));
+        when(couponRepository.deactivateIfClosable(eq(COUPON_ID), any(), any())).thenReturn(0);
 
         // when, then
         sut.close(COUPON_ID);
@@ -217,45 +231,47 @@ class CouponEventServiceTest {
         verifyNoInteractions(seqInitializer);
     }
 
+    // 대기가 끝난 이벤트만 후보다. 대기를 뺀 시각을 넘겨야 조건이 그것을 잰다
     @Test
-    void 배치가_마감된_이벤트를_끈다() {
+    void 배치가_대기_끝난_이벤트를_찾는다() {
         // given
-        when(couponRepository.deactivateFinishedEvents(any())).thenReturn(2);
+        when(couponRepository.findClosableEvents(NOW.minusSeconds(60))).thenReturn(List.of(COUPON_ID, 88L));
 
-        // when
-        int closed = sut.closeFinishedEvents();
-
-        // then
-        assertThat(closed).isEqualTo(2);
+        // when, then
+        assertThat(sut.findClosableEvents()).containsExactly(COUPON_ID, 88L);
     }
 
+    // 배치도 관리자와 같은 순서를 지난다. 끄고, 맞추고, 치운다
     @Test
-    void 끌_이벤트가_없으면_아무_일도_없다() {
+    void 배치가_끄면서_발급_수를_맞추고_키를_치운다() {
         // given
-        when(couponRepository.deactivateFinishedEvents(any())).thenReturn(0);
+        when(couponRepository.deactivateIfClosable(eq(COUPON_ID), any(), any())).thenReturn(1);
 
         // when
-        int closed = sut.closeFinishedEvents();
+        boolean closed = sut.closeIfDue(COUPON_ID);
 
         // then
-        assertThat(closed).isZero();
-    }
-
-    // 배치가 발급 수를 먼저 맞추고 나서 키를 지운다. 순서가 뒤집히면 셀 대상을 잃는다
-    @Test
-    void 배치가_발급_수를_맞추고_키를_치운다() {
-        // given
-        when(couponRepository.findCleanupTargets(any(), any())).thenReturn(List.of(COUPON_ID, 88L));
-
-        // when
-        int cleaned = sut.cleanupClosedEvents();
-
-        // then
-        assertThat(cleaned).isEqualTo(2);
+        assertThat(closed).isTrue();
         verify(couponRepository).syncIssuedQuantity(COUPON_ID);
         verify(seqInitializer).clear(COUPON_ID);
-        verify(couponRepository).syncIssuedQuantity(88L);
-        verify(seqInitializer).clear(88L);
+    }
+
+    /*
+     * 남이 먼저 껐거나 아직 때가 아니다.
+     * 발급 수를 맞추면 안 된다. 그 값이 아직 움직이는 중일 수 있다.
+     */
+    @Test
+    void 못_끈_이벤트는_발급_수를_안_맞춘다() {
+        // given
+        when(couponRepository.deactivateIfClosable(eq(COUPON_ID), any(), any())).thenReturn(0);
+
+        // when
+        boolean closed = sut.closeIfDue(COUPON_ID);
+
+        // then
+        assertThat(closed).isFalse();
+        verify(couponRepository, never()).syncIssuedQuantity(anyLong());
+        verifyNoInteractions(seqInitializer);
     }
 
     private void givenCoupon(Coupon coupon) {

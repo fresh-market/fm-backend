@@ -173,7 +173,7 @@ class CouponConsistencyIntegrationTest extends IntegrationTestSupport {
         }
     }
 
-    // 발급 중에는 아무도 이 값을 안 올린다. 정리 배치가 나중에 맞추는 값이라 시험이 직접 적는다
+    // 발급 중에는 아무도 이 값을 안 올린다. 종료 배치가 끄면서 맞추는 값이라 시험이 직접 적는다
     private void 카운터를_적는다(int issued) {
         jdbcTemplate.update("UPDATE coupon SET issued_quantity = ? WHERE coupon_id = ?", issued, COUPON_ID);
     }

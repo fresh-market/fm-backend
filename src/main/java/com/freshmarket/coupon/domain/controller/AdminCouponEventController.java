@@ -37,8 +37,9 @@ class AdminCouponEventController {
     }
 
     @Operation(summary = "선착순 이벤트 닫기",
-            description = "발급 스위치를 끈다. 소진됐거나 마감 시각이 지났을 때만 끌 수 있다. "
-                    + "Redis 키는 여기서 지우지 않고 정리 배치가 한참 뒤에 지운다.")
+            description = "발급 스위치를 끄고, 발급 수를 실제 행 수로 맞추고, Redis 키를 지운다. "
+                    + "마감 시각에서 60초가 지나야 끌 수 있다. 그 대기가 진행 중인 발급이 결판나는 시간이다. "
+                    + "소진으로는 못 끈다. 스위치가 켜져 있어야 묶인 순번의 회수가 돈다.")
     @PostMapping("/v1/admin/coupons/{couponId}/event:close")
     public ResponseEntity<ResponseEnvelope<Void>> close(@PathVariable Long couponId) {
         couponEventService.close(couponId);
