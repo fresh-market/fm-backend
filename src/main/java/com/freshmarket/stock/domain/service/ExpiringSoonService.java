@@ -1,98 +1,105 @@
 package com.freshmarket.stock.domain.service;
 
 import static com.freshmarket.stock.domain.ExpiringSoonPolicy.DEFAULT_PAGE_SIZE;
-import static com.freshmarket.stock.domain.ExpiringSoonPolicy.DEFAULT_WITHIN_DAYS;
 
 import com.freshmarket.common.response.CursorPageResponse;
 import com.freshmarket.common.response.PageCursor;
 import com.freshmarket.common.response.PageTokens;
-import com.freshmarket.product.ProductApi;
 import com.freshmarket.product.ProductOptionInfo;
-import com.freshmarket.stock.domain.ExpiringSoonJudge;
 import com.freshmarket.stock.domain.dto.ExpiringSoonResponse;
-import com.freshmarket.stock.domain.dto.StockLotView;
-import com.freshmarket.stock.domain.repository.StockLotQueryRepository;
+import com.freshmarket.stock.domain.entity.CampaignTargetLot;
+import com.freshmarket.stock.domain.repository.CampaignTargetLotCacheRepository;
+import com.freshmarket.stock.domain.repository.CampaignTargetLotRepository;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /*
- * 회원에게 소비기한 임박 상품을 노출한다.
+ * 회원에게 소비기한 임박 떨이 쿠폰 대상 상품을 노출한다.
  *
- * 판정 기준: 소비기한 - sale_available_days_from_expiry(판매 마감 기한) 까지
- * 남은 일수가 withinDays 이내면 임박으로 본다. 실제 계산은 ExpiringSoonJudge 가 한다.
+ * 임박 여부를 여기서 계산하지 않는다 — 자정 배치(CampaignTargetLotBatch)가 확정해 둔
+ * campaign_target_lot 을 그대로 읽는다. 관리자용 조회(AdminCampaignTargetLotService)와
+ * 같은 표를 보므로 "캠페인 대상과 회원에게 노출되는 상품이 어긋나는" 문제가 구조적으로 없다.
+ * 요청 시점마다 다시 계산하지 않으니 같은 기준일에는 항상 같은 목록이 나온다.
  *
- * 정렬은 productOptionId 오름차순 커서 페이지네이션이다. 임박한 순으로 보여주면
- * 첫 페이지만 계속 노출되어 특정 상품에 판매가 쏠린다 — 순환 노출을 위해 정렬 축을
- * 임박도가 아니라 안정적인 식별자로 둔다. 커서는 PageTokens 로 불투명화해 목록/검색
- * 조회와 같은 방식을 쓴다 (API-5-02).
+ * 정렬은 targetRank(소진율 오름차순) 이다. 임박도 순 노출은 첫 페이지에 판매가 쏠린다는
+ * 우려가 있었지만, 대상이 하위 10% 로 좁혀져 목록 자체가 짧으므로 관리자 조회와 같은
+ * 순서를 쓰는 편이 낫다고 봤다.
  *
- * purchasable/categoryId 필터링이 DB 조회 이후 자바에서 일어나, 정확히 pageSize
- * 만큼 응답하지 못할 수 있다. FETCH_MULTIPLIER 만큼 넉넉히 가져와 이 문제를 줄인다.
- * 완벽한 보장은 아니지만(가능성은 낮음), 반복 조회 없이 단순하게 개선한다.
+ * 트랜잭션을 걸지 않는다 — 중간에 ProductApi 외부 호출이 끼어 있어, 감싸면 그 호출이 읽기
+ * 트랜잭션 안에 들어간다 (DI-4-02, AdminCampaignTargetLotService 와 같은 이유).
  *
- * stock(L1) 은 product(L0) 의 엔티티/Q클래스를 직접 참조할 수 없다
- * (ArchitectureTest: "slices should not depend on each other"). product 정보는
- * 전부 ProductApi 를 거쳐서만 가져온다.
+ * stock(L1) 은 product(L0) 의 엔티티를 직접 참조할 수 없다
+ * (ArchitectureTest: "slices should not depend on each other"). 상품 정보는 ProductApi 로만 가져온다.
  */
 @Service
 @RequiredArgsConstructor
-@Transactional(readOnly = true)
 public class ExpiringSoonService {
 
-    // purchasable/categoryId 필터링으로 걸러질 것을 감안해 여유 있게 가져온다
+    // categoryId/purchasable 필터로 걸러질 것을 감안해 여유 있게 가져온다
     private static final int FETCH_MULTIPLIER = 2;
 
-    private final StockLotQueryRepository stockLotQueryRepository;
-    private final ProductApi productApi;
+    private final CampaignTargetLotRepository campaignTargetLotRepository;
+    private final CampaignTargetLotProductInfoService campaignTargetLotProductInfoService;
+    private final CampaignTargetLotCacheRepository campaignTargetLotCacheRepository;
     private final Clock clock;
 
+    /*
+     * 확정본이라 하루 종일 값이 같아 캐시를 앞에 둔다. 캐시가 비었거나 못 읽으면 그대로
+     * DB 에서 구한다 — 캐시 장애가 조회 실패가 되지 않게 한다.
+     */
     public CursorPageResponse<ExpiringSoonResponse> getExpiringSoonProducts(
-            int withinDays, Long categoryId, String pageToken, int pageSize) {
+            Long categoryId, String pageToken, int pageSize) {
 
-        int effectiveWithinDays = withinDays > 0 ? withinDays : DEFAULT_WITHIN_DAYS;
         int effectivePageSize = pageSize > 0 ? pageSize : DEFAULT_PAGE_SIZE;
-        LocalDate judgmentStart = LocalDate.now(clock).plusDays(effectiveWithinDays);
+        LocalDate today = LocalDate.now(clock);
+
+        Optional<CursorPageResponse<ExpiringSoonResponse>> cached =
+                campaignTargetLotCacheRepository.find(today, categoryId, pageToken, effectivePageSize);
+        if (cached.isPresent()) {
+            return cached.get();
+        }
+
+        CursorPageResponse<ExpiringSoonResponse> response =
+                loadFromDatabase(today, categoryId, pageToken, effectivePageSize);
+        campaignTargetLotCacheRepository.put(today, categoryId, pageToken, effectivePageSize, response);
+        return response;
+    }
+
+    private CursorPageResponse<ExpiringSoonResponse> loadFromDatabase(
+            LocalDate today, Long categoryId, String pageToken, int effectivePageSize) {
 
         PageCursor cursor = PageTokens.decode(pageToken);
-        Long cursorProductOptionId = cursor != null ? cursor.id() : null;
+        int afterRank = cursor != null ? cursor.id().intValue() : 0;
 
         int fetchSize = effectivePageSize * FETCH_MULTIPLIER;
-        List<StockLotView> lots = stockLotQueryRepository.findAvailableLots(
-                cursorProductOptionId, fetchSize);
+        List<CampaignTargetLot> targetLots = campaignTargetLotRepository
+                .findByTargetDateAndTargetRankGreaterThanOrderByTargetRankAsc(
+                        today, afterRank, PageRequest.of(0, fetchSize + 1));
 
-        boolean hasMoreInBatch = lots.size() > fetchSize;
-        List<StockLotView> batch = hasMoreInBatch ? lots.subList(0, fetchSize) : lots;
+        boolean hasMoreInBatch = targetLots.size() > fetchSize;
+        List<CampaignTargetLot> batch = hasMoreInBatch ? targetLots.subList(0, fetchSize) : targetLots;
 
         if (batch.isEmpty()) {
             return CursorPageResponse.of(List.of(), null);
         }
 
-        List<Long> productOptionIds = batch.stream()
-                .map(StockLotView::productOptionId)
-                .distinct()
-                .toList();
-        List<ProductOptionInfo> infos = productApi.findOptionInfos(productOptionIds);
-        Map<Long, ProductOptionInfo> infoByOptionId = infos.stream()
-                .collect(Collectors.toMap(ProductOptionInfo::productOptionId, Function.identity()));
+        Map<Long, ProductOptionInfo> infoByStockLotId = campaignTargetLotProductInfoService.findByStockLotId(batch);
 
-        List<Map.Entry<StockLotView, ProductOptionInfo>> filtered = batch.stream()
-                .filter(lot -> infoByOptionId.containsKey(lot.productOptionId()))
-                .map(lot -> Map.entry(lot, infoByOptionId.get(lot.productOptionId())))
+        List<Map.Entry<CampaignTargetLot, ProductOptionInfo>> filtered = batch.stream()
+                .filter(lot -> infoByStockLotId.containsKey(lot.getStockLotId()))
+                .map(lot -> Map.entry(lot, infoByStockLotId.get(lot.getStockLotId())))
                 .filter(e -> e.getValue().purchasable())
                 .filter(e -> categoryId == null || categoryId.equals(e.getValue().categoryId()))
-                .filter(e -> ExpiringSoonJudge.isExpiringSoon(
-                        e.getKey(), e.getValue().saleAvailableDaysFromExpiry(), judgmentStart))
                 .toList();
 
         boolean hasNext = filtered.size() > effectivePageSize || hasMoreInBatch;
-        List<Map.Entry<StockLotView, ProductOptionInfo>> page = filtered.size() > effectivePageSize
+        List<Map.Entry<CampaignTargetLot, ProductOptionInfo>> page = filtered.size() > effectivePageSize
                 ? filtered.subList(0, effectivePageSize)
                 : filtered;
 
@@ -103,9 +110,10 @@ public class ExpiringSoonService {
 
         String nextToken = hasNext && !page.isEmpty()
                 ? PageTokens.encode(new PageCursor(
-                        page.get(page.size() - 1).getKey().productOptionId(), null))
+                        (long) page.get(page.size() - 1).getKey().getTargetRank(), null))
                 : null;
 
         return CursorPageResponse.of(items, nextToken);
     }
+
 }

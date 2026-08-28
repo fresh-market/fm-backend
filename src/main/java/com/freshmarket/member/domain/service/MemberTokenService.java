@@ -229,8 +229,16 @@ public class MemberTokenService {
         }
 
         try {
-            hash.ifPresent(refreshTokenRepository::deleteByHash);
-            refreshTokenRepository.deleteActiveKey(role, memberId);
+            if (hash.isPresent()) {
+                refreshTokenRepository.revokeIfActiveHashMatches(
+                        hash.get(),
+                        role,
+                        memberId);
+            } else {
+                refreshTokenRepository.deleteActiveKey(
+                        role,
+                        memberId);
+            }
         } catch (DataAccessException e) {
             log.warn("event=REDIS_DELETE_FAILED role={} id={} — DB 백업만 반영됨", role, memberId, e);
         }
