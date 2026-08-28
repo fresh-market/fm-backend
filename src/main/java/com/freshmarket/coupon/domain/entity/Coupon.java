@@ -14,7 +14,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /*
- * 쿠폰 정의(발급 틀)다. total_quantity 가 있으면 선착순이다.
+ * 쿠폰 정의(발급 틀)다. 한정 수량과 마감 시각이 둘 다 있으면 선착순이다.
  * 정책은 한 번 만들면 바뀌지 않는다. 그래서 member_coupon 이 조건을 복사하지 않고 이 행을 참조한다.
  */
 @Entity
@@ -47,13 +47,14 @@ public class Coupon extends BaseMutableTimeEntity {
     @Column(name = "min_order_amount", nullable = false)
     private int minOrderAmount;
 
-    // 발급 한정 수량. NULL 이면 일반 쿠폰, 값이 있으면 선착순이다
+    // 발급 한정 수량. NULL 이면 일반 쿠폰이다. 값이 있어도 마감 시각이 없으면 선착순이 아니다
     @Column(name = "total_quantity")
     private Integer totalQuantity;
 
     /*
-     * 발급된 수를 담는 기록이다. 판정에 쓰지 않는다.
-     * 상한은 member_coupon 의 issue_seq 가 행 단위로 강제하고, 이 값은 이벤트 종료 후 배치가 맞춘다.
+     * 몇 장이 나갔는지를 담는 기록이다. 앱은 이 값으로 아무것도 판정하지 않는다.
+     * 상한은 member_coupon 의 issue_seq 가 행 단위로 강제하고, 이 값은 종료 배치가 이벤트를
+     * 끄면서 실제 행 수로 맞춘다.
      */
     @Column(name = "issued_quantity", nullable = false)
     private int issuedQuantity;
@@ -62,7 +63,7 @@ public class Coupon extends BaseMutableTimeEntity {
     @Column(name = "issue_start_at")
     private LocalDateTime issueStartAt;
 
-    // 발급 마감 시각. NULL 이면 소진까지
+    // 발급 마감 시각. 선착순 쿠폰은 이 값이 있어야 한다. 없으면 끄는 조건도 Redis 키의 수명도 못 정한다
     @Column(name = "issue_end_at")
     private LocalDateTime issueEndAt;
 
@@ -76,7 +77,7 @@ public class Coupon extends BaseMutableTimeEntity {
     @Column(name = "target_grade_id")
     private Long targetGradeId;
 
-    // 발급 스위치. 초안(FALSE)으로 태어나 사람이 켠다
+    // 발급 스위치. 쿠폰은 초안(FALSE)으로 태어나고 관리자가 이벤트를 열 때 켜진다
     @Column(name = "is_active", nullable = false)
     private boolean active;
 
@@ -109,8 +110,8 @@ public class Coupon extends BaseMutableTimeEntity {
     }
 
     /*
-     * 수량 제한이 없는 일반 쿠폰을 초안으로 연다. total_quantity 가 비어 있어 순번을 다투지 않는다.
-     * 두 팩터리 모두 초안(is_active = FALSE)으로 태어나고 사람이 따로 켠다.
+     * 수량 제한이 없는 일반 쿠폰을 초안으로 만든다. total_quantity 가 비어 있어 순번을 다투지 않는다.
+     * 두 팩터리 모두 초안(is_active = FALSE)으로 만들고, 켜는 것은 관리자가 따로 한다.
      * 선택 필드(할인 상한, 최소 주문 금액, 대상 등급)는 그것을 쓰는 기능이 생길 때 오버로딩으로 더한다.
      */
     public static Coupon draftUnlimited(String name, CouponScope scope, DiscountType discountType,
@@ -120,8 +121,8 @@ public class Coupon extends BaseMutableTimeEntity {
     }
 
     /*
-     * 선착순 쿠폰을 초안으로 연다. 한정 수량이 있어야 순번으로 상한을 강제할 수 있다.
-     * issueEndAt 이 비어 있으면 소진까지 연다.
+     * 선착순 쿠폰을 초안으로 만든다. 한정 수량이 있어야 순번으로 상한을 강제할 수 있다.
+     * issueEndAt 도 넣어야 한다. 없으면 isLimited 가 거짓이 되어 이 쿠폰은 선착순 경로에 안 들어온다.
      */
     public static Coupon draftLimited(String name, CouponScope scope, DiscountType discountType,
                                       int discountValue, LocalDate validFrom, LocalDate validTo,
@@ -142,9 +143,9 @@ public class Coupon extends BaseMutableTimeEntity {
     }
 
     /*
-     * 발급 기간과 대상 등급을 보는 판정은 여기 없다.
-     * 발급 경로가 캐시된 스냅샷으로 판정하므로 CachedCoupon 이 그 식을 갖는다. 양쪽에 두면
-     * 한쪽만 고쳤을 때 캐시가 켜졌을 때와 꺼졌을 때 답이 달라진다.
+     * 발급 기간과 대상 등급을 보는 판정은 이 엔티티에 두지 않는다.
+     * 발급 경로가 캐시된 스냅샷으로 판정하므로 그 식은 CachedCoupon 이 갖는다. 같은 식을 양쪽에
+     * 두면 한쪽만 고쳤을 때 캐시를 탄 요청과 안 탄 요청의 답이 달라진다.
      */
     private static void validateName(String name) {
         if (name == null || name.isBlank()) {

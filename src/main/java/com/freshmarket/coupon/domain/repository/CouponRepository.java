@@ -29,7 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 public interface CouponRepository extends JpaRepository<Coupon, Long> {
 
     /**
-     * 발급 스위치를 켠다. 이미 켜져 있으면 아무 행도 안 바꾼다.
+     * 관리자 API 가 발급 스위치를 켠다. 이미 켜져 있으면 아무 행도 안 바꾼다.
      *
      * <p>이 갱신이 커밋될 때까지 다른 트랜잭션은 그 행에서 막히고 스위치도 못 본다. 그래서
      * 호출자가 커밋 전에 Redis 를 세워 두면 <b>남이 스위치를 보는 시점에는 카운터가 이미 서 있다.</b>
@@ -123,8 +123,8 @@ public interface CouponRepository extends JpaRepository<Coupon, Long> {
      * 판정에 쓰이지 않는다. 요청 스레드가 발급마다 올리면 쿠폰 한 행에 락이 몰려 순번을 둔
      * 의미가 사라진다.
      *
-     * <p>이 갱신은 {@code updated_at} 을 건드리지 않는다. 그 값이 "언제 껐나" 를 뜻하고 위
-     * 대기 조건이 그것을 재기 때문이다.
+     * <p>이 갱신은 {@code updated_at} 을 건드리지 않는다. 같은 트랜잭션에서 바로 앞의 끄기가
+     * 이미 그 값을 "언제 껐나" 로 찍어 두었고, 여기서 다시 쓰면 그 뜻이 흐려진다.
      */
     @Modifying(clearAutomatically = true)
     @Transactional

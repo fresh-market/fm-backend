@@ -3,7 +3,7 @@ package com.freshmarket.coupon.domain.audit;
 import java.util.List;
 
 /**
- * 정합성 검증 한 회차의 결과다.
+ * 검증 배치가 한 회차를 돌고 낸 결과다.
  *
  * <p><b>재는 것만 담고 고치지 않는다.</b> 요구사항이 같은 데이터로 재실행하면 같은 결과를
  * 요구하는데, 검증이 고치면 두 번째 실행의 결과가 첫 번째와 달라진다
@@ -22,9 +22,9 @@ public record CouponConsistencyReport(List<CouponIssueCount> stock,
                                       long issuesWithoutHistory) {
 
     /*
-     * 이력 없는 발급분은 어긋남에서 뺀다.
-     * 발급 경로가 이력을 안 남기는 것이 지금의 설계라, 넣으면 정상적으로 발급된 행이 전부 걸린다.
-     * 값은 재서 남기되 판정은 안 한다.
+     * 이 판정은 이력 없는 발급분을 어긋남에서 뺀다.
+     * 발급 경로가 이력을 안 남기는 것이 지금의 설계라, 그것을 어긋남으로 세면 정상적으로 발급된
+     * 행이 전부 걸린다. 그래서 값은 재서 리포트에 남기되 깨끗한지 여부에는 넣지 않는다.
      */
     public boolean clean() {
         return stock.isEmpty() && seqGaps.isEmpty() && duplicates.isEmpty() && statusHistoryMismatches == 0;

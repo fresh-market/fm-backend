@@ -1,13 +1,13 @@
 package com.freshmarket.coupon.domain.issue;
 
 /**
- * 발급 한 건이 어떻게 끝났는지. 지표의 {@code result} 태그가 되는 값이다.
+ * 발급 한 건이 어떻게 끝났는지를 나타낸다. 앱이 지표의 {@code result} 태그로 쓰는 값이다.
  *
  * <p>{@code docs/coupon/coupon.md} 8장이 <b>"충돌, 소진, 혼잡, DB 타임아웃을 나눠 센다"</b> 고
  * 요구한다. 상태 코드만으로는 소진(409)과 혼잡(503)까지만 갈리고, 혼잡 안에서 순번 충돌과
  * 큐 포화와 DB 실패가 한 덩어리가 된다. 그것을 가르려고 둔다.
  *
- * <p>재요청 비율도 여기서 나온다. {@link #ALREADY_ISSUED} 를 전체로 나누면 된다.
+ * <p>재요청 비율도 이 값에서 나온다. 대시보드가 {@link #ALREADY_ISSUED} 를 전체로 나누면 된다.
  */
 public enum IssueResult {
 

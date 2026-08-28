@@ -7,7 +7,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /*
- * 배치가 마감 지난 선착순 이벤트를 끝낸다.
+ * 배치가 마감이 지난 선착순 이벤트를 끝낸다.
  * 스케줄러 어댑터라 서비스가 아니고, domain.service 패키지(커버리지 100% 대상)에 있으면 안 된다.
  * 실행과 소요 시간 로그는 SchedulerLoggingAspect 가 자동으로 남긴다.
  *
@@ -27,9 +27,9 @@ public class CouponEventScheduler {
     private final CouponEventService couponEventService;
 
     /*
-     * 반복이 여기 있는 이유가 있다.
-     * 쿠폰 하나가 트랜잭션 하나여야 하는데, 서비스가 자기 메서드를 부르면 프록시를 안 거쳐
-     * 그 경계가 사라진다. 어댑터가 부르면 매번 프록시를 지난다.
+     * 이 반복을 서비스가 아니라 여기에 둔 이유가 있다.
+     * 쿠폰 하나가 트랜잭션 하나여야 하는데, 서비스가 자기 메서드를 부르면 스프링 프록시를 안
+     * 거쳐서 그 경계가 사라진다. 이 어댑터가 부르면 매번 프록시를 지난다.
      *
      * 10분 주기로 충분하다. 마감 조건에 이미 60초 대기가 들어 있어 그보다 자주 돌 이유가 없고,
      * 마감 지난 요청은 CouponIssueService 의 기간 검사가 이미 막는다. 스위치가 늦게 꺼져서

@@ -16,11 +16,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 관리자와 배치가 이벤트를 열고 닫는다. 요청 스레드가 도는 발급 경로와 달리 드물게 도는 관리
- * 동작이라, 이 클래스는 왕복을 아끼지 않고 정확한 쪽을 고른다.
+ * 관리자와 배치가 선착순 이벤트를 열고 닫는 자리다. 요청 스레드가 도는 발급 경로와 달리 아주
+ * 드물게 도는 관리 동작이라, 이 클래스는 왕복을 아끼기보다 정확한 쪽을 고른다.
  *
- * <p>순서가 이 클래스의 전부다. 여는 쪽은 Redis 를 세우고 스위치를 켜야 하고, 닫는 쪽은
- * 스위치를 끄고 한참 뒤에 키를 지워야 한다({@code docs/coupon/coupon.md} 3장).
+ * <p><b>순서가 이 클래스의 전부다.</b> 여는 쪽은 Redis 카운터를 세우고 나서 발급 스위치를 켜야
+ * 하고, 닫는 쪽은 마감에서 대기 시간이 지난 뒤에 스위치를 끄면서 발급 수를 맞추고 키를 지워야
+ * 한다({@code docs/coupon/coupon.md} 3장).
  */
 @Slf4j
 @Service
@@ -60,7 +61,7 @@ public class CouponEventService {
     public void open(long couponId) {
         Coupon coupon = findLimited(couponId);
         if (couponRepository.activateIfInactive(couponId, LocalDateTime.now(clock)) == 0) {
-            // 남이 이미 열었다. 여기서 Redis 를 다시 세우면 도는 이벤트의 카운터를 지운다
+            // 다른 관리자가 이미 열었다. 여기서 Redis 를 다시 세우면 돌고 있는 이벤트의 카운터를 0 으로 지운다
             log.info("event=COUPON_EVENT_ALREADY_OPEN couponId={}", couponId);
             return;
         }
@@ -87,7 +88,7 @@ public class CouponEventService {
             throw new CouponException(CouponErrorCode.EVENT_NOT_CLOSABLE);
         }
         if (!closeAndSettle(couponId)) {
-            // 위 확인과 이 갱신 사이에 남이 껐다. 결과가 같으므로 실패로 답하지 않는다
+            // 위 확인과 이 갱신 사이에 배치나 다른 관리자가 껐다. 결과가 같으므로 실패로 답하지 않는다
             log.info("event=COUPON_EVENT_CLOSE_RACED couponId={}", couponId);
             return;
         }
@@ -95,7 +96,7 @@ public class CouponEventService {
         log.info("event=COUPON_EVENT_CLOSED_BY_ADMIN couponId={}", couponId);
     }
 
-    // 관리자가 끌 수 있는 것은 마감에서 대기 시간이 지난 뒤다. 배치가 보는 조건과 같다
+    // 관리자가 끌 수 있는 때는 마감에서 대기 시간이 지난 뒤다. 배치가 보는 조건과 같은 식이어야 한다
     private boolean isClosable(Coupon coupon) {
         return coupon.getIssueEndAt() != null
                 && !LocalDateTime.now(clock).isBefore(coupon.getIssueEndAt().plusSeconds(CLOSE_WAIT_SECONDS));

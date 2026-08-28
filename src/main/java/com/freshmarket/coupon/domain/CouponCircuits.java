@@ -6,7 +6,7 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import org.springframework.dao.DataAccessException;
 
 /**
- * 회로 둘을 같은 규칙으로 만든다. 세는 대상만 다르고 나머지 모양은 같다.
+ * 이 클래스가 회로 둘을 같은 규칙으로 만든다. 무엇을 실패로 세느냐만 다르고 나머지 모양은 같다.
  */
 public final class CouponCircuits {
 
@@ -14,7 +14,7 @@ public final class CouponCircuits {
     }
 
     /**
-     * Redis 호출용 회로. 무엇이 나오든 실패로 센다.
+     * Redis 호출용 회로를 만든다. 이 회로는 무엇이 나오든 실패로 센다.
      *
      * <p>순번 확보에서 나올 수 있는 예외가 Redis 장애뿐이라 가릴 것이 없다. 스크립트와 코드가
      * 어긋난 경우는 {@code IllegalStateException} 인데, 그것은 회로가 열려서 가려질 것이 아니라
@@ -25,7 +25,7 @@ public final class CouponCircuits {
     }
 
     /**
-     * DB 쓰기용 회로. <b>무엇을 실패로 세느냐가 이 회로의 요점이다.</b>
+     * DB 쓰기용 회로를 만든다. <b>무엇을 실패로 세느냐가 이 회로의 요점이다.</b>
      *
      * <pre>
      * DuplicateKeyException      안 센다.  선착순에서 정상적으로 나오는 결과다

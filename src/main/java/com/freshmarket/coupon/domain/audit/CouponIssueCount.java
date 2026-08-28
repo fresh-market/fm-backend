@@ -1,7 +1,7 @@
 package com.freshmarket.coupon.domain.audit;
 
 /**
- * 쿠폰 한 장의 재고 세 값이다. 셋을 한 행으로 읽어야 서로 대조할 수 있다.
+ * 쿠폰 한 장의 재고 세 값을 담는다. 검증이 셋을 한 행으로 읽어야 서로 대조할 수 있다.
  *
  * @param issuedQuantity 쿠폰이 스스로 기억하는 발급 수
  * @param totalQuantity  한정 수량. 무제한 쿠폰은 {@code null}

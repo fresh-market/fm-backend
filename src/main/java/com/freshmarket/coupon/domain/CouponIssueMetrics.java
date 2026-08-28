@@ -13,10 +13,11 @@ import java.util.Map;
 import org.springframework.stereotype.Component;
 
 /*
- * 8장이 재라고 한 것 중 앱이 직접 내야 하는 값을 등록한다.
+ * 이 클래스가 8장이 재라고 한 값 중에서 앱이 직접 내야 하는 것을 등록한다.
  *
- * 나머지는 이미 나오고 있다. 처리량과 p99 는 http.server.requests 가, DB 커넥션 대기는
- * hikaricp_connections_pending 이 낸다. 여기 둘은 그 자동 계측이 모르는 값이다.
+ * 나머지는 스프링의 자동 계측이 이미 내고 있다. 처리량과 p99 는 http.server.requests 가,
+ * DB 커넥션 대기는 hikaricp_connections_pending 이 낸다. 이 클래스가 내는 둘은 그 자동
+ * 계측이 알 수 없는 값이다.
  */
 @Component
 public class CouponIssueMetrics {
@@ -37,9 +38,9 @@ public class CouponIssueMetrics {
     }
 
     /*
-     * 계량기를 기동 때 다 만들어 둔다.
-     * 처음 그 갈래가 나올 때 만들면, 한 번도 안 난 갈래가 대시보드에서 아예 안 보인다.
-     * "혼잡이 0 건" 과 "혼잡을 안 센다" 가 같은 모양이 되어 읽는 쪽이 구분하지 못한다.
+     * 이 생성자가 갈래별 계량기를 기동 때 다 만들어 둔다.
+     * 그 갈래가 처음 나올 때 만들면, 한 번도 안 난 갈래는 대시보드에 아예 안 보인다.
+     * 그러면 "혼잡이 0 건" 과 "혼잡을 안 센다" 가 같은 모양이 되어 읽는 사람이 구분하지 못한다.
      */
     private static Map<IssueResult, Counter> registerResults(MeterRegistry registry) {
         Map<IssueResult, Counter> counters = new EnumMap<>(IssueResult.class);
@@ -67,7 +68,7 @@ public class CouponIssueMetrics {
     }
 
     /*
-     * 적중률이 coupon.issue.coupon-cache-ttl 을 조정할 때의 근거가 된다.
+     * 이 적중률이 coupon.issue.coupon-cache-ttl 을 조정할 때의 근거가 된다.
      * TTL 을 줄이면 마감 초과 허용치가 줄어드는 대신 DB 조회가 는다. 그 교환을 숫자로 봐야 한다.
      */
     private static void registerCacheStats(MeterRegistry registry, CouponCache couponCache) {

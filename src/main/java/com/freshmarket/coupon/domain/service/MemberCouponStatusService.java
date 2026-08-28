@@ -15,7 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 발급분의 상태를 옮긴다. 발급 이후의 전이(사용, 취소, 만료)가 전부 여기로 모인다.
+ * 주문과 배치가 발급분의 상태를 옮기는 자리다. 발급 이후의 전이(사용, 취소, 만료)가 전부 여기로 모인다.
  *
  * <p>요구사항이 <b>"동일한 상태 변경 요청이 반복해서, 또는 동시에 발생해도 한 번만 반영되어야
  * 한다"</b> 고 못 박은 것이 이 클래스가 지키는 것이다({@code docs/coupon/requirement.md}).
@@ -43,7 +43,8 @@ public class MemberCouponStatusService {
 
     /*
      * 만료 배치가 한 번에 잡는 건수다.
-     * 300만 건을 한 문장으로 바꾸면 그동안 락이 걸려 있어 사용 요청이 전부 막힌다.
+     * 300만 건을 한 문장으로 바꾸면 그 문장이 끝날 때까지 그 행들이 잠겨, 그 사이에 들어온
+     * 사용 요청이 전부 막힌다.
      */
     private static final int EXPIRE_CHUNK = 1000;
 
@@ -59,10 +60,10 @@ public class MemberCouponStatusService {
     private final Clock clock;
 
     /**
-     * 주문에서 쿠폰을 쓴다.
+     * 주문이 이 발급분을 사용 처리한다.
      *
-     * <p>이미 사용된 것이면 조용히 끝난다. <b>그것은 실패가 아니라 늦게 도착한 같은 요청</b>이고,
-     * 실패로 답하면 재시도한 호출자가 못 쓴 줄 알고 다시 시도한다.
+     * <p>이미 사용된 것이면 이 메서드는 조용히 끝난다. <b>그것은 실패가 아니라 늦게 도착한 같은
+     * 요청</b>이고, 실패로 답하면 재시도한 호출자가 못 쓴 줄 알고 또 시도한다.
      *
      * <p>갱신을 출발 상태별로 나눠 시도한다. 정상 경로는 첫 번째({@code ISSUED})에서 끝나고,
      * 두 번째는 <b>주문 취소로 돌려받은 쿠폰을 다시 쓰는 경우</b>에만 돈다. 한 문장으로 묶으면
@@ -83,10 +84,10 @@ public class MemberCouponStatusService {
     }
 
     /**
-     * 주문이 취소되어 사용을 철회한다.
+     * 주문이 취소되어 이 발급분의 사용을 철회한다.
      *
-     * <p>{@code used_at} 을 함께 비우는 것은 리포지터리가 한다. 언제 썼었는지는 이력의 사용 전이
-     * 행이 갖는다.
+     * <p>{@code used_at} 을 함께 비우는 일은 리포지터리의 갱신문이 한다. 언제 썼었는지는 이력의
+     * 사용 전이 행이 들고 있으므로 그 값을 지워도 기록이 사라지지 않는다.
      */
     @Transactional
     public void cancelUse(long memberCouponId, long memberId) {
@@ -139,7 +140,7 @@ public class MemberCouponStatusService {
         log.info("event=MEMBER_COUPON_ALREADY_IN_STATE memberCouponId={} status={}", memberCouponId, target);
     }
 
-    // 0행일 때만 도는 경로라 정상 흐름에 읽기가 하나 더 붙지 않는다
+    // 이 읽기는 갱신이 0행으로 끝났을 때만 돈다. 그래서 정상 흐름에는 왕복이 하나도 안 는다
     private String readStatus(long memberCouponId, long memberId) {
         List<String> found = memberCouponRepository.findStatus(memberCouponId, memberId);
         if (found.isEmpty()) {
@@ -169,9 +170,9 @@ public class MemberCouponStatusService {
         }
 
         /*
-         * 고른 뒤 갱신하기까지 사이에 사용 요청이 끼어들 수 있다.
-         * 그때는 사용 쪽이 이기고 이 갱신이 그 행을 건너뛴다. 고른 수와 바꾼 수가 다를 수 있어
-         * 이력도 실제로 바뀐 것만 남아야 한다.
+         * 이 배치가 대상을 고른 뒤 갱신하기까지 사이에 사용 요청이 끼어들 수 있다.
+         * 그때는 사용 쪽이 이기고 이 갱신이 그 행을 건너뛴다. 그래서 고른 수와 실제로 바꾼 수가
+         * 다를 수 있고, 이력도 실제로 바뀐 것만 남겨야 상태와 안 어긋난다.
          */
         LocalDateTime now = LocalDateTime.now(clock);
         int expired = memberCouponRepository.markExpired(ids, today, now);
