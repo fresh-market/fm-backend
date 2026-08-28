@@ -6,12 +6,16 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -37,8 +41,16 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
     private static final int LIMIT = 10;
     private static final Duration WINDOW = Duration.ofMinutes(1);
     private static final Pattern SAFE_IP = Pattern.compile("^[0-9a-fA-F.:]{1,45}$");
+    private static final RedisScript<Long> RATE_LIMIT_SCRIPT = loadRateLimitScript();
 
     private final StringRedisTemplate redisTemplate;
+
+    private static RedisScript<Long> loadRateLimitScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("scripts/auth_rate_limit.lua"));
+        script.setResultType(Long.class);
+        return script;
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -60,10 +72,11 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
     private boolean isOverLimit(String ip) {
         String key = KEY_PREFIX + ip;
         try {
-            Long count = redisTemplate.opsForValue().increment(key);
-            if (count != null && count == 1) {
-                redisTemplate.expire(key, WINDOW);
-            }
+            Long count = redisTemplate.execute(
+                    RATE_LIMIT_SCRIPT,
+                    List.of(key),
+                    String.valueOf(WINDOW.toMillis())
+            );
             return count != null && count > LIMIT;
         } catch (DataAccessException e) {
             log.warn("event=RATE_LIMIT_CHECK_FAILED ip={} — fail-open으로 통과시킴", ip, e);
