@@ -36,7 +36,7 @@ public class CouponIssueQueue {
         return queue.size() < capacity;
     }
 
-    // 자리를 확인한 뒤에만 부른다. 큐가 무한이라 여기서 막히지 않는다
+    // 서비스가 자리를 확인한 뒤에만 이 메서드를 부른다. 큐가 무한이라 여기서 막히지 않는다
     public void submit(IssueTicket ticket) {
         queue.add(ticket);
     }

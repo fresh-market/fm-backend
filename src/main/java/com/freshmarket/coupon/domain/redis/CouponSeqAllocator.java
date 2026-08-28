@@ -19,7 +19,8 @@ import org.springframework.stereotype.Component;
 /**
  * 선착순 발급의 순번 확보. 쿠폰과 회원의 식별자만 받고 엔티티는 전혀 모른다.
  *
- * <p>키 넷(seq, free, counter, pending)을 한 번에 다뤄야 해서 Lua 스크립트 하나로 처리한다.
+ * <p>이 클래스는 키 넷(seq, free, counter, pending)을 한 번에 다뤄야 해서 Lua 스크립트 하나로
+ * 처리한다.
  * 나눠 부르면 그 사이에 다른 요청이 끼어들어 같은 번호가 두 번 나갈 수 있다. 스크립트가 무엇을
  * 어떤 순서로 보는지는 {@code docs/coupon/coupon.md} 3장에 있다.
  *

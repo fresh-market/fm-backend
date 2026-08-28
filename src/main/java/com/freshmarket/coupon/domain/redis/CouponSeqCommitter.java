@@ -29,9 +29,9 @@ public class CouponSeqCommitter {
     private final StringRedisTemplate redisTemplate;
 
     /**
-     * 커밋이 끝난 회원들에게 확정 표시를 붙이고 미확정 목록에서 뺀다.
+     * 플러시 스레드가 커밋이 끝난 회원들에게 확정 표시를 붙이고 미확정 목록에서 뺀다.
      *
-     * <p>배치 전체를 명령 둘로 끝낸다. 건당 왕복이 아니라 배치당 왕복 둘이다.
+     * <p>이 메서드는 배치 전체를 명령 둘로 끝낸다. 건당 왕복이 아니라 배치당 왕복 둘이다.
      */
     public void markCommitted(long couponId, Map<Long, Integer> seqByMember) {
         if (seqByMember.isEmpty()) {
@@ -55,8 +55,8 @@ public class CouponSeqCommitter {
     /**
      * 이 회원이 이미 이 쿠폰을 갖고 있어 이번 순번이 안 쓰인 경우다({@code uk_mc_coupon_member} 위반).
      *
-     * <p>이번에 받은 번호는 아무도 안 썼으므로 반납하고, 매핑은 원래 갖고 있던 순번으로 고친다.
-     * 지우기만 하면 재요청이 또 새 번호를 받아 또 막히는 것을 되풀이한다.
+     * <p>이번에 받은 번호는 아무도 안 썼으므로 이 메서드가 반납하고, 매핑은 원래 갖고 있던
+     * 순번으로 고친다. 매핑을 지우기만 하면 재요청이 또 새 번호를 받아 또 막히는 것을 되풀이한다.
      *
      * @param burnedSeq 이번에 받았다가 못 쓴 번호
      * @param actualSeq 이 회원이 원래 갖고 있는 순번
@@ -76,7 +76,7 @@ public class CouponSeqCommitter {
     /**
      * 이 번호를 남이 쓰고 있어 못 쓴 경우다({@code uk_mc_coupon_seq} 위반).
      *
-     * <p>반납하지 않는다. 남의 번호를 반납하면 그것을 또 다른 회원에게 내주게 된다. 매핑만 지워
+     * <p>이 메서드는 반납하지 않는다. 남의 번호를 반납하면 그것을 또 다른 회원에게 내주게 된다. 매핑만 지워
      * 이 회원의 재시도가 새 번호를 받게 한다.
      */
     public void dropMapping(long couponId, long memberId) {

@@ -26,7 +26,7 @@ public record IssueTicket(long couponId,
     }
 
     /*
-     * 이미 끝난 future 에 다시 쓰지 않는다.
+     * 플러시 스레드가 이미 끝난 future 에 다시 써도 아무 일이 안 일어난다.
      * 요청 스레드가 예산을 넘겨 떠났으면 그 자리는 이미 닫혀 있고, 그것은 실패가 아니다.
      */
     public void complete(IssueOutcome outcome) {

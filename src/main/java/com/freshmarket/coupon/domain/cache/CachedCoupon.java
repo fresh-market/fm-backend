@@ -12,7 +12,7 @@ import com.freshmarket.coupon.domain.entity.CouponScope;
  * 스레드가 나눠 갖기에 안전하지 않다는 것이고, 다른 하나는 이 record 가 담은 값들만
  * 발급 창 안에서 얼어붙는다는 것이다({@code docs/coupon/coupon.md} 3장).
  *
- * <p>판정 메서드를 엔티티가 아니라 여기에 둔다. 양쪽에 같은 식을 두면 한쪽만 고쳤을 때
+ * <p>이 record 가 판정 메서드를 엔티티 대신 갖는다. 양쪽에 같은 식을 두면 한쪽만 고쳤을 때
  * <b>캐시가 켜졌을 때와 꺼졌을 때 답이 달라진다.</b> 식이 한 군데만 있어야 그 일이 안 생긴다.
  */
 public record CachedCoupon(long couponId,

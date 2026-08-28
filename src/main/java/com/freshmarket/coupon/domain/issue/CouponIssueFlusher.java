@@ -57,7 +57,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
     }
 
     /*
-     * 돌던 배치는 끝까지 마치게 둔다.
+     * 이 메서드는 돌던 배치를 끝까지 마치게 둔다.
      * shutdownNow 로 끊으면 이미 커밋된 행의 확정 표시를 못 남기고, 그만큼 다음 요청이 DB 로 간다.
      */
     @Override
@@ -82,8 +82,8 @@ public class CouponIssueFlusher implements SmartLifecycle {
     }
 
     /*
-     * 종료 시점에 큐에 남은 것을 한 번 더 쓴다.
-     * 여기서 못 쓴 건은 순번이 pending 에 남아 나중에 회수되므로 재고로 돌아온다.
+     * 이 메서드가 종료 시점에 큐에 남은 것을 한 번 더 쓴다.
+     * 그때도 못 쓴 건은 순번이 pending 에 남아 나중에 회수되므로 재고로 돌아온다.
      */
     private void drainLeftovers() {
         List<IssueTicket> leftovers = new ArrayList<>();
@@ -121,7 +121,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 failAll(batch);
                 return;
             } catch (RuntimeException e) {
-                // 한 배치가 터져도 스레드는 살아 있어야 한다. 남은 요청까지 같이 굶길 수 없다
+                // 한 배치가 터져도 플러시 스레드는 살아 있어야 한다. 남은 요청까지 같이 굶길 수 없다
                 log.error("event=COUPON_FLUSH_BATCH_FAILED size={}", batch.size(), e);
                 failAll(batch);
             } finally {
@@ -131,8 +131,8 @@ public class CouponIssueFlusher implements SmartLifecycle {
     }
 
     /*
-     * 첫 항목을 잡은 뒤 윈도우가 닫힐 때까지 더 모은다.
-     * 배치가 다 차면 윈도우를 안 기다리고 바로 나간다. 한산할 때만 윈도우만큼 기다리는 셈이다.
+     * 플러시 스레드가 첫 항목을 잡은 뒤 윈도우가 닫힐 때까지 더 모은다.
+     * 배치가 다 차면 그 스레드는 윈도우를 안 기다리고 바로 나간다. 한산할 때만 윈도우만큼 기다리는 셈이다.
      */
     private void fillWithinWindow(List<IssueTicket> batch, int batchSize, long windowNanos)
             throws InterruptedException {
@@ -156,7 +156,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
             bulkRepository.insertAll(batch);
         } catch (DataAccessException e) {
             /*
-             * 어느 행이 왜 걸렸는지는 여기서 알 수 없으므로 한 건씩 다시 넣어 가른다.
+             * DB 는 어느 행 때문에 걸렸는지 알려주지 않으므로, 이 메서드가 한 건씩 다시 넣어 가른다.
              * 앞선 배치가 일부는 넣었을 수 있다. 그래서 다시 넣다 걸린 것이 남의 행인지 이 요청
              * 자신의 행인지를 resolveDuplicate 가 순번으로 갈라야 한다.
              */
@@ -176,8 +176,8 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 resolveDuplicate(ticket);
             } catch (DataAccessException e) {
                 /*
-                 * 커밋됐는지 아닌지 모른다.
-                 * 반납하면 남이 쓰는 번호를 내줄 수 있으므로 매핑을 그대로 두어, 재시도가 같은
+                 * 이 스레드는 커밋이 됐는지 아닌지 모른다.
+                 * 여기서 반납하면 남이 쓰는 번호를 내줄 수 있으므로 매핑을 그대로 두어, 재시도가 같은
                  * 번호로 오게 한다. 그 회원이 안 돌아오면 pending 이 시간으로 회수한다.
                  */
                 log.warn("event=COUPON_ISSUE_WRITE_FAILED couponId={} memberId={} seq={}",
@@ -189,7 +189,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
     }
 
     /*
-     * 어느 UNIQUE 에 걸렸는지를 예외 메시지가 아니라 실제 행을 읽어 가른다.
+     * 이 메서드는 어느 UNIQUE 에 걸렸는지를 예외 메시지가 아니라 실제 행을 읽어 가른다.
      * 메시지 형식은 드라이버와 서버 판에 따라 달라지지만 행의 유무는 달라지지 않는다.
      */
     private void resolveDuplicate(IssueTicket ticket) {
@@ -197,7 +197,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
         try {
             actualSeq = bulkRepository.findIssuedSeq(ticket.couponId(), ticket.memberId());
         } catch (DataAccessException e) {
-            // 가릴 수 없으면 아무것도 건드리지 않는다. 매핑을 유지하는 쪽이 언제나 안전하다
+            // 가릴 수 없으면 이 메서드는 아무것도 건드리지 않는다. 매핑을 유지하는 쪽이 언제나 안전하다
             log.warn("event=COUPON_ISSUE_CLASSIFY_FAILED couponId={} memberId={}",
                     ticket.couponId(), ticket.memberId(), e);
             ticket.complete(new IssueOutcome.Congested());
@@ -226,7 +226,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
             return;
         }
 
-        // uk_mc_coupon_seq 다. 그 번호는 남이 쓰고 있으므로 반납하지 않는다
+        // uk_mc_coupon_seq 다. 그 번호는 남이 쓰고 있으므로 이 메서드가 반납하지 않는다
         log.warn("event=COUPON_ISSUE_SEQ_TAKEN couponId={} memberId={} seq={}",
                 ticket.couponId(), ticket.memberId(), ticket.issueSeq());
         committer.dropMapping(ticket.couponId(), ticket.memberId());
@@ -234,7 +234,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
     }
 
     /*
-     * 확정 표시를 붙이고 나서 응답한다.
+     * 플러시 스레드가 확정 표시를 붙이고 나서 응답한다.
      * 순서를 뒤집으면 사용자의 재시도가 표시보다 먼저 도착해 DB 까지 간다. 그 왕복을 아끼려고
      * 두는 표시라 응답 앞에 있어야 뜻이 있다.
      */
@@ -248,7 +248,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
         }
     }
 
-    // 한 배치에 여러 쿠폰이 섞일 수 있으므로 쿠폰별로 묶어 각각 한 번씩 갱신한다
+    // 한 배치에 여러 쿠폰이 섞일 수 있으므로 이 메서드가 쿠폰별로 묶어 각각 한 번씩 갱신한다
     private void markCommitted(List<IssueTicket> issued) {
         Map<Long, Map<Long, Integer>> byCoupon = new HashMap<>();
         for (IssueTicket ticket : issued) {

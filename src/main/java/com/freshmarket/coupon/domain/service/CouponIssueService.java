@@ -30,8 +30,8 @@ import org.springframework.stereotype.Service;
  * <p>쿠폰은 {@link CouponCache} 에서 받는다. 발급 창 안에서는 그 값들이 얼어붙으므로 요청마다
  * DB 를 칠 이유가 없다({@code docs/coupon/coupon.md} 3장).
  *
- * <p>트랜잭션이 없다. 쓰기는 플러시 스레드가 자기 커넥션으로 하고 이 메서드는 큐에 넣고 기다릴
- * 뿐이다. 여기서 트랜잭션을 열면 기다리는 내내 커넥션을 쥐어, 5장의 커넥션 예산을 요청 수만큼
+ * <p>이 클래스에는 트랜잭션이 없다. 쓰기는 플러시 스레드가 자기 커넥션으로 하고, 이 클래스는
+ * 큐에 넣고 기다릴 뿐이다. 여기서 트랜잭션을 열면 기다리는 내내 커넥션을 쥐어, 5장의 커넥션 예산을 요청 수만큼
  * 먹는다({@code docs/coupon/coupon.md} 5장).
  */
 @Service
@@ -57,8 +57,8 @@ public class CouponIssueService {
         verifyIssuable(coupon, memberId);
 
         /*
-         * 자리를 순번보다 먼저 본다.
-         * 순번을 받고 나서 큐에 못 넣으면 그 번호를 반납해야 하는데, 순서를 뒤집으면 그 경로가
+         * 이 메서드가 자리를 순번보다 먼저 본다.
+         * 요청 스레드가 순번을 받고 나서 큐에 못 넣으면 그 번호를 반납해야 하는데, 순서를 뒤집으면 그 경로가
          * 아예 안 생긴다.
          */
         if (!queue.hasRoom()) {
@@ -77,7 +77,7 @@ public class CouponIssueService {
     /*
      * Redis 가 답하지 않거나 회로가 열려 있으면 순번을 못 받는다.
      * 재고는 남아 있을 수 있으므로 소진이 아니고, 대체 순번 발급기를 두지 않기로 했으므로
-     * 여기서 끊는다. 이미 큐에 들어간 요청은 이 경로와 무관하게 그대로 발급된다.
+     * 이 메서드가 여기서 끊는다. 이미 큐에 들어간 요청은 이 경로와 무관하게 그대로 발급된다.
      */
     private SeqOutcome allocateSeq(long couponId, long memberId, int issueLimit) {
         try {
@@ -98,8 +98,8 @@ public class CouponIssueService {
     }
 
     /*
-     * 대상 등급이 걸려 있지 않으면 회원을 아예 읽지 않는다.
-     * 이 읽기는 DB 왕복이라 선착순 경로에서 되도록 피한다. 대부분의 선착순 쿠폰은 등급을 안 건다.
+     * 대상 등급이 걸려 있지 않으면 이 메서드가 회원을 아예 읽지 않는다.
+     * 그 읽기는 DB 왕복이라 선착순 경로에서 되도록 피한다. 대부분의 선착순 쿠폰은 등급을 안 건다.
      */
     private void verifyTargetGrade(CachedCoupon coupon, long memberId) {
         if (coupon.targetGradeId() == null) {
