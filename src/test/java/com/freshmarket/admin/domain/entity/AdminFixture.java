@@ -4,7 +4,7 @@ import java.time.LocalDateTime;
 
 public final class AdminFixture {
 
-    // 관리자 테스트 데이터도 운영 코드와 같은 공개 팩터리를 사용해 생성 규칙을 우회하지 않는다.
+    // 관리자 테스트 데이터는 실제 관리자 등록과 동일하게 public 팩터리인 Admin.register()를 사용해 생성한다.
     public static Admin active(String loginId, String passwordHash, AdminRole role) {
         return Admin.register(loginId, passwordHash, "테스트관리자", role);
     }

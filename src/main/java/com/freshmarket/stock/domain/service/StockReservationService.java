@@ -15,13 +15,17 @@ import com.freshmarket.stock.domain.exception.StockException;
 import com.freshmarket.stock.domain.repository.StockAllocationRepository;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import com.freshmarket.stock.domain.repository.StockMovementRepository;
+import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 /*
@@ -34,6 +38,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class StockReservationService {
+
+    // 옵션 하나의 FEFO 로트를 한 번에 읽어오는 최대 개수. 이보다 로트가 많으면 다음 청크를 이어서 읽는다
+    private static final int LOT_CHUNK_SIZE = 50;
 
     private final StockLotRepository stockLotRepository;
     private final StockAllocationRepository stockAllocationRepository;
@@ -51,7 +58,7 @@ public class StockReservationService {
      * 주문상품마다 FEFO로 로트를 배분해 예약한다. 한 아이템이라도 끝까지 못 채우면 예외를 던진다 —
      * 호출부의 트랜잭션 안에서 실행되므로, 이 예외가 그 트랜잭션을 롤백시켜야 요청 안의 다른
      * 아이템이 이미 예약한 것까지 함께 되돌아간다(전체 성공 또는 전체 실패).
-     * 재시도는 orderItemId 기준으로 먼저 조회해 걸러낸다 — 커밋된 적 없는 부분 예약은
+     * 재시도는 orderItemId 기준으로 먼저 일괄 조회해 걸러낸다 — 커밋된 적 없는 부분 예약은
      * 호출부 트랜잭션이 롤백되며 함께 사라지므로 남아있을 수 없다.
      *
      * productOptionId 오름차순으로 처리한다(DI-2-03) — 두 주문이 같은 옵션들을 서로 다른 순서로
@@ -60,50 +67,83 @@ public class StockReservationService {
      * (confirm/release의 lockLots가 로트 id로 정렬하는 것과 같은 이유).
      */
     public void reserve(StockReservationRequest request) {
-        if (request.items() == null) {
+        if (request.items() == null || request.items().isEmpty()) {
             return;
         }
+        // 요청 검증은 DB를 건드리기 전에 끝낸다 — 항목 하나라도 수량이 잘못됐으면 조회조차 하지 않는다
+        for (StockReservationItemRequest item : request.items()) {
+            if (item.qty() < 1) {
+                throw new IllegalArgumentException("qty 는 1 이상이어야 한다: " + item.qty());
+            }
+        }
+
         List<StockReservationItemRequest> sortedItems = request.items().stream()
                 .sorted(Comparator.comparing(StockReservationItemRequest::productOptionId))
                 .toList();
+
+        // 항목마다 따로 조회하던 멱등성 체크를 요청 전체 기준 IN 조회 1회로 묶는다
+        Set<Long> allocatedOrderItemIds = stockAllocationRepository.findOrderItemIdsWithAllocation(
+                sortedItems.stream().map(StockReservationItemRequest::orderItemId).toList());
+
         for (StockReservationItemRequest item : sortedItems) {
+            if (allocatedOrderItemIds.contains(item.orderItemId())) {
+                continue;
+            }
             reserveItem(request.orderId(), item);
         }
     }
 
     private void reserveItem(Long orderId, StockReservationItemRequest item) {
-        if (item.qty() < 1) {
-            throw new IllegalArgumentException("qty 는 1 이상이어야 한다: " + item.qty());
-        }
-        if (!stockAllocationRepository.findByOrderItemId(item.orderItemId()).isEmpty()) {
-            return;
-        }
-
         int remaining = item.qty();
-        List<StockLot> lots = stockLotRepository.findByProductOptionIdAndStatusOrderByExpiryDateAsc(
-                item.productOptionId(), LotStatus.AVAILABLE);
+        LocalDate lastExpiryDate = null;
+        Long lastStockLotId = null;
 
-        for (StockLot lot : lots) {
-            if (remaining <= 0) {
+        while (remaining > 0) {
+            List<StockLot> lots = findFefoChunk(item.productOptionId(), lastExpiryDate, lastStockLotId);
+            if (lots.isEmpty()) {
                 break;
             }
-            int beforeQty = lot.getAvailableQty();
-            int attempt = Math.min(remaining, beforeQty);
-            if (attempt <= 0) {
-                continue;
+
+            for (StockLot lot : lots) {
+                if (remaining <= 0) {
+                    break;
+                }
+                int beforeQty = lot.getAvailableQty();
+                int attempt = Math.min(remaining, beforeQty);
+                if (attempt <= 0) {
+                    continue;
+                }
+                // 조건부 UPDATE(stock.md). 영향받은 행이 0이면 그 사이 경합이 있었다는 뜻이라 재고 부족으로 처리한다
+                if (decreaseAvailableQty(lot.getId(), attempt) == 0) {
+                    throw new StockException(StockErrorCode.INSUFFICIENT_STOCK);
+                }
+                saveAllocation(item.orderItemId(), lot.getId(), attempt);
+                stockMovementRepository.save(StockMovement.reserve(lot.getId(), attempt, beforeQty, orderId));
+                remaining -= attempt;
             }
-            // 조건부 UPDATE(stock.md). 영향받은 행이 0이면 그 사이 경합이 있었다는 뜻이라 재고 부족으로 처리한다
-            if (decreaseAvailableQty(lot.getId(), attempt) == 0) {
-                throw new StockException(StockErrorCode.INSUFFICIENT_STOCK);
+
+            StockLot lastLot = lots.get(lots.size() - 1);
+            lastExpiryDate = lastLot.getExpiryDate();
+            lastStockLotId = lastLot.getId();
+
+            if (lots.size() < LOT_CHUNK_SIZE) {
+                break;
             }
-            saveAllocation(item.orderItemId(), lot.getId(), attempt);
-            stockMovementRepository.save(StockMovement.reserve(lot.getId(), attempt, beforeQty, orderId));
-            remaining -= attempt;
         }
 
         if (remaining > 0) {
             throw new StockException(StockErrorCode.INSUFFICIENT_STOCK);
         }
+    }
+
+    // 커서(lastExpiryDate/lastStockLotId)가 없으면 첫 청크, 있으면 그 다음 청크를 FEFO 순서로 가져온다
+    private List<StockLot> findFefoChunk(Long productOptionId, LocalDate lastExpiryDate, Long lastStockLotId) {
+        Pageable limit = PageRequest.of(0, LOT_CHUNK_SIZE);
+        if (lastExpiryDate == null) {
+            return stockLotRepository.findFirstFefoChunk(productOptionId, LotStatus.AVAILABLE, limit);
+        }
+        return stockLotRepository.findNextFefoChunk(
+                productOptionId, LotStatus.AVAILABLE, lastExpiryDate, lastStockLotId, limit);
     }
 
     // 락 대기 타임아웃/교착은 도메인 밖으로 raw 타입을 새어나가게 두지 않고 재시도 가능한 오류로 감싼다
@@ -116,7 +156,7 @@ public class StockReservationService {
     }
 
     // uk_alloc_orderitem_lot 위반은 동시에 들어온 다른 reserve 재시도가 먼저 커밋한 경우다.
-    // 이 트랜잭션은 실패로 두고 롤백시켜, 호출부가 재시도하면 findByOrderItemId로 그 결과를 그대로 본다
+    // 이 트랜잭션은 실패로 두고 롤백시켜, 호출부가 재시도하면 findOrderItemIdsWithAllocation으로 그 결과를 그대로 본다
     private void saveAllocation(Long orderItemId, Long stockLotId, int qty) {
         try {
             stockAllocationRepository.save(StockAllocation.reserve(orderItemId, stockLotId, qty));
