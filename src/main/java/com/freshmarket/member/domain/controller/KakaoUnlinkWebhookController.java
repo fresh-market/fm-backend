@@ -2,6 +2,9 @@ package com.freshmarket.member.domain.controller;
 
 import com.freshmarket.common.logging.PiiMasker;
 import com.freshmarket.member.domain.service.MemberWithdrawalService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 @Slf4j
 @RestController
 @RequiredArgsConstructor
+@Tag(name = "카카오 연동", description = "카카오 연결 해제 웹훅")
 class KakaoUnlinkWebhookController {
 
     private final MemberWithdrawalService memberWithdrawalService;
@@ -28,6 +32,8 @@ class KakaoUnlinkWebhookController {
     private String adminKey;
 
     @RequestMapping(value = "/webhook/kakao/unlink", method = {RequestMethod.GET, RequestMethod.POST})
+    @Operation(summary = "카카오 연결 해제 웹훅", description = "카카오가 연결 해제를 알리면 회원 탈퇴 처리를 수행한다. 카카오 규격에 따라 처리 실패에도 200을 반환한다.")
+    @ApiResponse(responseCode = "200", description = "웹훅 수신 완료")
     public ResponseEntity<Void> handleUnlink(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
             @RequestParam("app_id") String appId,

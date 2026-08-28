@@ -4,6 +4,9 @@ import com.freshmarket.common.auth.AuthCookieFactory;
 import com.freshmarket.common.auth.CustomUserDetails;
 import com.freshmarket.member.domain.service.MemberWithdrawalService;
 import com.freshmarket.member.domain.dto.MemberWithdrawalRequest;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -24,12 +27,16 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/v1/members")
 @RequiredArgsConstructor
+@Tag(name = "회원", description = "회원 탈퇴")
 class MemberWithdrawalController {
 
     private final MemberWithdrawalService memberWithdrawalService;
     private final AuthCookieFactory authCookieFactory;
 
     @PostMapping("/me:withdraw")
+    @Operation(summary = "회원 탈퇴", description = "카카오 재인증 후 회원 계정과 현재 세션을 해제한다.")
+    @ApiResponse(responseCode = "204", description = "탈퇴 성공")
+    @ApiResponse(responseCode = "401", description = "카카오 재인증 정보가 유효하지 않음")
     public ResponseEntity<Void> withdraw(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestBody @Valid MemberWithdrawalRequest request,
