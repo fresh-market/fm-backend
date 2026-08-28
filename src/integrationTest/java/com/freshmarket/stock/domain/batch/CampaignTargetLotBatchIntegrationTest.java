@@ -10,8 +10,11 @@ import com.freshmarket.product.domain.repository.ProductOptionRepository;
 import com.freshmarket.product.domain.repository.ProductRepository;
 import com.freshmarket.stock.domain.entity.CampaignTargetLot;
 import com.freshmarket.stock.domain.entity.StockLot;
+import com.freshmarket.stock.domain.entity.DisposalReason;
+import com.freshmarket.stock.domain.entity.StockMovement;
 import com.freshmarket.stock.domain.repository.CampaignTargetLotRepository;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
+import com.freshmarket.stock.domain.repository.StockMovementRepository;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -39,7 +42,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest
 @ActiveProfiles({"integrationTest", "batch"})
 @Transactional
-@Sql("/sql/product-test-supplier.sql")
+@Sql({"/sql/product-test-supplier.sql", "/sql/stock-test-admin.sql"})
 @Testcontainers
 class CampaignTargetLotBatchIntegrationTest {
 
@@ -65,7 +68,11 @@ class CampaignTargetLotBatchIntegrationTest {
     @Autowired
     private CampaignTargetLotRepository campaignTargetLotRepository;
 
+    @Autowired
+    private StockMovementRepository stockMovementRepository;
+
     private static final Long SUPPLIER_ID = 999999L;
+    private static final Long ADMIN_ID = 999999L;
     private static final LocalDate TODAY = LocalDate.now();
 
     private Long fruitCategoryId() {
@@ -91,6 +98,16 @@ class CampaignTargetLotBatchIntegrationTest {
             stockLotRepository.decreaseAvailableQty(lot.getId(), soldQty);
         }
         return lot.getId();
+    }
+
+    /*
+     * 폐기 이력을 남긴다. saveLot 의 soldQty 가 예약(RESERVE)으로 재고를 줄이는 것과 달리,
+     * 폐기는 사유에 따라 재고를 줄이기도 하고(DAMAGED/EXPIRED) 안 줄이기도 해서(RETURNED)
+     * 호출부가 qtyBefore/qtyAfter 를 직접 준다 — chk_movement_qty 가 그 관계를 강제한다.
+     */
+    private void saveDisposal(Long lotId, int quantity, DisposalReason reason, int qtyBefore, int qtyAfter) {
+        stockMovementRepository.save(StockMovement.dispose(
+                "disposal-req-" + lotId, lotId, quantity, qtyBefore, qtyAfter, ADMIN_ID, reason, "테스트 폐기"));
     }
 
     @Test
@@ -171,6 +188,44 @@ class CampaignTargetLotBatchIntegrationTest {
 
         // then
         assertThat(campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(TODAY)).isEmpty();
+    }
+
+    /*
+     * RETURNED 는 available_qty 를 줄이지 않는 폐기다(AdminLotService.dispose, chk_movement_qty).
+     * 소진율 분모(입고 - 폐기)에서 빼면 분모가 잔여재고보다 작아져 소진율이 음수가 되고,
+     * TurnoverRateCalculator 의 입력 검증에 걸려 배치 전체가 예외로 죽는다.
+     */
+    @Test
+    void 회수품_폐기는_소진율_계산에서_빼지_않는다() {
+        // given — 입고 100, RETURNED 폐기 20, 판매 0. 잔여재고는 100 그대로다
+        Long lotId = saveLot("회수품", TODAY.plusDays(12), 100, 0);
+        saveDisposal(lotId, 20, DisposalReason.RETURNED, 100, 100);
+
+        // when — 예외 없이 끝나야 한다
+        campaignTargetLotBatch.run();
+
+        // then — 한 개도 안 팔렸으므로 소진율 0
+        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(TODAY);
+        assertThat(saved).hasSize(1);
+        assertThat(saved.get(0).getStockLotId()).isEqualTo(lotId);
+        assertThat(saved.get(0).getTurnoverRate()).isEqualByComparingTo(new BigDecimal("0.0000"));
+    }
+
+    @Test
+    void 회수품이_아닌_폐기는_팔린_것으로_세지_않는다() {
+        // given — 입고 100, DAMAGED 폐기 30(잔여 70 으로 줄어든다), 판매 0
+        //   교정 전: (100-70)/100 = 0.30  ← 30% 팔린 것처럼 보인다
+        //   교정 후: (70-70)/70   = 0.00  ← 실제로 0% 다
+        Long lotId = saveLot("손상품", TODAY.plusDays(12), 100, 30);
+        saveDisposal(lotId, 30, DisposalReason.DAMAGED, 100, 70);
+
+        // when
+        campaignTargetLotBatch.run();
+
+        // then
+        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(TODAY);
+        assertThat(saved).hasSize(1);
+        assertThat(saved.get(0).getTurnoverRate()).isEqualByComparingTo(new BigDecimal("0.0000"));
     }
 
     @Test
