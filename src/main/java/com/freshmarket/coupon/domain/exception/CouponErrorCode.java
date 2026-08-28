@@ -32,7 +32,14 @@ public enum CouponErrorCode implements ErrorCode {
      * 관리자가 소진 전이고 마감 전인 이벤트를 끄려 했다.
      * 약속한 이벤트를 관리자가 도중에 흔들지 못하게 막는다.
      */
-    EVENT_NOT_CLOSABLE(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-008", "소진되지 않았고 마감 시각도 지나지 않아 종료할 수 없습니다.");
+    EVENT_NOT_CLOSABLE(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-008", "소진되지 않았고 마감 시각도 지나지 않아 종료할 수 없습니다."),
+    // 없는 발급분이거나 남의 것이다. 둘을 가르지 않아야 남의 쿠폰의 존재를 알아낼 수 없다
+    MEMBER_COUPON_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON-009", "보유하지 않은 쿠폰입니다."),
+    /*
+     * 지금 상태에서 그 전이가 허용되지 않는다.
+     * 이미 그 상태인 경우는 여기 오지 않는다. 그것은 늦게 도착한 같은 요청이라 성공으로 답한다.
+     */
+    INVALID_STATUS_TRANSITION(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-010", "지금 상태에서는 할 수 없는 처리입니다.");
 
     private final HttpStatus httpStatus;
     private final String code;
