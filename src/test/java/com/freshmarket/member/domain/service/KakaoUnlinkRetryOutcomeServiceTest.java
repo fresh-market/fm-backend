@@ -1,6 +1,5 @@
 package com.freshmarket.member.domain.service;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -8,6 +7,7 @@ import static org.mockito.Mockito.when;
 
 import com.freshmarket.member.domain.entity.KakaoUnlinkFailure;
 import com.freshmarket.member.domain.repository.KakaoUnlinkFailureRepository;
+import com.freshmarket.member.domain.repository.MemberRepository;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,80 +17,35 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
 class KakaoUnlinkRetryOutcomeServiceTest {
-
-    @Mock
-    private KakaoUnlinkFailureRepository failureRepository;
-
+    @Mock private KakaoUnlinkFailureRepository failureRepository;
+    @Mock private MemberRepository memberRepository;
     private KakaoUnlinkRetryOutcomeService sut;
 
-    @BeforeEach
-    void setUp() {
-        sut = new KakaoUnlinkRetryOutcomeService(failureRepository);
-    }
+    @BeforeEach void setUp() { sut = new KakaoUnlinkRetryOutcomeService(failureRepository, memberRepository); }
 
     @Test
-    void 성공하면_기록을_지운다() {
+    void 성공하면_회원탈퇴를_확정하고_아웃박스를_지운다() {
+        KakaoUnlinkFailure failure = KakaoUnlinkFailure.record(1L, "kakao-1");
+        when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
+        when(memberRepository.markWithdrawnAfterUnlink(1L)).thenReturn(1);
         sut.markSucceeded(1L);
-
-        verify(failureRepository).deleteById(1L);
+        verify(failureRepository).delete(failure);
     }
 
     @Test
-    void 거절_처리하면_카운트를_바로_한도까지_올려_포기_상태로_만든다() {
+    void 상태를_확정하지_못하면_아웃박스를_유지한다() {
         KakaoUnlinkFailure failure = KakaoUnlinkFailure.record(1L, "kakao-1");
         when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
-
-        sut.markRejected(1L, new RuntimeException("kakao rejected"));
-
-        assertThat(failure.getAttemptCount()).isEqualTo(KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS);
-        assertThat(failure.shouldGiveUp()).isTrue();
-        verify(failureRepository, never()).delete(any());
-        verify(failureRepository, never()).deleteById(any());
-    }
-
-    @Test
-    void 거절_처리할_기록이_없으면_아무_일도_하지_않는다() {
-        when(failureRepository.findById(1L)).thenReturn(Optional.empty());
-
-        sut.markRejected(1L, new RuntimeException("kakao rejected"));
-
+        when(memberRepository.markWithdrawnAfterUnlink(1L)).thenReturn(0);
+        sut.markSucceeded(1L);
         verify(failureRepository, never()).delete(any());
     }
 
     @Test
-    void 재시도_한도_전이면_카운트만_늘리고_유지한다() {
+    void 재시도_실패시_아웃박스를_유지한다() {
         KakaoUnlinkFailure failure = KakaoUnlinkFailure.record(1L, "kakao-1");
         when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
-
-        sut.markFailed(1L, new RuntimeException("network error"));
-
-        verify(failureRepository, never()).delete(any());
-        verify(failureRepository, never()).deleteById(any());
-    }
-
-    @Test
-    void 재시도_한도를_넘으면_그래도_행은_유지한다() {
-        // 5회(MAX_RETRY_ATTEMPTS)까지 계속 실패시킨 상태를 재현
-        KakaoUnlinkFailure failure = KakaoUnlinkFailure.record(1L, "kakao-1");
-        for (int i = 0; i < 4; i++) {
-            failure.markRetryFailed();
-        }
-        when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
-
-        sut.markFailed(1L, new RuntimeException("network error"));
-
-        // give-up 상태에서도 행 자체를 지우지는 않는다 — 사람이 보고 수동 개입할 수 있게
-        // 남겨둔다(ERROR 로그로 승격되는 것으로 갈음).
-        verify(failureRepository, never()).delete(any());
-        verify(failureRepository, never()).deleteById(any());
-    }
-
-    @Test
-    void 존재하지_않는_기록이면_아무_일도_하지_않는다() {
-        when(failureRepository.findById(1L)).thenReturn(Optional.empty());
-
-        sut.markFailed(1L, new RuntimeException("network error"));
-
+        sut.markFailed(1L, new RuntimeException("network"));
         verify(failureRepository, never()).delete(any());
     }
 }

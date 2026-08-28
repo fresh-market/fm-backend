@@ -63,6 +63,17 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     // 같은 트랜잭션에서 그 엔티티를 다시 읽지 않아 드러나지 않았을 뿐이라 별개로 점검이 필요하다.
     @Modifying(clearAutomatically = true)
     @Query("update Member m set m.status = com.freshmarket.member.domain.entity.MemberStatus.WITHDRAWN, "
-            + "m.deletedAt = :deletedAt where m.id = :id and m.status <> com.freshmarket.member.domain.entity.MemberStatus.WITHDRAWN")
+            + "m.deletedAt = :deletedAt where m.id = :id and m.status not in "
+            + "(com.freshmarket.member.domain.entity.MemberStatus.WITHDRAWN, com.freshmarket.member.domain.entity.MemberStatus.WITHDRAWN_FAILED)")
     int markWithdrawn(@Param("id") Long id, @Param("deletedAt") LocalDateTime deletedAt);
+
+    @Modifying(clearAutomatically = true)
+    @Query("update Member m set m.status = com.freshmarket.member.domain.entity.MemberStatus.WITHDRAWN_FAILED "
+            + "where m.id = :id and m.status = com.freshmarket.member.domain.entity.MemberStatus.WITHDRAWN")
+    int markUnlinkFailed(@Param("id") Long id);
+
+    @Modifying(clearAutomatically = true)
+    @Query("update Member m set m.status = com.freshmarket.member.domain.entity.MemberStatus.WITHDRAWN "
+            + "where m.id = :id and m.status = com.freshmarket.member.domain.entity.MemberStatus.WITHDRAWN_FAILED")
+    int markWithdrawnAfterUnlink(@Param("id") Long id);
 }

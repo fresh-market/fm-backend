@@ -1,14 +1,12 @@
 package com.freshmarket.member.domain.client;
 
 import com.freshmarket.common.logging.PiiMasker;
-import com.freshmarket.member.domain.exception.KakaoUnlinkRejectedException;
 import com.freshmarket.member.domain.exception.MemberErrorCode;
 import com.freshmarket.member.domain.exception.MemberException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
@@ -57,18 +55,6 @@ public class KakaoUnlinkClient {
             // 마스킹이 애매한 경우, 다른 필터들의 REDACTED 관례와 동일하게) 통째로 가린다. 상태코드와
             // 바디 길이만 남겨도 "카카오가 몇 번대 에러로 몇 바이트짜리 응답을 줬는지"는 추적 가능하다.
             String rawBody = e.getResponseBodyAsString();
-            if (isNonRetryableRejection(e.getStatusCode())) {
-                // (2026-08-27, PR 리뷰 P1) 429를 뺀 4xx는 카카오가 "정상적으로 거절"한 응답이라
-                // 재시도해도 결과가 똑같다 — 이걸 KAKAO_UNLINK_FAILED와 똑같이 취급해서 리스너
-                // 1회 + 스케줄러 최대 5회짜리 자동 재시도를 태우면, 사람이 봐야 할 설정 실수
-                // (예: Admin Key 만료)를 6번이나 헛되이 두드린 뒤에야 포기 처리로 넘어간다.
-                // 별도 예외로 던져서 즉시 수동 처리 대상으로 보낸다.
-                log.error("event=KAKAO_UNLINK_REJECTED status={} bodyLength={} body={} kakaoUserId={} "
-                                + "— 재시도 없이 즉시 수동 처리 대상",
-                        e.getStatusCode(), rawBody == null ? 0 : rawBody.length(),
-                        PiiMasker.redact(rawBody), PiiMasker.maskProviderId(kakaoUserId), e);
-                throw new KakaoUnlinkRejectedException(e);
-            }
             log.error("event=KAKAO_UNLINK_FAILED status={} bodyLength={} body={} kakaoUserId={}",
                     e.getStatusCode(), rawBody == null ? 0 : rawBody.length(),
                     PiiMasker.redact(rawBody), PiiMasker.maskProviderId(kakaoUserId), e);
@@ -79,16 +65,4 @@ public class KakaoUnlinkClient {
         }
     }
 
-    /**
-     * 429(Admin Key 앱 전체 쿼터)와 5xx는 일시적일 수 있어 재시도 대상으로 남긴다. 그 외 4xx는
-     * 카카오가 요청 자체를 거절한 것이라 재시도해도 결과가 같다.
-     *
-     * KakaoCircuitBreakerConfig.isCircuitFailure()와 판단 기준이 겹쳐 보이지만 용도가 다르다 —
-     * 그쪽은 "이 실패가 서킷을 열지"를 정하고, 이건 "unlink 재시도 아웃박스가 이 실패를 자동
-     * 재시도할지"를 정한다. package-private으로 열어둔 건 WebClient를 목킹하지 않고도 이 판단
-     * 로직만 단위 테스트하기 위해서다.
-     */
-    static boolean isNonRetryableRejection(HttpStatusCode status) {
-        return status.is4xxClientError() && status.value() != 429;
-    }
 }

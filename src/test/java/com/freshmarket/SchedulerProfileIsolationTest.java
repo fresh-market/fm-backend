@@ -5,9 +5,7 @@ import static org.mockito.Mockito.mock;
  
 import com.freshmarket.config.SchedulingConfig;
 import com.freshmarket.member.domain.KakaoUnlinkRetryScheduler;
-import com.freshmarket.member.domain.KakaoUnlinkStuckReportScheduler;
 import com.freshmarket.member.domain.service.KakaoUnlinkRetryService;
-import com.freshmarket.member.domain.service.KakaoUnlinkStuckReportService;
 import com.freshmarket.product.domain.batch.OptionAvailabilitySyncRetryService;
 import com.freshmarket.product.domain.batch.OptionAvailabilitySyncScheduler;
 import com.freshmarket.stock.domain.AdminLotExpireScheduler;
@@ -28,9 +26,7 @@ class SchedulerProfileIsolationTest {
  
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(KakaoUnlinkRetryService.class, () -> mock(KakaoUnlinkRetryService.class))
-            .withBean(KakaoUnlinkStuckReportService.class, () -> mock(KakaoUnlinkStuckReportService.class))
-            .withUserConfiguration(SchedulingConfig.class, KakaoUnlinkRetryScheduler.class,
-                    KakaoUnlinkStuckReportScheduler.class);
+            .withUserConfiguration(SchedulingConfig.class, KakaoUnlinkRetryScheduler.class);
  
     private final ApplicationContextRunner lotExpireRunner = new ApplicationContextRunner()
             .withBean(AdminLotService.class, () -> mock(AdminLotService.class))
@@ -46,7 +42,6 @@ class SchedulerProfileIsolationTest {
             assertThat(context).doesNotHaveBean(SchedulingConfig.class);
             assertThat(context).doesNotHaveBean(ScheduledAnnotationBeanPostProcessor.class);
             assertThat(context).doesNotHaveBean(KakaoUnlinkRetryScheduler.class);
-            assertThat(context).doesNotHaveBean(KakaoUnlinkStuckReportScheduler.class);
         });
     }
 
@@ -56,7 +51,6 @@ class SchedulerProfileIsolationTest {
             assertThat(context).hasSingleBean(SchedulingConfig.class);
             assertThat(context).hasSingleBean(ScheduledAnnotationBeanPostProcessor.class);
             assertThat(context).hasSingleBean(KakaoUnlinkRetryScheduler.class);
-            assertThat(context).hasSingleBean(KakaoUnlinkStuckReportScheduler.class);
         });
     }
  
