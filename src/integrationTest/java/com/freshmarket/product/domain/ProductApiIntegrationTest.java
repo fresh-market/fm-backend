@@ -284,10 +284,10 @@ class ProductApiIntegrationTest extends IntegrationTestSupport {
         // given
         Long categoryId = fruitCategoryId();
         Long productId = saveProductWithOptions(categoryId, "감귤", 12900);
-        ProductImage confirmed = ProductImage.register(productId, "products/ab/confirmed.jpg");
+        ProductImage confirmed = ProductImage.register(productId, "req-image-1", "products/ab/confirmed.jpg");
         confirmed.confirm();
         productImageRepository.save(confirmed);
-        productImageRepository.save(ProductImage.register(productId, "products/ab/pending.jpg"));
+        productImageRepository.save(ProductImage.register(productId, "req-image-2", "products/ab/pending.jpg"));
 
         // when, then — PENDING 이미지는 안 나오고 CONFIRMED 하나만 나온다
         mockMvc.perform(get("/v1/products/" + productId))

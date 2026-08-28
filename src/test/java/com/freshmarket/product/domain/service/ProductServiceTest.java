@@ -230,7 +230,7 @@ class ProductServiceTest {
         Product product = 상품(1L, "감귤", 4L);
         Category category = 카테고리(4L, "과일");
         ProductOption option = 옵션(1L, "1kg", 12900);
-        ProductImage image = ProductImage.register(1L, "products/ab/1.jpg");
+        ProductImage image = ProductImage.register(1L, "req-image-1", "products/ab/1.jpg");
         image.confirm();
 
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));

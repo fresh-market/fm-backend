@@ -28,6 +28,21 @@ public class KakaoUnlinkRetryOutcomeService {
         failureRepository.deleteById(failureId);
     }
 
+    /**
+     * (2026-08-27, PR 리뷰 P1) 카카오 4xx(429 제외) 거절 전용 — markFailed()처럼 attemptCount를
+     * 한 칸씩 깎지 않고 markRejected()로 바로 포기 상태로 만든다. 재시도해도 같은 결과가
+     * 반복될 실패를 굳이 5번 두드리게 할 이유가 없다.
+     */
+    @Transactional
+    public void markRejected(Long failureId, Exception cause) {
+        failureRepository.findById(failureId).ifPresent(failure -> {
+            failure.markRejected();
+            log.error("event=KAKAO_UNLINK_OUTBOX_REJECTED memberId={} kakaoUserId={} — 카카오 4xx 거절, "
+                            + "재시도 없이 즉시 포기 처리",
+                    failure.getMemberId(), PiiMasker.maskProviderId(failure.getKakaoUserId()), cause);
+        });
+    }
+
     @Transactional
     public void markFailed(Long failureId, Exception cause) {
         failureRepository.findById(failureId).ifPresent(failure -> {

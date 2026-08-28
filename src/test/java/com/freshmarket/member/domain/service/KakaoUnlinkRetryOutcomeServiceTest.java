@@ -1,5 +1,6 @@
 package com.freshmarket.member.domain.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -32,6 +33,28 @@ class KakaoUnlinkRetryOutcomeServiceTest {
         sut.markSucceeded(1L);
 
         verify(failureRepository).deleteById(1L);
+    }
+
+    @Test
+    void 거절_처리하면_카운트를_바로_한도까지_올려_포기_상태로_만든다() {
+        KakaoUnlinkFailure failure = KakaoUnlinkFailure.record(1L, "kakao-1");
+        when(failureRepository.findById(1L)).thenReturn(Optional.of(failure));
+
+        sut.markRejected(1L, new RuntimeException("kakao rejected"));
+
+        assertThat(failure.getAttemptCount()).isEqualTo(KakaoUnlinkFailure.MAX_RETRY_ATTEMPTS);
+        assertThat(failure.shouldGiveUp()).isTrue();
+        verify(failureRepository, never()).delete(any());
+        verify(failureRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void 거절_처리할_기록이_없으면_아무_일도_하지_않는다() {
+        when(failureRepository.findById(1L)).thenReturn(Optional.empty());
+
+        sut.markRejected(1L, new RuntimeException("kakao rejected"));
+
+        verify(failureRepository, never()).delete(any());
     }
 
     @Test

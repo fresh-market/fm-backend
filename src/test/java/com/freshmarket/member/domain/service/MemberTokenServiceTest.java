@@ -155,6 +155,63 @@ class MemberTokenServiceTest {
         assertThatCode(() -> sut.issue(member, false, response)).doesNotThrowAnyException();
     }
 
+    @Test
+    void db_redis_둘_다_실패해도_발급_자체는_끝난다() {
+        // 방금 발급한 refreshToken이 DB/Redis 어디에도 안 남는 조합 — error는 아니지만
+        // (fail-closed라 위험한 상태로 남지 않는다) 발급 응답 자체는 예외 없이 끝나야 한다.
+        Member member = newMember(1L);
+        when(memberRepository.updateRefreshToken(any(), any(), any()))
+                .thenThrow(new DataAccessResourceFailureException("db down"));
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).save(any(), any(), any(), any(), anyBoolean(), any());
+
+        assertThatCode(() -> sut.issue(member, false, response)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void db_redis_둘_다_실패하면_refreshToken_쿠키_없이_accessToken만_내려간다() {
+        // (2026-08-26, FUN-2-02) 어디에도 안 남는 죽은 refreshToken을 클라이언트에 심어봐야
+        // 다음 reissue()에서 REFRESH_TOKEN_INVALID로만 드러난다 — 아예 쿠키를 생략하고
+        // accessToken만 내려준다(AT-only 폴백). 로그인 자체는 실패시키지 않는다.
+        Member member = newMember(1L);
+        when(memberRepository.updateRefreshToken(any(), any(), any()))
+                .thenThrow(new DataAccessResourceFailureException("db down"));
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).save(any(), any(), any(), any(), anyBoolean(), any());
+
+        MemberTokenService.IssueResult result = sut.issue(member, false, response);
+
+        assertThat(jwtTokenProvider.validateToken(result.accessToken())).isTrue();
+
+        ArgumentCaptor<String> cookieCaptor = ArgumentCaptor.forClass(String.class);
+        verify(response, times(1)).addHeader(eq(HttpHeaders.SET_COOKIE), cookieCaptor.capture());
+        List<String> cookies = cookieCaptor.getAllValues();
+
+        assertThat(cookies).hasSize(1);
+        assertThat(cookies.get(0)).startsWith("accessToken=");
+        assertThat(cookies).noneMatch(c -> c.startsWith("refreshToken="));
+    }
+
+    @Test
+    void db나_redis_중_하나만_성공하면_refreshToken_쿠키도_그대로_내려간다() {
+        // AT-only 폴백은 "둘 다" 실패했을 때만 탄다 — 한쪽만 실패해도 refreshToken은 최소
+        // 한 곳엔 살아있으니(재발급 가능) 쿠키를 그대로 내려줘야 한다.
+        // updateRefreshToken()은 stub 안 하면 Mockito가 int 기본값 0을 돌려주는데,
+        // trySaveDbBackup()은 0을 "갱신된 행 없음(=실패)"으로 해석한다 — DB 쪽을 진짜
+        // 성공시키려면 1을 명시적으로 stub해야 한다(안 그러면 둘 다 실패로 처리돼 이 테스트가
+        // 검증하려는 "한쪽만 실패" 상황 자체가 만들어지지 않는다).
+        Member member = newMember(1L);
+        when(memberRepository.updateRefreshToken(any(), any(), any())).thenReturn(1);
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).save(any(), any(), any(), any(), anyBoolean(), any());
+
+        sut.issue(member, false, response);
+
+        ArgumentCaptor<String> cookieCaptor = ArgumentCaptor.forClass(String.class);
+        verify(response, times(2)).addHeader(eq(HttpHeaders.SET_COOKIE), cookieCaptor.capture());
+        assertThat(cookieCaptor.getAllValues()).anyMatch(c -> c.startsWith("refreshToken="));
+    }
+
     // ---- reissue() ----
     // (2026-08-19) opaque 전환 이후 reissue(String)만 받는다 — 컨트롤러가 미리 클레임을 안 읽고
     // 그대로 넘기므로, 여기서 refreshTokenRepository.compareAndRotate()의 결과(RotateOutcome)로만
@@ -188,8 +245,7 @@ class MemberTokenServiceTest {
 
         // revoke(1L, "ROLE_USER", false)가 실제로 호출돼 현재 세션(activeKey가 가리키는 해시)을 지웠는지
         verify(memberRepository).clearRefreshToken(1L);
-        verify(refreshTokenRepository).deleteByHash("current-hash");
-        verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
         verify(accessTokenValidAfterRepository).invalidateBefore(eq("ROLE_USER"), eq(1L), any(), any());
     }
 
@@ -219,7 +275,7 @@ class MemberTokenServiceTest {
                 .extracting(e -> ((AuthException) e).getErrorCode())
                 .isEqualTo(AuthErrorCode.REFRESH_TOKEN_INVALID);
         verify(memberRepository).clearRefreshToken(1L);
-        verify(refreshTokenRepository).deleteByHash("current-hash");
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
     }
 
     @Test
@@ -294,8 +350,7 @@ class MemberTokenServiceTest {
         sut.revoke(1L, "ROLE_USER", false);
 
         verify(memberRepository).clearRefreshToken(1L);
-        verify(refreshTokenRepository).deleteByHash("current-hash");
-        verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
         verify(accessTokenValidAfterRepository).invalidateBefore(eq("ROLE_USER"), eq(1L), any(), any());
     }
 
@@ -314,8 +369,8 @@ class MemberTokenServiceTest {
 
         sut.revoke(1L, "ROLE_USER", false);
 
-        verify(refreshTokenRepository).deleteByHash("db-backed-up-hash");
-        verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
+        verify(refreshTokenRepository)
+                .revokeIfActiveHashMatches("db-backed-up-hash", "ROLE_USER", 1L);
     }
 
     @Test
@@ -325,8 +380,7 @@ class MemberTokenServiceTest {
 
         sut.revoke(1L, "ROLE_USER", false);
 
-        verify(refreshTokenRepository).deleteByHash("current-hash");
-        verify(accessTokenValidAfterRepository).invalidateBefore(eq("ROLE_USER"), eq(1L), any(), any());
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
     }
 
     @Test
@@ -338,6 +392,7 @@ class MemberTokenServiceTest {
 
         verify(memberRepository).clearRefreshToken(1L);
         verify(accessTokenValidAfterRepository).invalidateBefore(eq("ROLE_USER"), eq(1L), any(), any());
+        verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
     }
 
     @Test
@@ -351,7 +406,7 @@ class MemberTokenServiceTest {
 
         assertThatCode(() -> sut.revoke(1L, "ROLE_USER", false)).doesNotThrowAnyException();
         verify(memberRepository).clearRefreshToken(1L);
-        verify(refreshTokenRepository).deleteByHash("current-hash");
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
     }
 
     @Test

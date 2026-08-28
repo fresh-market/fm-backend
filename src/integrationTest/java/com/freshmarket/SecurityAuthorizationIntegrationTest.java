@@ -142,6 +142,22 @@ class SecurityAuthorizationIntegrationTest extends IntegrationTestSupport {
                 .andExpect(status().isForbidden());
     }
 
+    /*
+     * ProductSecurityConfig의 securityMatcher가 이미지 경로(createUploadUrl, confirm, delete)를
+     * 빠뜨리면 SecurityConfig의 fallback 체인(anyRequest().authenticated())으로 떨어져 로그인한
+     * 일반 회원도 호출할 수 있게 된다(INF-11-11). 그 회귀를 이 테스트가 잡는다.
+     */
+    @Test
+    void 로그인한_일반_회원은_상품_이미지_업로드_URL_발급을_할_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(post("/v1/admin/products/1/images:createUploadUrl")
+                        .header("Authorization", "Bearer " + memberToken)
+                        .contentType("application/json")
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+    }
+
     @Test
     void 로그인은_비로그인도_연다() throws Exception {
         // 본문이 없어 400 이 나지만, 401 이 아니라는 것이 확인 대상이다

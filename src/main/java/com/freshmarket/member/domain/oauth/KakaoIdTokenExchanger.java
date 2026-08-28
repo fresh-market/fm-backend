@@ -1,20 +1,17 @@
 package com.freshmarket.member.domain.oauth;
 
+import com.freshmarket.member.domain.client.KakaoTokenClient;
 import com.freshmarket.member.domain.exception.AuthErrorCode;
 import com.freshmarket.member.domain.exception.AuthException;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.stereotype.Service;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
-import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientException;
 
 // (2026-08-18 12:20) docs/api/auth.md의 "POST /v1/auth/tokens" 처리 중 "state 검증 →
 // code/token 교환 → id_token 검증" 구간. 예전엔 Spring Security의 oauth2Login() 필터가
@@ -33,7 +30,7 @@ public class KakaoIdTokenExchanger {
 
     private final ClientRegistrationRepository clientRegistrationRepository;
     private final KakaoLoginStateRepository kakaoLoginStateRepository;
-    private final WebClient kakaoApiWebClient;
+    private final KakaoTokenClient kakaoTokenClient;
     private final JwtDecoder kakaoJwtDecoder;
 
     public Jwt exchange(String authorizationCode, String state) {
@@ -43,7 +40,8 @@ public class KakaoIdTokenExchanger {
             throw new AuthException(AuthErrorCode.STATE_MISMATCH);
         }
 
-        KakaoTokenResponse tokenResponse = requestToken(authorizationCode);
+        ClientRegistration kakao = clientRegistrationRepository.findByRegistrationId(REGISTRATION_ID);
+        KakaoTokenResponse tokenResponse = requestToken(kakao, authorizationCode);
 
         Jwt idToken;
         try {
@@ -62,37 +60,19 @@ public class KakaoIdTokenExchanger {
         return idToken;
     }
 
-    private KakaoTokenResponse requestToken(String authorizationCode) {
-        ClientRegistration kakao = clientRegistrationRepository.findByRegistrationId(REGISTRATION_ID);
-
-        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-        form.add("grant_type", "authorization_code");
-        form.add("client_id", kakao.getClientId());
-        form.add("client_secret", kakao.getClientSecret());
-        form.add("redirect_uri", kakao.getRedirectUri());
-        form.add("code", authorizationCode);
-
+    /*
+     * kakaoTokenClient.exchangeToken()은 @CircuitBreaker(name="kakaoLogin")가 걸린 빈
+     * 경계 너머 호출이라, 서킷이 열려있으면 그 메서드 본문(WebClientException catch)을 타지도
+     * 못하고 CallNotPermittedException이 여기 호출부로 바로 튀어나온다 — 그 안의
+     * catch(WebClientException)로는 못 잡으므로 여기서 별도로 잡아 같은 AuthException으로
+     * 통일해준다(호출하는 입장에선 "카카오를 못 쓴다"는 사실 자체는 같으니까).
+     */
+    private KakaoTokenResponse requestToken(ClientRegistration kakao, String authorizationCode) {
         try {
-            return kakaoApiWebClient.post()
-                    .uri(kakao.getProviderDetails().getTokenUri())
-                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                    .bodyValue(form)
-                    .retrieve()
-                    .bodyToMono(KakaoTokenResponseBody.class)
-                    .map(KakaoTokenResponseBody::toRecord)
-                    .block();
-        } catch (WebClientException e) {
-            log.warn("event=KAKAO_LOGIN_FAILED reason=TOKEN_ENDPOINT_UNREACHABLE", e);
+            return kakaoTokenClient.exchangeToken(kakao, authorizationCode);
+        } catch (CallNotPermittedException e) {
+            log.warn("event=KAKAO_LOGIN_FAILED reason=CIRCUIT_OPEN");
             throw new AuthException(AuthErrorCode.KAKAO_UNAVAILABLE, e);
-        }
-    }
-
-    // 카카오 토큰 응답의 snake_case 필드명을 그대로 받기 위한 매핑 전용 타입. KakaoTokenResponse
-    // 레코드를 Jackson이 바로 못 읽어서(camelCase 프로퍼티명이 안 맞음) 이 클래스를 거쳐 변환한다.
-    private record KakaoTokenResponseBody(
-            String token_type, String access_token, String id_token, Long expires_in) {
-        KakaoTokenResponse toRecord() {
-            return new KakaoTokenResponse(token_type, access_token, id_token, expires_in);
         }
     }
 }
