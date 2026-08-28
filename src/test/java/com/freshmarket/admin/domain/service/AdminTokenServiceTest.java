@@ -126,6 +126,22 @@ class AdminTokenServiceTest {
     }
 
     @Test
+    void redis_최초_조회_장애면_db_fallback으로_재발급한다() {
+        when(refreshTokenRepository.find(OLD_REFRESH_TOKEN))
+                .thenThrow(new DataAccessResourceFailureException("redis lookup down"));
+        when(adminTokenRepository.findAdminIdByRefreshTokenHash(anyString())).thenReturn(Optional.of(1L));
+        when(adminTokenRepository.rotateByHash(anyString(), anyString(), any(), any()))
+                .thenReturn(new AdminTokenRepository.RotationState(1L, AdminRole.ADMIN));
+
+        AdminTokenService.ReissueResult result = sut.reissue(OLD_REFRESH_TOKEN);
+
+        assertThat(result.accessToken()).isNotBlank();
+        assertThat(result.refreshToken()).isNotBlank();
+        verify(refreshTokenRepository, never()).compareAndRotate(eq(OLD_REFRESH_TOKEN), anyString(), any());
+        verify(adminTokenRepository).rotateByHash(anyString(), anyString(), any(), any());
+    }
+
+    @Test
     void redis_장애면_db_fallback으로_재발급한다() {
         when(refreshTokenRepository.find(OLD_REFRESH_TOKEN)).thenReturn(Optional.of(adminRefreshTokenData()));
         when(refreshTokenRepository.compareAndRotate(eq(OLD_REFRESH_TOKEN), anyString(), any()))
@@ -261,6 +277,25 @@ class AdminTokenServiceTest {
                 .isEqualTo(AdminTokenErrorCode.REFRESH_TOKEN_RESULT_UNKNOWN);
 
         verify(adminTokenRepository, never()).rotateByHash(anyString(), anyString(), any(), any());
+        verify(adminAuditLogRepository).save(any(AdminAuditLog.class));
+    }
+
+    @Test
+    void redis_rotation_timeout후_확인된_신규_token이_member면_결과_미확정으로_실패한다() {
+        RefreshTokenData adminData = new RefreshTokenData(1L, "ROLE_ADMIN", TokenType.ADMIN, false);
+        RefreshTokenData memberData = new RefreshTokenData(1L, "ROLE_USER", TokenType.MEMBER, false);
+        when(refreshTokenRepository.find(OLD_REFRESH_TOKEN)).thenReturn(Optional.of(adminData));
+        when(refreshTokenRepository.compareAndRotate(eq(OLD_REFRESH_TOKEN), anyString(), any()))
+                .thenThrow(new QueryTimeoutException("redis timeout"));
+        when(refreshTokenRepository.find(argThat(token -> !OLD_REFRESH_TOKEN.equals(token))))
+                .thenReturn(Optional.of(memberData));
+
+        assertThatThrownBy(() -> sut.reissue(OLD_REFRESH_TOKEN))
+                .isInstanceOf(AdminException.class)
+                .extracting(e -> ((AdminException) e).getErrorCode())
+                .isEqualTo(AdminTokenErrorCode.REFRESH_TOKEN_RESULT_UNKNOWN);
+
+        verify(adminTokenRepository, never()).rotateKnownAdmin(any(), anyString(), anyString(), any(), any());
         verify(adminAuditLogRepository).save(any(AdminAuditLog.class));
     }
 
