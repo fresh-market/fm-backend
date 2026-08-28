@@ -98,7 +98,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
             flush(leftovers);
         } catch (RuntimeException e) {
             log.error("event=COUPON_FLUSHER_LEFTOVER_FAILED size={}", leftovers.size(), e);
-            failAll(leftovers);
+            failAll(leftovers, IssueResult.ABORTED);
         }
     }
 
@@ -120,12 +120,12 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 flush(batch);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                failAll(batch);
+                failAll(batch, IssueResult.ABORTED);
                 return;
             } catch (RuntimeException e) {
                 // 한 배치가 터져도 플러시 스레드는 살아 있어야 한다. 남은 요청까지 같이 굶길 수 없다
                 log.error("event=COUPON_FLUSH_BATCH_FAILED size={}", batch.size(), e);
-                failAll(batch);
+                failAll(batch, IssueResult.ABORTED);
             } finally {
                 batch.clear();
             }
@@ -173,7 +173,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
              * 이 배치는 그대로 혼잡으로 답한다. 한 건씩 다시 넣어 봐야 같은 회로에 막힌다.
              */
             log.warn("event=COUPON_FLUSH_CIRCUIT_OPEN size={}", batch.size());
-            failAll(batch);
+            failAll(batch, IssueResult.WRITE_CIRCUIT);
             return;
         }
         completeIssued(batch);
@@ -202,7 +202,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 ticket.complete(outcomeFor(e));
             } catch (Exception e) {
                 // 회로가 열렸다. DB 까지 안 갔으므로 번호는 그 사용자 것으로 남는다
-                ticket.complete(new IssueOutcome.Congested());
+                ticket.complete(new IssueOutcome.Congested(IssueResult.WRITE_CIRCUIT));
             }
         }
         completeIssued(issued);
@@ -250,7 +250,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
         log.warn("event=COUPON_ISSUE_SEQ_TAKEN couponId={} memberId={} seq={}",
                 ticket.couponId(), ticket.memberId(), ticket.issueSeq());
         committer.dropMapping(ticket.couponId(), ticket.memberId());
-        ticket.complete(new IssueOutcome.Congested());
+        ticket.complete(new IssueOutcome.Congested(IssueResult.SEQ_TAKEN));
     }
 
     /*
@@ -285,14 +285,14 @@ public class CouponIssueFlusher implements SmartLifecycle {
      */
     private static IssueOutcome outcomeFor(DataAccessException e) {
         if (DataAccessFailures.isTransient(e)) {
-            return new IssueOutcome.Congested();
+            return new IssueOutcome.Congested(IssueResult.DB_FAILED);
         }
         return new IssueOutcome.Failed();
     }
 
-    private void failAll(List<IssueTicket> batch) {
+    private void failAll(List<IssueTicket> batch, IssueResult reason) {
         for (IssueTicket ticket : batch) {
-            ticket.complete(new IssueOutcome.Congested());
+            ticket.complete(new IssueOutcome.Congested(reason));
         }
     }
 

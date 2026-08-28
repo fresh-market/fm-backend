@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.freshmarket.IntegrationTestSupport;
 import com.freshmarket.coupon.domain.cache.CouponCache;
+import com.freshmarket.coupon.domain.issue.IssueResult;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,6 +28,28 @@ class CouponIssueMetricsIntegrationTest extends IntegrationTestSupport {
 
     @Autowired
     private CouponCache couponCache;
+
+    /*
+     * 갈래마다 계량기가 기동 때 다 서 있어야 한다.
+     * 처음 그 갈래가 나올 때 만들면 "혼잡이 0 건" 과 "혼잡을 안 센다" 가 대시보드에서 같아 보인다.
+     */
+    @Test
+    void 모든_결과_갈래가_기동_때_등록된다() {
+        for (IssueResult result : IssueResult.values()) {
+            assertThat(registry.find("coupon.issue.results").tag("result", result.tag()).counter())
+                    .as("%s 계량기가 없다", result.tag())
+                    .isNotNull();
+        }
+    }
+
+    // 8장이 나눠 세라고 한 넷이 서로 다른 값으로 잡히는지 본다
+    @Test
+    void 충돌과_소진과_DB_실패가_다른_값으로_잡힌다() {
+        assertThat(IssueResult.SEQ_TAKEN.tag())
+                .isNotEqualTo(IssueResult.DB_FAILED.tag())
+                .isNotEqualTo(IssueResult.SOLD_OUT.tag())
+                .isNotEqualTo(IssueResult.QUEUE_FULL.tag());
+    }
 
     // 8장이 "큐 최대 길이" 로 요구한 값이다. 앱은 현재 길이를 내고 최댓값은 대시보드가 뽑는다
     @Test

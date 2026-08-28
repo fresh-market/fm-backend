@@ -25,9 +25,11 @@ import com.freshmarket.coupon.domain.entity.CouponScope;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
+import com.freshmarket.coupon.domain.CouponIssueMetrics;
 import com.freshmarket.coupon.domain.issue.CouponIssueQueue;
 import com.freshmarket.coupon.domain.issue.CouponWriteCircuit;
 import com.freshmarket.coupon.domain.issue.IssueOutcome;
+import com.freshmarket.coupon.domain.issue.IssueResult;
 import com.freshmarket.coupon.domain.issue.IssueTicket;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
 import com.freshmarket.coupon.domain.redis.CouponSeqUnavailableException;
@@ -68,6 +70,9 @@ class CouponIssueServiceTest {
     @Mock
     private CouponWriteCircuit writeCircuit;
 
+    @Mock
+    private CouponIssueMetrics metrics;
+
     private CouponIssueService sut;
 
     @BeforeEach
@@ -76,7 +81,7 @@ class CouponIssueServiceTest {
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
                 Duration.ofMillis(100), Duration.ofSeconds(5));
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
-        sut = new CouponIssueService(couponCache, memberApi, allocator, queue, writeCircuit, properties, fixed);
+        sut = new CouponIssueService(couponCache, memberApi, allocator, queue, writeCircuit, properties, metrics, fixed);
     }
 
     @Test
@@ -335,11 +340,65 @@ class CouponIssueServiceTest {
         assertThat(response).isEqualTo(new CouponIssueResponse(2, true));
     }
 
+    /*
+     * 플러시가 들고 온 사유를 그대로 센다.
+     * 여기서 뭉치면 8장이 나눠 세라고 한 충돌과 DB 실패가 지표에서 한 덩어리가 된다.
+     */
+    @Test
+    void 플러시가_들고_온_사유를_그대로_센다() {
+        // given
+        givenAllocated(new SeqOutcome.Allocated(6));
+        givenFlushResult(new IssueOutcome.Congested(IssueResult.SEQ_TAKEN));
+
+        // when, then
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
+        verify(metrics).record(IssueResult.SEQ_TAKEN);
+    }
+
+    @Test
+    void 발급되면_발급으로_센다() {
+        // given
+        givenAllocated(new SeqOutcome.Allocated(6));
+        givenFlushResult(new IssueOutcome.Issued(6));
+
+        // when
+        sut.issue(COUPON_ID, MEMBER_ID);
+
+        // then
+        verify(metrics).record(IssueResult.ISSUED);
+    }
+
+    // 재요청 비율이 이 값으로 나온다
+    @Test
+    void 이미_발급이면_재요청으로_센다() {
+        // given
+        givenAllocated(new SeqOutcome.AlreadyIssued(6));
+
+        // when
+        sut.issue(COUPON_ID, MEMBER_ID);
+
+        // then
+        verify(metrics).record(IssueResult.ALREADY_ISSUED);
+    }
+
+    @Test
+    void 소진과_큐_포화를_다른_값으로_센다() {
+        // given
+        givenAllocated(new SeqOutcome.SoldOut());
+
+        // when, then
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.SOLD_OUT);
+        verify(metrics).record(IssueResult.SOLD_OUT);
+        verify(metrics, never()).record(IssueResult.QUEUE_FULL);
+    }
+
     @Test
     void 플러시가_못_썼다고_하면_혼잡으로_답한다() {
         // given
         givenAllocated(new SeqOutcome.Allocated(6));
-        givenFlushResult(new IssueOutcome.Congested());
+        givenFlushResult(new IssueOutcome.Congested(IssueResult.DB_FAILED));
 
         // when, then
         assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))

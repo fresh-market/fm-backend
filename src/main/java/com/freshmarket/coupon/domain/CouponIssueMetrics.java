@@ -2,9 +2,14 @@ package com.freshmarket.coupon.domain;
 
 import com.freshmarket.coupon.domain.cache.CouponCache;
 import com.freshmarket.coupon.domain.issue.CouponIssueQueue;
+import com.freshmarket.coupon.domain.issue.IssueResult;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.binder.cache.CaffeineCacheMetrics;
+import java.util.EnumMap;
+import java.util.Map;
+
 import org.springframework.stereotype.Component;
 
 /*
@@ -16,9 +21,35 @@ import org.springframework.stereotype.Component;
 @Component
 public class CouponIssueMetrics {
 
+    private static final String RESULTS = "coupon.issue.results";
+
+    private final Map<IssueResult, Counter> results;
+
     public CouponIssueMetrics(MeterRegistry registry, CouponIssueQueue queue, CouponCache couponCache) {
         registerQueueSize(registry, queue);
         registerCacheStats(registry, couponCache);
+        this.results = registerResults(registry);
+    }
+
+    /** 발급 한 건이 어떻게 끝났는지 센다. 서비스가 모든 갈래에서 부른다. */
+    public void record(IssueResult result) {
+        results.get(result).increment();
+    }
+
+    /*
+     * 계량기를 기동 때 다 만들어 둔다.
+     * 처음 그 갈래가 나올 때 만들면, 한 번도 안 난 갈래가 대시보드에서 아예 안 보인다.
+     * "혼잡이 0 건" 과 "혼잡을 안 센다" 가 같은 모양이 되어 읽는 쪽이 구분하지 못한다.
+     */
+    private static Map<IssueResult, Counter> registerResults(MeterRegistry registry) {
+        Map<IssueResult, Counter> counters = new EnumMap<>(IssueResult.class);
+        for (IssueResult result : IssueResult.values()) {
+            counters.put(result, Counter.builder(RESULTS)
+                    .tag("result", result.tag())
+                    .description("발급 결과. 8장이 요구한 대로 충돌과 소진과 혼잡과 DB 실패를 나눠 센다")
+                    .register(registry));
+        }
+        return counters;
     }
 
     /*

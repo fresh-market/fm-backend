@@ -21,8 +21,13 @@ public sealed interface IssueOutcome {
     record AlreadyIssued(int seq) implements IssueOutcome {
     }
 
-    /** 이번에는 못 썼고 다시 시도할 값이 있다. 순번 충돌과 일시적인 DB 실패가 여기로 온다. */
-    record Congested() implements IssueOutcome {
+    /**
+     * 이번에는 못 썼고 다시 시도할 값이 있다. 순번 충돌과 일시적인 DB 실패가 여기로 온다.
+     *
+     * <p>사유를 들고 다니는 이유가 있다. 서비스가 이것을 503 으로 옮기고 나면 <b>순번 충돌인지
+     * DB 실패인지가 사라진다.</b> 8장은 그 둘을 나눠 세라고 요구한다.
+     */
+    record Congested(IssueResult reason) implements IssueOutcome {
     }
 
     /**

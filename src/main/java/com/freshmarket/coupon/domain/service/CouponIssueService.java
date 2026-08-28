@@ -13,10 +13,12 @@ import com.freshmarket.coupon.domain.dto.CouponIssueResponse;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.exception.DataAccessFailures;
+import com.freshmarket.coupon.domain.CouponIssueMetrics;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import com.freshmarket.coupon.domain.issue.CouponIssueQueue;
 import com.freshmarket.coupon.domain.issue.CouponWriteCircuit;
 import com.freshmarket.coupon.domain.issue.IssueOutcome;
+import com.freshmarket.coupon.domain.issue.IssueResult;
 import com.freshmarket.coupon.domain.issue.IssueTicket;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
 import com.freshmarket.coupon.domain.redis.CouponSeqUnavailableException;
@@ -47,6 +49,7 @@ public class CouponIssueService {
     private final CouponIssueQueue queue;
     private final CouponWriteCircuit writeCircuit;
     private final CouponIssueProperties properties;
+    private final CouponIssueMetrics metrics;
     private final Clock clock;
 
     /**
@@ -65,7 +68,7 @@ public class CouponIssueService {
          * 번호를 태우고 요청 예산을 다 기다린 뒤에야 실패한다.
          */
         if (!writeCircuit.acceptsWrites()) {
-            throw new CouponException(CouponErrorCode.CONGESTED);
+            throw congested(IssueResult.WRITE_CIRCUIT);
         }
 
         /*
@@ -74,15 +77,18 @@ public class CouponIssueService {
          * 아예 안 생긴다.
          */
         if (!queue.hasRoom()) {
-            throw new CouponException(CouponErrorCode.CONGESTED);
+            throw congested(IssueResult.QUEUE_FULL);
         }
 
         return switch (allocateSeq(couponId, memberId, coupon.totalQuantity())) {
             case SeqOutcome.Allocated allocated -> record(coupon, memberId, allocated.seq());
-            case SeqOutcome.AlreadyIssued issued -> CouponIssueResponse.alreadyIssued(issued.seq());
-            case SeqOutcome.SoldOut ignored -> throw new CouponException(CouponErrorCode.SOLD_OUT);
+            case SeqOutcome.AlreadyIssued issued -> alreadyIssued(issued.seq());
+            case SeqOutcome.SoldOut ignored -> {
+                metrics.record(IssueResult.SOLD_OUT);
+                throw new CouponException(CouponErrorCode.SOLD_OUT);
+            }
             // 준비 전이거나 재건 중이다. 재고는 있을 수 있으므로 최종이 아니다
-            case SeqOutcome.NotPrepared ignored -> throw new CouponException(CouponErrorCode.CONGESTED);
+            case SeqOutcome.NotPrepared ignored -> throw congested(IssueResult.NOT_PREPARED);
         };
     }
 
@@ -107,15 +113,17 @@ public class CouponIssueService {
         try {
             return allocator.allocate(couponId, memberId, issueLimit);
         } catch (CouponSeqUnavailableException e) {
-            throw new CouponException(CouponErrorCode.CONGESTED, e);
+            throw congested(IssueResult.SEQ_UNAVAILABLE, e);
         }
     }
 
     private void verifyIssuable(CachedCoupon coupon, long memberId) {
         if (!coupon.isLimited()) {
+            metrics.record(IssueResult.NOT_ISSUABLE);
             throw new CouponException(CouponErrorCode.NOT_LIMITED);
         }
         if (!coupon.active() || !coupon.isIssuableAt(LocalDateTime.now(clock))) {
+            metrics.record(IssueResult.NOT_ISSUABLE);
             throw new CouponException(CouponErrorCode.NOT_ISSUABLE);
         }
         verifyTargetGrade(coupon, memberId);
@@ -141,6 +149,7 @@ public class CouponIssueService {
             throw congestedIfTransient(e);
         }
         if (!coupon.isTargetGrade(member.memberGradeId())) {
+            metrics.record(IssueResult.NOT_ISSUABLE);
             throw new CouponException(CouponErrorCode.NOT_TARGET_GRADE);
         }
     }
@@ -151,9 +160,29 @@ public class CouponIssueService {
      */
     private RuntimeException congestedIfTransient(DataAccessException e) {
         if (DataAccessFailures.isTransient(e)) {
-            return new CouponException(CouponErrorCode.CONGESTED, e);
+            return congested(IssueResult.READ_FAILED, e);
         }
         return e;
+    }
+
+    /*
+     * 세고 나서 던진다.
+     * 호출부가 throw congested(...) 로 읽히도록 만들기만 하고 던지지는 않는다. 그래야 흐름이
+     * 거기서 끝나는 것이 눈에 보인다.
+     */
+    private CouponException congested(IssueResult reason) {
+        metrics.record(reason);
+        return new CouponException(CouponErrorCode.CONGESTED);
+    }
+
+    private CouponException congested(IssueResult reason, Throwable cause) {
+        metrics.record(reason);
+        return new CouponException(CouponErrorCode.CONGESTED, cause);
+    }
+
+    private CouponIssueResponse alreadyIssued(int seq) {
+        metrics.record(IssueResult.ALREADY_ISSUED);
+        return CouponIssueResponse.alreadyIssued(seq);
     }
 
     private CouponIssueResponse record(CachedCoupon coupon, long memberId, int issueSeq) {
@@ -168,9 +197,13 @@ public class CouponIssueService {
             IssueOutcome outcome = ticket.future()
                     .get(properties.requestBudget().toMillis(), TimeUnit.MILLISECONDS);
             return switch (outcome) {
-                case IssueOutcome.Issued issued -> CouponIssueResponse.issued(issued.seq());
-                case IssueOutcome.AlreadyIssued already -> CouponIssueResponse.alreadyIssued(already.seq());
-                case IssueOutcome.Congested ignored -> throw new CouponException(CouponErrorCode.CONGESTED);
+                case IssueOutcome.Issued issued -> {
+                    metrics.record(IssueResult.ISSUED);
+                    yield CouponIssueResponse.issued(issued.seq());
+                }
+                case IssueOutcome.AlreadyIssued already -> alreadyIssued(already.seq());
+                // 플러시가 들고 온 사유를 그대로 센다. 여기서 뭉치면 충돌과 DB 실패가 한 덩어리가 된다
+                case IssueOutcome.Congested congested -> throw congested(congested.reason());
                 /*
                  * 다시 시도해도 같을 실패다.
                  * 혼잡으로 답하면 그 버그가 재시도에 묻히므로 서버 오류로 드러나게 둔다.
@@ -182,12 +215,12 @@ public class CouponIssueService {
              * 예산 안에 못 끝냈다. 이 스레드는 떠나지만 그 항목은 큐에 남아 결국 써진다.
              * 사용자가 다시 오면 매핑이 같은 번호를 돌려주므로 번호가 새로 타지 않는다.
              */
-            throw new CouponException(CouponErrorCode.CONGESTED, e);
+            throw congested(IssueResult.BUDGET_EXCEEDED, e);
         } catch (ExecutionException e) {
-            throw new CouponException(CouponErrorCode.CONGESTED, e);
+            throw congested(IssueResult.ABORTED, e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new CouponException(CouponErrorCode.CONGESTED, e);
+            throw congested(IssueResult.ABORTED, e);
         }
     }
 }
