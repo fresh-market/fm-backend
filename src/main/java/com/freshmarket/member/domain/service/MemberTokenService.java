@@ -53,9 +53,14 @@ import org.springframework.transaction.annotation.Transactional;
  * "영속되는 시각" 계산에만 쓰고, JwtTokenProvider 자체는 Clock을 안 받는다). 두 브랜치를 합칠 때
  * 충돌을 줄이려고 이 범위에 맞췄다 — JwtTokenProvider.java의 관련 주석 참고.
  *
- * (2026-08-26) Redis/DB 장애 로그의 cause=TIMEOUT|OTHER 분류는 RedisFailureClassifier로 뺐다 —
- * JwtAuthenticationFilter/AuthRateLimitFilter도 같은 Redis 장애를 catch(DataAccessException)해서
- * fail-open 로그를 남기는데, 여기에만 두면 그쪽엔 못 쓴다.
+ * (2026-08-27 변경) revoke()가 DB 백업/Redis 정리 중 하나라도 실패하면, 무효화됐어야 할
+ * refreshToken이 그대로 남아 재발급에 쓰일 수 있다(Redis 정리 실패면 Redis가 멀쩡한 동안에도,
+ * DB 백업 정리 실패면 나중에 Redis 완전장애 시 reissueViaDbFallback()이 여전히 믿어버린다).
+ * 예전엔 그 실패를 RefreshTokenRevokeRetryService(아웃박스)로 넘겨 스케줄러가 재시도하게
+ * 했지만, 배치가 돌 때까지(최대 10분) 무효화됐어야 할 토큰이 조용히 살아있는 창을 감수하는
+ * 대신 — 그 자리에서 AuthException(LOGOUT_FAILED)을 던져 로그아웃 응답 자체를 실패시키고
+ * 클라이언트가 재시도하게 한다. revoke()가 @Transactional이라, 이 예외는 그 안에서 이미
+ * 반영된 DB 쓰기(예: clearRefreshToken 성공 후 Redis 삭제만 실패한 경우)까지 함께 롤백한다.
  */
 @Slf4j
 @Service
@@ -76,7 +81,9 @@ public class MemberTokenService {
     public record ReissueResult(String accessToken, long expiresInSeconds, String refreshToken, boolean remember) {
     }
 
-    /** 카카오 로그인 성공 시 토큰 발급. accessToken/refreshToken 둘 다 쿠키로 나가고, accessToken은
+    /** 카카오 로그인 성공 시 토큰 발급. accessToken은 항상 쿠키로 나간다. refreshToken은 DB 백업과
+     * Redis 저장이 둘 다 실패했을 때만 쿠키를 생략한다(AT-only 폴백, FUN-2-02) — 그 상태로 내려봐야
+     * 재발급이 안 되는 죽은 값이라, 로그인 자체를 실패로 만들 이유가 없다. accessToken은
      * 호출부(컨트롤러)가 만료 시각 등 안내용으로 쓸 수 있게 반환값에도 담는다. */
     @Transactional
     public IssueResult issue(Member member, boolean rememberMe, HttpServletResponse response) {
@@ -87,14 +94,27 @@ public class MemberTokenService {
         String accessToken = jwtTokenProvider.createAccessToken(memberId, TokenType.MEMBER, role);
         String refreshToken = OpaqueTokenGenerator.generate();
 
-        trySaveDbBackup(memberId, TokenHasher.sha256(refreshToken), LocalDateTime.now(clock).plus(ttl));
+        boolean dbBackupSaved = trySaveDbBackup(memberId, TokenHasher.sha256(refreshToken), LocalDateTime.now(clock).plus(ttl));
+        boolean redisSaved = true;
         try {
             refreshTokenRepository.save(refreshToken, memberId, role, TokenType.MEMBER, rememberMe, ttl);
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_SAVE_FAILED role={} id={} cause={} — DB 백업만 반영됨", role, memberId, RedisFailureClassifier.causeLabel(e), e);
+            redisSaved = false;
+            log.warn("event=REDIS_SAVE_FAILED role={} id={}", role, memberId, e);
         }
-
-        response.addHeader(HttpHeaders.SET_COOKIE, authCookieFactory.refreshTokenCookie(refreshToken, rememberMe).toString());
+        // (2026-08-25) DB 백업 저장과 Redis 저장은 서로의 결과를 모른 채 각자 로그를 남긴다 —
+        // 둘 다 실패했을 때만 여기서 따로 알린다. 위 두 로그는 "반대쪽은 됐다"고 주장하지
+        // 않으니 각자는 정확하지만, "둘 다 안 됐다"는 조합 자체는 둘 중 하나만 봐서는 안 드러난다.
+        boolean persistBothFailed = !dbBackupSaved && !redisSaved;
+        if (persistBothFailed) {
+            // 기존에는 RefreshToken Redis저장과 DB백업을 둘다 실패해도 Cookie에 발급해줬지만, 이후에 해당 토큰은 어디에도 없기에
+            // 조회할 수 없는 죽은 토큰이다. 따라서 RT발급 자체를 하지 않는다.
+            log.warn("event=REFRESH_TOKEN_ISSUE_PERSIST_BOTH_FAILED memberId={} role={} — 방금 발급한 "
+                    + "refreshToken이 DB/Redis 어디에도 없어 쿠키를 생략한다(AT-only, 재로그인 전까지 재발급 불가)",
+                    memberId, role);
+        } else {
+            response.addHeader(HttpHeaders.SET_COOKIE, authCookieFactory.refreshTokenCookie(refreshToken, rememberMe).toString());
+        }
         // (2026-08-18 16:20) accessToken도 다시 쿠키로 내려준다(요청에 따라 헤더 방식에서 되돌림).
         response.addHeader(HttpHeaders.SET_COOKIE, authCookieFactory.accessTokenCookie(accessToken).toString());
 
@@ -148,6 +168,9 @@ public class MemberTokenService {
         String role = member.getRole().name();
         String newAccessToken = jwtTokenProvider.createAccessToken(memberId, TokenType.MEMBER, role);
 
+        // 여기까지 왔다는 건 Redis 회전(compareAndRotate)이 이미 성공했다는 뜻이라, DB 백업만
+        // best-effort다 — 실패해도 trySaveDbBackup()이 자기 상황만 로그하면 충분하고 issue()처럼
+        // "Redis도 같이 실패했는지"를 따로 볼 필요는 없다.
         trySaveDbBackup(memberId, TokenHasher.sha256(newRefreshToken), expiresAt);
         return new ReissueResult(newAccessToken, jwtTokenProvider.getAccessTokenValidityMs() / 1000, newRefreshToken, rotated.remember());
     }
@@ -191,7 +214,9 @@ public class MemberTokenService {
             refreshTokenRepository.save(newRefreshToken, member.getId(), role, TokenType.MEMBER, false,
                     Duration.ofMillis(jwtTokenProvider.getRefreshTokenValidityMs()));
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_SAVE_FAILED_DURING_DB_FALLBACK memberId={} cause={} — DB만 반영됨", member.getId(), RedisFailureClassifier.causeLabel(e), e);
+            // DB CAS는 위에서 이미 확정적으로 성공했으므로("DB만 반영됨"이 실제로 참이다) — issue()와
+            // 달리 여기선 두 저장소 결과를 따로 모아 판단할 필요가 없다.
+            log.warn("event=REDIS_SAVE_FAILED_DURING_DB_FALLBACK memberId={} — DB만 반영됨", member.getId(), e);
         }
 
         return new ReissueResult(newAccessToken, jwtTokenProvider.getAccessTokenValidityMs() / 1000, newRefreshToken, false);
@@ -212,40 +237,43 @@ public class MemberTokenService {
      * 항상 빈 값이 된다. findById()는 이 폴백이 실제로 필요할 때(activeKey 미스)와
      * logoutExternalSession=true일 때만 부른다 — 평소(Redis 정상, 내부 로그아웃)엔 여기서
      * DB 조회가 추가로 생기지 않는다.
+     *
+     * (2026-08-27 변경) DB 백업 삭제/Redis 삭제 중 하나라도 실패하면 AuthException(LOGOUT_FAILED)을
+     * 던져 즉시 로그아웃 실패 응답으로 끝낸다 — 재시도 아웃박스로 미루지 않는다(클래스 주석 참고).
      */
     @Transactional
     public void revoke(Long memberId, String role, boolean logoutExternalSession) {
         Optional<String> hash;
         try {
             hash = refreshTokenRepository.findActiveHash(role, memberId);
-            if (hash.isEmpty()) {
-                hash = memberRepository.findById(memberId).map(Member::getRefreshTokenHash);
-                hash.ifPresent(h -> log.warn("event=ACTIVE_KEY_MISSING_DB_FALLBACK_USED role={} id={}", role, memberId));
-            }
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_LOOKUP_FAILED role={} id={} cause={} — 지울 해시를 못 구함", role, memberId, RedisFailureClassifier.causeLabel(e), e);
+            log.warn("event=REDIS_LOOKUP_FAILED role={} id={} — 활성 해시 조회 실패, DB 백업 해시로 폴백 시도", role, memberId, e);
             hash = Optional.empty();
+        }
+        // Redis 조회가 "값 없음"이 아니라 예외로 실패한 경우에도 DB 백업 해시(Member.refreshTokenHash)로
+        // 폴백해야 한다 — 그러지 않으면 정말로는 지워야 할 Redis의 refreshToken:{hash} 레코드가
+        // 어느 해시인지 몰라 deleteActiveKey()만 타고 그대로 남는다.
+        if (hash.isEmpty()) {
+            hash = memberRepository.findById(memberId).map(Member::getRefreshTokenHash);
+            hash.ifPresent(h -> log.warn("event=ACTIVE_KEY_MISSING_DB_FALLBACK_USED role={} id={}", role, memberId));
         }
 
         try {
             memberRepository.clearRefreshToken(memberId);
         } catch (DataAccessException e) {
-            log.warn("event=DB_BACKUP_DELETE_FAILED memberId={} cause={} — DB 백업 삭제 실패(계속 진행)", memberId, RedisFailureClassifier.causeLabel(e), e);
+            log.error("event=DB_BACKUP_DELETE_FAILED memberId={} — 로그아웃 실패로 응답", memberId, e);
+            throw new AuthException(AuthErrorCode.LOGOUT_FAILED, e);
         }
 
         try {
             if (hash.isPresent()) {
-                refreshTokenRepository.revokeIfActiveHashMatches(
-                        hash.get(),
-                        role,
-                        memberId);
+                refreshTokenRepository.revokeIfActiveHashMatches(hash.get(), role, memberId);
             } else {
-                refreshTokenRepository.deleteActiveKey(
-                        role,
-                        memberId);
+                refreshTokenRepository.deleteActiveKey(role, memberId);
             }
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_DELETE_FAILED role={} id={} cause={} — DB 백업만 반영됨", role, memberId, RedisFailureClassifier.causeLabel(e), e);
+            log.error("event=REDIS_DELETE_FAILED role={} id={} — 로그아웃 실패로 응답", role, memberId, e);
+            throw new AuthException(AuthErrorCode.LOGOUT_FAILED, e);
         }
 
         try {
@@ -267,15 +295,22 @@ public class MemberTokenService {
         }
     }
 
-    private void trySaveDbBackup(Long memberId, String tokenHash, LocalDateTime expiresAt) {
+    /**
+     * (2026-08-25) 반환값을 true/false로 알려준다 — 이 결과와 Redis 저장 결과를 호출부가 같이
+     * 모아서 "둘 다 실패"를 따로 판단할 수 있어야 하므로(issue() 참고), 예전처럼 자기 상황만 보고
+     * "반대쪽은 됐다"고 단정하는 문구를 로그에 넣지 않는다 — 그 가정이 항상 맞는 건 아니다.
+     */
+    private boolean trySaveDbBackup(Long memberId, String tokenHash, LocalDateTime expiresAt) {
         try {
             int updated = memberRepository.updateRefreshToken(memberId, tokenHash, expiresAt);
             if (updated == 0) {
                 log.warn("event=DB_BACKUP_SAVE_SKIPPED memberId={} — 대상 행을 찾지 못함", memberId);
+                return false;
             }
+            return true;
         } catch (DataAccessException e) {
-            log.warn("event=DB_BACKUP_SAVE_FAILED memberId={} cause={} — Redis만 반영됨(DB 백업 유실 가능, 다음 쓰기 때 다시 시도됨)",
-                    memberId, RedisFailureClassifier.causeLabel(e), e);
+            log.warn("event=DB_BACKUP_SAVE_FAILED memberId={}", memberId, e);
+            return false;
         }
     }
 }

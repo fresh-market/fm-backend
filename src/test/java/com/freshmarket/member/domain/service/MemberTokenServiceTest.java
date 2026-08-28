@@ -155,6 +155,63 @@ class MemberTokenServiceTest {
         assertThatCode(() -> sut.issue(member, false, response)).doesNotThrowAnyException();
     }
 
+    @Test
+    void db_redis_둘_다_실패해도_발급_자체는_끝난다() {
+        // 방금 발급한 refreshToken이 DB/Redis 어디에도 안 남는 조합 — error는 아니지만
+        // (fail-closed라 위험한 상태로 남지 않는다) 발급 응답 자체는 예외 없이 끝나야 한다.
+        Member member = newMember(1L);
+        when(memberRepository.updateRefreshToken(any(), any(), any()))
+                .thenThrow(new DataAccessResourceFailureException("db down"));
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).save(any(), any(), any(), any(), anyBoolean(), any());
+
+        assertThatCode(() -> sut.issue(member, false, response)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void db_redis_둘_다_실패하면_refreshToken_쿠키_없이_accessToken만_내려간다() {
+        // (2026-08-26, FUN-2-02) 어디에도 안 남는 죽은 refreshToken을 클라이언트에 심어봐야
+        // 다음 reissue()에서 REFRESH_TOKEN_INVALID로만 드러난다 — 아예 쿠키를 생략하고
+        // accessToken만 내려준다(AT-only 폴백). 로그인 자체는 실패시키지 않는다.
+        Member member = newMember(1L);
+        when(memberRepository.updateRefreshToken(any(), any(), any()))
+                .thenThrow(new DataAccessResourceFailureException("db down"));
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).save(any(), any(), any(), any(), anyBoolean(), any());
+
+        MemberTokenService.IssueResult result = sut.issue(member, false, response);
+
+        assertThat(jwtTokenProvider.validateToken(result.accessToken())).isTrue();
+
+        ArgumentCaptor<String> cookieCaptor = ArgumentCaptor.forClass(String.class);
+        verify(response, times(1)).addHeader(eq(HttpHeaders.SET_COOKIE), cookieCaptor.capture());
+        List<String> cookies = cookieCaptor.getAllValues();
+
+        assertThat(cookies).hasSize(1);
+        assertThat(cookies.get(0)).startsWith("accessToken=");
+        assertThat(cookies).noneMatch(c -> c.startsWith("refreshToken="));
+    }
+
+    @Test
+    void db나_redis_중_하나만_성공하면_refreshToken_쿠키도_그대로_내려간다() {
+        // AT-only 폴백은 "둘 다" 실패했을 때만 탄다 — 한쪽만 실패해도 refreshToken은 최소
+        // 한 곳엔 살아있으니(재발급 가능) 쿠키를 그대로 내려줘야 한다.
+        // updateRefreshToken()은 stub 안 하면 Mockito가 int 기본값 0을 돌려주는데,
+        // trySaveDbBackup()은 0을 "갱신된 행 없음(=실패)"으로 해석한다 — DB 쪽을 진짜
+        // 성공시키려면 1을 명시적으로 stub해야 한다(안 그러면 둘 다 실패로 처리돼 이 테스트가
+        // 검증하려는 "한쪽만 실패" 상황 자체가 만들어지지 않는다).
+        Member member = newMember(1L);
+        when(memberRepository.updateRefreshToken(any(), any(), any())).thenReturn(1);
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).save(any(), any(), any(), any(), anyBoolean(), any());
+
+        sut.issue(member, false, response);
+
+        ArgumentCaptor<String> cookieCaptor = ArgumentCaptor.forClass(String.class);
+        verify(response, times(2)).addHeader(eq(HttpHeaders.SET_COOKIE), cookieCaptor.capture());
+        assertThat(cookieCaptor.getAllValues()).anyMatch(c -> c.startsWith("refreshToken="));
+    }
+
     // ---- reissue() ----
     // (2026-08-19) opaque 전환 이후 reissue(String)만 받는다 — 컨트롤러가 미리 클레임을 안 읽고
     // 그대로 넘기므로, 여기서 refreshTokenRepository.compareAndRotate()의 결과(RotateOutcome)로만
@@ -297,6 +354,77 @@ class MemberTokenServiceTest {
         verify(accessTokenValidAfterRepository).invalidateBefore(eq("ROLE_USER"), eq(1L), any(), any());
     }
 
+    // (2026-08-27) DB 백업/Redis 정리 중 하나라도 실패하면 재시도 아웃박스로 미루지 않고 그 자리에서
+    // AuthException(LOGOUT_FAILED)을 던져 로그아웃 실패 응답으로 끝낸다.
+
+    @Test
+    void db_삭제가_실패하면_로그아웃_실패_예외를_던지고_redis는_건드리지_않는다() {
+        when(refreshTokenRepository.findActiveHash("ROLE_USER", 1L)).thenReturn(Optional.of("current-hash"));
+        doThrow(new DataAccessResourceFailureException("db down")).when(memberRepository).clearRefreshToken(1L);
+
+        assertThatThrownBy(() -> sut.revoke(1L, "ROLE_USER", false))
+                .isInstanceOf(AuthException.class)
+                .extracting(e -> ((AuthException) e).getErrorCode())
+                .isEqualTo(AuthErrorCode.LOGOUT_FAILED);
+
+        verify(refreshTokenRepository, never()).revokeIfActiveHashMatches(any(), any(), any());
+        verify(refreshTokenRepository, never()).deleteActiveKey(any(), any());
+        verify(accessTokenValidAfterRepository, never()).invalidateBefore(any(), any(), any(), any());
+    }
+
+    @Test
+    void redis_삭제가_실패하면_로그아웃_실패_예외를_던진다() {
+        when(refreshTokenRepository.findActiveHash("ROLE_USER", 1L)).thenReturn(Optional.of("current-hash"));
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
+
+        assertThatThrownBy(() -> sut.revoke(1L, "ROLE_USER", false))
+                .isInstanceOf(AuthException.class)
+                .extracting(e -> ((AuthException) e).getErrorCode())
+                .isEqualTo(AuthErrorCode.LOGOUT_FAILED);
+
+        // DB 정리는 이미 끝난 뒤 Redis에서 실패한 것이다 — @Transactional 롤백으로 이 DB 변경도
+        // 함께 되돌아가지만, 그건 스프링 트랜잭션 관리자의 책임이라 순수 Mockito 단위 테스트
+        // 범위 밖이다. 여기서는 호출 순서(DB 먼저, 그다음 Redis)만 확인한다.
+        verify(memberRepository).clearRefreshToken(1L);
+        verify(accessTokenValidAfterRepository, never()).invalidateBefore(any(), any(), any(), any());
+    }
+
+    @Test
+    void activeKey_조회가_예외로_실패하면_db_백업_해시로_폴백해서_그_값으로_redis를_정리한다() {
+        // Redis 조회가 "값 없음"이 아니라 예외로 실패한 경우에도 DB 백업 해시로 폴백해야 한다 —
+        // 안 그러면 정말로 지워야 할 Redis의 refreshToken:{hash} 레코드가 뭔지 몰라 그냥 남는다.
+        Member member = newMember(1L);
+        try {
+            Field field = Member.class.getDeclaredField("refreshTokenHash");
+            field.setAccessible(true);
+            field.set(member, "db-backed-up-hash");
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).findActiveHash("ROLE_USER", 1L);
+        when(memberRepository.findById(1L)).thenReturn(Optional.of(member));
+
+        assertThatCode(() -> sut.revoke(1L, "ROLE_USER", false)).doesNotThrowAnyException();
+
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("db-backed-up-hash", "ROLE_USER", 1L);
+    }
+
+    @Test
+    void db에도_해시가_없으면_activeKey_삭제만_시도한다() {
+        // activeKey 조회도 실패하고 DB 백업 해시도 없으면(발급 이력이 없거나 이미 지워졌으면)
+        // 조건으로 쓸 해시가 없으니 보조 인덱스 자체를 지우는 것으로 그친다
+        doThrow(new DataAccessResourceFailureException("redis down"))
+                .when(refreshTokenRepository).findActiveHash("ROLE_USER", 1L);
+        when(memberRepository.findById(1L)).thenReturn(Optional.of(newMember(1L)));
+
+        assertThatCode(() -> sut.revoke(1L, "ROLE_USER", false)).doesNotThrowAnyException();
+
+        verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
+        verify(refreshTokenRepository, never()).revokeIfActiveHashMatches(any(), any(), any());
+    }
+
     @Test
     void activeKey가_유실되면_db_백업_해시로_대신_지운다() {
         Member member = newMember(1L);
@@ -312,18 +440,7 @@ class MemberTokenServiceTest {
 
         sut.revoke(1L, "ROLE_USER", false);
 
-        verify(refreshTokenRepository)
-                .revokeIfActiveHashMatches("db-backed-up-hash", "ROLE_USER", 1L);
-    }
-
-    @Test
-    void db_삭제가_실패해도_나머지_정리는_계속된다() {
-        when(refreshTokenRepository.findActiveHash("ROLE_USER", 1L)).thenReturn(Optional.of("current-hash"));
-        doThrow(new DataAccessResourceFailureException("db down")).when(memberRepository).clearRefreshToken(1L);
-
-        sut.revoke(1L, "ROLE_USER", false);
-
-        verify(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("db-backed-up-hash", "ROLE_USER", 1L);
     }
 
     @Test

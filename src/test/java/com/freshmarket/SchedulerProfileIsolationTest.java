@@ -1,8 +1,8 @@
 package com.freshmarket;
-
+ 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
-
+ 
 import com.freshmarket.config.SchedulingConfig;
 import com.freshmarket.member.domain.KakaoUnlinkRetryScheduler;
 import com.freshmarket.member.domain.KakaoUnlinkStuckReportScheduler;
@@ -15,7 +15,7 @@ import com.freshmarket.stock.domain.service.AdminLotService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
-
+ 
 /*
  * 스케줄러가 batch 프로필에서만 켜지는지 고정한다 (INF-1-10).
  *
@@ -25,21 +25,21 @@ import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProc
  * 도메인에 속하지 않는 검사라 도메인 패키지가 아니라 베이스 패키지에 둔다.
  */
 class SchedulerProfileIsolationTest {
-
+ 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(KakaoUnlinkRetryService.class, () -> mock(KakaoUnlinkRetryService.class))
             .withBean(KakaoUnlinkStuckReportService.class, () -> mock(KakaoUnlinkStuckReportService.class))
             .withUserConfiguration(SchedulingConfig.class, KakaoUnlinkRetryScheduler.class,
                     KakaoUnlinkStuckReportScheduler.class);
-
+ 
     private final ApplicationContextRunner lotExpireRunner = new ApplicationContextRunner()
             .withBean(AdminLotService.class, () -> mock(AdminLotService.class))
             .withUserConfiguration(SchedulingConfig.class, AdminLotExpireScheduler.class);
-
+ 
     private final ApplicationContextRunner optionAvailabilitySyncRunner = new ApplicationContextRunner()
             .withBean(OptionAvailabilitySyncRetryService.class, () -> mock(OptionAvailabilitySyncRetryService.class))
             .withUserConfiguration(SchedulingConfig.class, OptionAvailabilitySyncScheduler.class);
-
+ 
     @Test
     void batch_프로필이_없으면_스케줄러가_꺼진다() {
         runner.run(context -> {
@@ -59,7 +59,7 @@ class SchedulerProfileIsolationTest {
             assertThat(context).hasSingleBean(KakaoUnlinkStuckReportScheduler.class);
         });
     }
-
+ 
     @Test
     void batch_프로필이_없으면_만료_로트_스케줄러가_꺼진다() {
         lotExpireRunner.run(context -> {
@@ -68,7 +68,7 @@ class SchedulerProfileIsolationTest {
             assertThat(context).doesNotHaveBean(AdminLotExpireScheduler.class);
         });
     }
-
+ 
     @Test
     void batch_프로필이면_만료_로트_스케줄러가_켜진다() {
         lotExpireRunner.withPropertyValues("spring.profiles.active=batch").run(context -> {
@@ -77,7 +77,7 @@ class SchedulerProfileIsolationTest {
             assertThat(context).hasSingleBean(AdminLotExpireScheduler.class);
         });
     }
-
+ 
     @Test
     void batch_프로필이_없으면_옵션_가용성_재동기화_스케줄러가_꺼진다() {
         optionAvailabilitySyncRunner.run(context -> {
@@ -86,7 +86,7 @@ class SchedulerProfileIsolationTest {
             assertThat(context).doesNotHaveBean(OptionAvailabilitySyncScheduler.class);
         });
     }
-
+ 
     @Test
     void batch_프로필이면_옵션_가용성_재동기화_스케줄러가_켜진다() {
         optionAvailabilitySyncRunner.withPropertyValues("spring.profiles.active=batch").run(context -> {
