@@ -1,5 +1,5 @@
 -- KEYS[1] = 대상 리프레시 토큰 기본 키(refreshToken:{tokenHash})
--- KEYS[2] = 회원의 현재 토큰 포인터(activeRefreshToken:{role}:{memberId})
+-- KEYS[2] = 사용자의 현재 토큰 포인터(activeRefreshToken:{role}:{id})
 -- ARGV[1] = 대상 tokenHash
 --
 -- 기본 키는 대상 토큰이므로 항상 삭제한다. 반면 activeKey는 그 사이 새 로그인/회전으로

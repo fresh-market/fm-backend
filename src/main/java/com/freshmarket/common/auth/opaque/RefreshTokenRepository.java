@@ -36,7 +36,7 @@ import org.springframework.stereotype.Repository;
  *
  * (2026-08-19 추가) 보조 인덱스(activeKey)가 Redis 축출/재시작 등으로 유실되면 findActiveHash()가
  * 빈 값을 반환한다 — 이 경우 호출부가 DB 백업(Member.refreshTokenHash)에서 해시를 구해
- * revokeIfActiveHashMatches()를 직접 불러야 한다. 이 클래스는 그 폴백을 스스로 하지 않는다(Member를 몰라야
+ * revokeIfActiveHashMatches() 또는 deleteByHash()를 호출해야 한다. 이 클래스는 그 폴백을 스스로 하지 않는다(Member를 몰라야
  * 하므로) — MemberTokenService.revoke() 참고.
  */
 @Repository
@@ -50,6 +50,7 @@ public class RefreshTokenRepository {
 
     private static final RedisScript<String> ROTATE_SCRIPT = loadRotateScript();
     private static final RedisScript<Long> REVOKE_SCRIPT = loadRevokeScript();
+    private static final RedisScript<Long> DELETE_ACTIVE_KEY_IF_MATCHES_SCRIPT = loadDeleteActiveKeyIfMatchesScript();
 
     private static RedisScript<String> loadRotateScript() {
         DefaultRedisScript<String> script = new DefaultRedisScript<>();
@@ -124,12 +125,14 @@ public class RefreshTokenRepository {
 
     /**
      * 토큰 기본 레코드는 항상 지우고, activeKey는 지금도 이 해시를 가리킬 때만 함께 지운다.
-     * 실패한 옛 revoke를 나중에 재시도하는 사이 새 로그인으로 activeKey가 다른 해시를 가리킬 수
+     * 실패한 옛 revoke를 나중에 재시도하는 사이 새 로그인/재발급으로 activeKey가 다른 해시를 가리킬 수
      * 있으므로, 두 삭제를 Lua로 원자 처리해 새 세션의 포인터를 지우지 않는다.
      */
-    public void revokeIfActiveHashMatches(String tokenHash, String role, Long memberId) {
-        redisTemplate.execute(REVOKE_SCRIPT,
-                List.of(primaryKey(tokenHash), activeKey(role, memberId)), tokenHash);
+    public void revokeIfActiveHashMatches(String tokenHash, String role, Long id) {
+        redisTemplate.execute(
+                REVOKE_SCRIPT,
+                List.of(primaryKey(tokenHash), activeKey(role, id)),
+                tokenHash);
     }
 
     /** 삭제 타임아웃 뒤 실제 기본 레코드가 남았는지 후속 확인할 때 사용한다. */
@@ -137,14 +140,45 @@ public class RefreshTokenRepository {
         return Boolean.TRUE.equals(redisTemplate.hasKey(primaryKey(tokenHash)));
     }
 
-    /** 대상 해시를 확보하지 못한 예외적 revoke 경로에서만 보조 인덱스를 정리한다. */
+    /** 해시를 이미 알 때(보조 인덱스에서 구했든, 호출부가 DB 백업에서 구했든) 그 진짜 레코드를 지운다. */
+    public void deleteByHash(String tokenHash) {
+        redisTemplate.delete(primaryKey(tokenHash));
+    }
+
+    /** 보조 인덱스 자체를 지운다. */
     public void deleteActiveKey(String role, Long id) {
         redisTemplate.delete(activeKey(role, id));
     }
 
-    private String primaryKey(String tokenHash) { return KEY_PREFIX + tokenHash; }
+    /**
+     * 보조 인덱스가 아직 expectedHash를 가리키고 있을 때만 삭제한다.
+     *
+     * Rotation 이후 DB 확정에 실패했을 때 보상 처리용으로 사용한다.
+     * 그 사이 다른 로그인/재발급으로 activeKey가 더 최신 hash를 가리키게 됐다면 삭제하지 않는다.
+     *
+     * @return 실제로 삭제했으면 true, 이미 다른 hash를 가리키거나 없으면 false
+     */
+    public boolean deleteActiveKeyIfMatches(
+            String role,
+            Long id,
+            String expectedHash) {
 
-    private String activeKey(String role, Long id) { return ACTIVE_KEY_PREFIX + role + ":" + id; }
+        Long deleted = redisTemplate.execute(
+                DELETE_ACTIVE_KEY_IF_MATCHES_SCRIPT,
+                List.of(activeKey(role, id)),
+                expectedHash
+        );
+
+        return deleted != null && deleted == 1L;
+    }
+
+    private String primaryKey(String tokenHash) {
+        return KEY_PREFIX + tokenHash;
+    }
+
+    private String activeKey(String role, Long id) {
+        return ACTIVE_KEY_PREFIX + role + ":" + id;
+    }
 
     private String serialize(Long memberId, String role, TokenType type, boolean remember) {
         return memberId + "|" + role + "|" + type.name() + "|" + remember;
@@ -156,6 +190,21 @@ public class RefreshTokenRepository {
     }
 
     public record RefreshTokenData(Long memberId, String role, TokenType type, boolean remember) {
+    }
+
+    private static RedisScript<Long> loadDeleteActiveKeyIfMatchesScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setScriptText("""
+            local current = redis.call('GET', KEYS[1])
+
+            if current == ARGV[1] then
+                return redis.call('DEL', KEYS[1])
+            end
+
+            return 0
+            """);
+        script.setResultType(Long.class);
+        return script;
     }
 
     /** compareAndRotate()의 3단 결과. Optional 하나로는 "없음"과 "재사용 의심(소유자는 앎)"을 구분 못 해서 뺐다. */
