@@ -26,6 +26,7 @@ import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import com.freshmarket.coupon.domain.issue.CouponIssueQueue;
+import com.freshmarket.coupon.domain.issue.CouponWriteCircuit;
 import com.freshmarket.coupon.domain.issue.IssueOutcome;
 import com.freshmarket.coupon.domain.issue.IssueTicket;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
@@ -64,6 +65,9 @@ class CouponIssueServiceTest {
     @Mock
     private CouponIssueQueue queue;
 
+    @Mock
+    private CouponWriteCircuit writeCircuit;
+
     private CouponIssueService sut;
 
     @BeforeEach
@@ -72,7 +76,7 @@ class CouponIssueServiceTest {
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
                 Duration.ofMillis(100), Duration.ofSeconds(5));
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
-        sut = new CouponIssueService(couponCache, memberApi, allocator, queue, properties, fixed);
+        sut = new CouponIssueService(couponCache, memberApi, allocator, queue, writeCircuit, properties, fixed);
     }
 
     @Test
@@ -126,6 +130,7 @@ class CouponIssueServiceTest {
     void 대상_등급이_없으면_회원을_읽지_않는다() {
         // given
         givenCoupon(targetedCoupon(null));
+        when(writeCircuit.acceptsWrites()).thenReturn(true);
         when(queue.hasRoom()).thenReturn(true);
         when(allocator.allocate(anyLong(), anyLong(), anyInt())).thenReturn(new SeqOutcome.SoldOut());
 
@@ -166,10 +171,27 @@ class CouponIssueServiceTest {
      * 자리를 순번보다 먼저 본다.
      * 순번을 받고 나서 큐에 못 넣으면 그 번호를 반납해야 하므로, Redis 를 아직 안 부른 것까지 본다.
      */
+    /*
+     * DB 가 죽어도 Redis 는 멀쩡해 순번 확보 회로는 안 열린다.
+     * 이 확인이 없으면 요청마다 번호를 태우고 요청 예산을 다 기다린 뒤에야 실패한다.
+     */
+    @Test
+    void 쓰기_회로가_열려_있으면_순번을_받지_않는다() {
+        // given
+        givenCoupon(defaultCoupon());
+        when(writeCircuit.acceptsWrites()).thenReturn(false);
+
+        // when, then
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
+        verifyNoInteractions(allocator, queue);
+    }
+
     @Test
     void 큐에_자리가_없으면_순번을_받지_않고_혼잡으로_답한다() {
         // given
         givenCoupon(defaultCoupon());
+        when(writeCircuit.acceptsWrites()).thenReturn(true);
         when(queue.hasRoom()).thenReturn(false);
 
         // when, then
@@ -274,6 +296,7 @@ class CouponIssueServiceTest {
     void 순번을_못_받으면_혼잡으로_답하고_큐에_안_넣는다() {
         // given
         givenCoupon(defaultCoupon());
+        when(writeCircuit.acceptsWrites()).thenReturn(true);
         when(queue.hasRoom()).thenReturn(true);
         when(allocator.allocate(COUPON_ID, MEMBER_ID, TOTAL_QUANTITY))
                 .thenThrow(new CouponSeqUnavailableException("회로가 열렸다", new IllegalStateException()));
@@ -358,6 +381,7 @@ class CouponIssueServiceTest {
 
     private void givenAllocated(SeqOutcome outcome) {
         givenCoupon(defaultCoupon());
+        when(writeCircuit.acceptsWrites()).thenReturn(true);
         when(queue.hasRoom()).thenReturn(true);
         when(allocator.allocate(COUPON_ID, MEMBER_ID, TOTAL_QUANTITY)).thenReturn(outcome);
     }

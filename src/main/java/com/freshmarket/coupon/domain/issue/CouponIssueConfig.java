@@ -1,6 +1,6 @@
 package com.freshmarket.coupon.domain.issue;
 
-import com.freshmarket.coupon.domain.redis.CouponSeqCircuitProperties;
+import com.freshmarket.coupon.domain.CouponCircuitProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
@@ -9,6 +9,6 @@ import org.springframework.context.annotation.Configuration;
  * com.freshmarket.config 아래에 두지 않는 이유는 그쪽이 도메인 타입을 참조할 수 없어서다.
  */
 @Configuration
-@EnableConfigurationProperties({CouponIssueProperties.class, CouponSeqCircuitProperties.class})
+@EnableConfigurationProperties({CouponIssueProperties.class, CouponCircuitProperties.class})
 public class CouponIssueConfig {
 }

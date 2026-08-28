@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 
+import com.freshmarket.coupon.domain.CouponCircuitProperties;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,9 +49,10 @@ class CouponSeqAllocatorCircuitTest {
         CouponIssueProperties issueProperties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
                 Duration.ofSeconds(2), Duration.ofSeconds(5));
-        CouponSeqCircuitProperties circuitProperties = new CouponSeqCircuitProperties(
+        CouponCircuitProperties.Settings seq = new CouponCircuitProperties.Settings(
                 50f, 10, MINIMUM_CALLS, WAIT_IN_OPEN, 2, Duration.ofMillis(500));
-        sut = new CouponSeqAllocator(redisTemplate, issueProperties, circuitProperties);
+        sut = new CouponSeqAllocator(redisTemplate, issueProperties,
+                new CouponCircuitProperties(seq, seq));
     }
 
     @Test

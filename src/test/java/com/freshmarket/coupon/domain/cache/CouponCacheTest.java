@@ -41,6 +41,7 @@ class CouponCacheTest {
     private CouponRepository couponRepository;
 
     private MovableClock clock;
+    private ExecutorService loader;
     private CouponCache sut;
 
     @BeforeEach
@@ -49,7 +50,16 @@ class CouponCacheTest {
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
                 Duration.ofSeconds(2), TTL);
-        sut = new CouponCache(couponRepository, properties, clock);
+        /*
+         * 실행기를 단일 스레드로 준다.
+         * AsyncCache 는 future 가 완료될 때 쓰기 시각을 찍는데 그 콜백이 이 실행기에서 돈다.
+         * 한 스레드라 순서가 정해지고, 아래 기록이_끝나기를_기다린다() 로 그 시점을 잡을 수 있다.
+         *
+         * 같은 스레드(Runnable::run)로 두면 안 된다. 로딩이 Caffeine 의 모니터 안에서 돌아
+         * 이 클래스가 피하려는 핀이 그대로 생기고, 동시 시험이 교착한다.
+         */
+        loader = Executors.newSingleThreadExecutor();
+        sut = new CouponCache(couponRepository, properties, clock, loader);
     }
 
     @Test
@@ -114,10 +124,11 @@ class CouponCacheTest {
 
     // TTL 이 곧 이 앱이 마감을 넘겨 요청을 받아 주는 시간이다
     @Test
-    void TTL_이_지나면_다시_읽는다() {
+    void TTL_이_지나면_다시_읽는다() throws Exception {
         // given
         when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon(true)));
         sut.find(COUPON_ID);
+        기록이_끝나기를_기다린다();
 
         // when
         clock.advance(TTL.plusMillis(1));
@@ -128,10 +139,11 @@ class CouponCacheTest {
     }
 
     @Test
-    void TTL_안에서는_다시_읽지_않는다() {
+    void TTL_안에서는_다시_읽지_않는다() throws Exception {
         // given
         when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon(true)));
         sut.find(COUPON_ID);
+        기록이_끝나기를_기다린다();
 
         // when
         clock.advance(TTL.minusMillis(1));
@@ -219,6 +231,16 @@ class CouponCacheTest {
         assertThat(cached.totalQuantity()).isEqualTo(100);
         assertThat(cached.active()).isTrue();
         assertThat(cached.isLimited()).isTrue();
+    }
+
+    /*
+     * 캐시가 쓰기 시각을 찍는 콜백이 끝나기를 기다린다.
+     * find() 의 join() 은 값이 채워지면 돌아오지만 Caffeine 의 뒷정리는 실행기에 남아 있을 수 있다.
+     * 단일 스레드라 이 빈 작업이 도는 시점이면 앞의 것들이 다 끝난 뒤다.
+     */
+    private void 기록이_끝나기를_기다린다() throws Exception {
+        loader.submit(() -> {
+        }).get(5, TimeUnit.SECONDS);
     }
 
     private static Coupon coupon(boolean active) {

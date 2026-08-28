@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
@@ -12,6 +13,7 @@ import com.freshmarket.coupon.domain.repository.CouponRepository;
 import com.github.benmanes.caffeine.cache.AsyncCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Ticker;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -34,18 +36,30 @@ public class CouponCache {
     private final CouponRepository couponRepository;
     private final AsyncCache<Long, CachedCoupon> cache;
 
+    // 생성자가 둘이라 스프링에게 어느 쪽으로 주입할지 알려야 한다
+    @Autowired
     public CouponCache(CouponRepository couponRepository, CouponIssueProperties properties, Clock clock) {
+        /*
+         * 값을 읽는 일이 JDBC 블로킹이라 Caffeine 의 기본값인 공용 ForkJoinPool 에 두면 안 된다.
+         * 그 풀은 CPU 작업 기준으로 크기가 잡혀 있어, 거기서 막히면 다른 작업까지 굶는다.
+         */
+        this(couponRepository, properties, clock, Executors.newVirtualThreadPerTaskExecutor());
+    }
+
+    /*
+     * 실행기를 받는 생성자는 시험용이다.
+     * AsyncCache 는 future 가 완료될 때 쓰기 시각을 찍는데, 그 콜백이 다른 스레드에서 돌면
+     * 시험이 시계를 민 시점과 찍히는 시점의 순서가 안 정해진다. 같은 스레드에서 돌리면 정해진다.
+     */
+    CouponCache(CouponRepository couponRepository, CouponIssueProperties properties, Clock clock,
+                Executor executor) {
         this.couponRepository = couponRepository;
         this.cache = Caffeine.newBuilder()
                 .maximumSize(MAX_ENTRIES)
                 .expireAfterWrite(properties.couponCacheTtl())
                 // 시험이 TTL 경계를 재려면 시간을 밀 수 있어야 한다. 주입받은 Clock 을 그대로 따른다
                 .ticker(clockTicker(clock))
-                /*
-                 * 값을 읽는 일이 JDBC 블로킹이라 Caffeine 의 기본값인 공용 ForkJoinPool 에 두면 안 된다.
-                 * 그 풀은 CPU 작업 기준으로 크기가 잡혀 있어, 거기서 막히면 다른 작업까지 굶는다.
-                 */
-                .executor(Executors.newVirtualThreadPerTaskExecutor())
+                .executor(executor)
                 .recordStats()
                 .buildAsync();
     }

@@ -15,6 +15,7 @@ import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.exception.DataAccessFailures;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import com.freshmarket.coupon.domain.issue.CouponIssueQueue;
+import com.freshmarket.coupon.domain.issue.CouponWriteCircuit;
 import com.freshmarket.coupon.domain.issue.IssueOutcome;
 import com.freshmarket.coupon.domain.issue.IssueTicket;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
@@ -44,6 +45,7 @@ public class CouponIssueService {
     private final MemberApi memberApi;
     private final CouponSeqAllocator allocator;
     private final CouponIssueQueue queue;
+    private final CouponWriteCircuit writeCircuit;
     private final CouponIssueProperties properties;
     private final Clock clock;
 
@@ -56,6 +58,15 @@ public class CouponIssueService {
     public CouponIssueResponse issue(long couponId, long memberId) {
         CachedCoupon coupon = findCoupon(couponId);
         verifyIssuable(coupon, memberId);
+
+        /*
+         * 쓸 수 없으면 번호도 받지 않는다.
+         * DB 가 죽어도 Redis 는 멀쩡해 순번 확보 회로는 안 열린다. 이 확인이 없으면 요청마다
+         * 번호를 태우고 요청 예산을 다 기다린 뒤에야 실패한다.
+         */
+        if (!writeCircuit.acceptsWrites()) {
+            throw new CouponException(CouponErrorCode.CONGESTED);
+        }
 
         /*
          * 이 메서드가 자리를 순번보다 먼저 본다.

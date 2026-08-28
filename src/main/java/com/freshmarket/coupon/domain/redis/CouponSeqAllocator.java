@@ -6,10 +6,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 
+import com.freshmarket.coupon.domain.CouponCircuitProperties;
+import com.freshmarket.coupon.domain.CouponCircuits;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
-import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -48,30 +49,11 @@ public class CouponSeqAllocator {
 
     public CouponSeqAllocator(StringRedisTemplate redisTemplate,
                               CouponIssueProperties properties,
-                              CouponSeqCircuitProperties circuitProperties) {
+                              CouponCircuitProperties circuitProperties) {
         this.redisTemplate = redisTemplate;
         this.reclaimAfter = properties.reclaimAfter();
         this.allocateScript = loadAllocateScript();
-        this.circuitBreaker = CircuitBreaker.of("couponSeq", circuitConfig(circuitProperties));
-    }
-
-    /*
-     * 느린 호출도 실패로 센다.
-     * Redis 가 완전히 죽는 것보다 느려지는 쪽이 흔한데, 그때 예외가 안 나면 회로가 안 열린다.
-     * 요청 스레드들이 전부 거기서 기다리며 요청 예산을 태우고, 큐는 비어 있는 채로 굶는다.
-     */
-    private static CircuitBreakerConfig circuitConfig(CouponSeqCircuitProperties properties) {
-        return CircuitBreakerConfig.custom()
-                .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
-                .slidingWindowSize(properties.slidingWindowSize())
-                .minimumNumberOfCalls(properties.minimumNumberOfCalls())
-                .failureRateThreshold(properties.failureRateThreshold())
-                .waitDurationInOpenState(properties.waitDurationInOpen())
-                .permittedNumberOfCallsInHalfOpenState(properties.permittedInHalfOpen())
-                .slowCallDurationThreshold(properties.slowCallDuration())
-                .slowCallRateThreshold(properties.failureRateThreshold())
-                .automaticTransitionFromOpenToHalfOpenEnabled(true)
-                .build();
+        this.circuitBreaker = CouponCircuits.forRedis(circuitProperties.seq());
     }
 
     /*

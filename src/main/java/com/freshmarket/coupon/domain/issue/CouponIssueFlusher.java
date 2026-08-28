@@ -41,6 +41,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
     private final MemberCouponBulkRepository bulkRepository;
     private final CouponSeqCommitter committer;
     private final CouponIssueProperties properties;
+    private final CouponWriteCircuit writeCircuit;
 
     private volatile boolean running;
     private ExecutorService executor;
@@ -154,7 +155,10 @@ public class CouponIssueFlusher implements SmartLifecycle {
 
     private void flush(List<IssueTicket> batch) {
         try {
-            bulkRepository.insertAll(batch);
+            writeCircuit.write(() -> {
+                bulkRepository.insertAll(batch);
+                return null;
+            });
         } catch (DataAccessException e) {
             /*
              * DB 는 어느 행 때문에 걸렸는지 알려주지 않으므로, 이 메서드가 한 건씩 다시 넣어 가른다.
@@ -162,6 +166,14 @@ public class CouponIssueFlusher implements SmartLifecycle {
              * 자신의 행인지를 resolveDuplicate 가 순번으로 갈라야 한다.
              */
             flushOneByOne(batch);
+            return;
+        } catch (Exception e) {
+            /*
+             * 회로가 열려 있어 DB 까지 안 갔다.
+             * 이 배치는 그대로 혼잡으로 답한다. 한 건씩 다시 넣어 봐야 같은 회로에 막힌다.
+             */
+            log.warn("event=COUPON_FLUSH_CIRCUIT_OPEN size={}", batch.size());
+            failAll(batch);
             return;
         }
         completeIssued(batch);
@@ -171,7 +183,10 @@ public class CouponIssueFlusher implements SmartLifecycle {
         List<IssueTicket> issued = new ArrayList<>(batch.size());
         for (IssueTicket ticket : batch) {
             try {
-                bulkRepository.insertOne(ticket);
+                writeCircuit.write(() -> {
+                    bulkRepository.insertOne(ticket);
+                    return null;
+                });
                 issued.add(ticket);
             } catch (DuplicateKeyException e) {
                 resolveDuplicate(ticket);
@@ -185,6 +200,9 @@ public class CouponIssueFlusher implements SmartLifecycle {
                         ticket.couponId(), ticket.memberId(), ticket.issueSeq(),
                         DataAccessFailures.isTransient(e), e);
                 ticket.complete(outcomeFor(e));
+            } catch (Exception e) {
+                // 회로가 열렸다. DB 까지 안 갔으므로 번호는 그 사용자 것으로 남는다
+                ticket.complete(new IssueOutcome.Congested());
             }
         }
         completeIssued(issued);
