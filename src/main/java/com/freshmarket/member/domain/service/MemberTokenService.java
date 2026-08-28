@@ -53,9 +53,14 @@ import org.springframework.transaction.annotation.Transactional;
  * "영속되는 시각" 계산에만 쓰고, JwtTokenProvider 자체는 Clock을 안 받는다). 두 브랜치를 합칠 때
  * 충돌을 줄이려고 이 범위에 맞췄다 — JwtTokenProvider.java의 관련 주석 참고.
  *
- * (2026-08-26) Redis/DB 장애 로그의 cause=TIMEOUT|OTHER 분류는 RedisFailureClassifier로 뺐다 —
- * JwtAuthenticationFilter/AuthRateLimitFilter도 같은 Redis 장애를 catch(DataAccessException)해서
- * fail-open 로그를 남기는데, 여기에만 두면 그쪽엔 못 쓴다.
+ * (2026-08-27 변경) revoke()가 DB 백업/Redis 정리 중 하나라도 실패하면, 무효화됐어야 할
+ * refreshToken이 그대로 남아 재발급에 쓰일 수 있다(Redis 정리 실패면 Redis가 멀쩡한 동안에도,
+ * DB 백업 정리 실패면 나중에 Redis 완전장애 시 reissueViaDbFallback()이 여전히 믿어버린다).
+ * 예전엔 그 실패를 RefreshTokenRevokeRetryService(아웃박스)로 넘겨 스케줄러가 재시도하게
+ * 했지만, 배치가 돌 때까지(최대 10분) 무효화됐어야 할 토큰이 조용히 살아있는 창을 감수하는
+ * 대신 — 그 자리에서 AuthException(LOGOUT_FAILED)을 던져 로그아웃 응답 자체를 실패시키고
+ * 클라이언트가 재시도하게 한다. revoke()가 @Transactional이라, 이 예외는 그 안에서 이미
+ * 반영된 DB 쓰기(예: clearRefreshToken 성공 후 Redis 삭제만 실패한 경우)까지 함께 롤백한다.
  */
 @Slf4j
 @Service
@@ -232,40 +237,43 @@ public class MemberTokenService {
      * 항상 빈 값이 된다. findById()는 이 폴백이 실제로 필요할 때(activeKey 미스)와
      * logoutExternalSession=true일 때만 부른다 — 평소(Redis 정상, 내부 로그아웃)엔 여기서
      * DB 조회가 추가로 생기지 않는다.
+     *
+     * (2026-08-27 변경) DB 백업 삭제/Redis 삭제 중 하나라도 실패하면 AuthException(LOGOUT_FAILED)을
+     * 던져 즉시 로그아웃 실패 응답으로 끝낸다 — 재시도 아웃박스로 미루지 않는다(클래스 주석 참고).
      */
     @Transactional
     public void revoke(Long memberId, String role, boolean logoutExternalSession) {
         Optional<String> hash;
         try {
             hash = refreshTokenRepository.findActiveHash(role, memberId);
-            if (hash.isEmpty()) {
-                hash = memberRepository.findById(memberId).map(Member::getRefreshTokenHash);
-                hash.ifPresent(h -> log.warn("event=ACTIVE_KEY_MISSING_DB_FALLBACK_USED role={} id={}", role, memberId));
-            }
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_LOOKUP_FAILED role={} id={} cause={} — 지울 해시를 못 구함", role, memberId, RedisFailureClassifier.causeLabel(e), e);
+            log.warn("event=REDIS_LOOKUP_FAILED role={} id={} — 활성 해시 조회 실패, DB 백업 해시로 폴백 시도", role, memberId, e);
             hash = Optional.empty();
+        }
+        // Redis 조회가 "값 없음"이 아니라 예외로 실패한 경우에도 DB 백업 해시(Member.refreshTokenHash)로
+        // 폴백해야 한다 — 그러지 않으면 정말로는 지워야 할 Redis의 refreshToken:{hash} 레코드가
+        // 어느 해시인지 몰라 deleteActiveKey()만 타고 그대로 남는다.
+        if (hash.isEmpty()) {
+            hash = memberRepository.findById(memberId).map(Member::getRefreshTokenHash);
+            hash.ifPresent(h -> log.warn("event=ACTIVE_KEY_MISSING_DB_FALLBACK_USED role={} id={}", role, memberId));
         }
 
         try {
             memberRepository.clearRefreshToken(memberId);
         } catch (DataAccessException e) {
-            log.warn("event=DB_BACKUP_DELETE_FAILED memberId={} cause={} — DB 백업 삭제 실패(계속 진행)", memberId, RedisFailureClassifier.causeLabel(e), e);
+            log.error("event=DB_BACKUP_DELETE_FAILED memberId={} — 로그아웃 실패로 응답", memberId, e);
+            throw new AuthException(AuthErrorCode.LOGOUT_FAILED, e);
         }
 
         try {
             if (hash.isPresent()) {
-                refreshTokenRepository.revokeIfActiveHashMatches(
-                        hash.get(),
-                        role,
-                        memberId);
+                refreshTokenRepository.revokeIfActiveHashMatches(hash.get(), role, memberId);
             } else {
-                refreshTokenRepository.deleteActiveKey(
-                        role,
-                        memberId);
+                refreshTokenRepository.deleteActiveKey(role, memberId);
             }
         } catch (DataAccessException e) {
-            log.warn("event=REDIS_DELETE_FAILED role={} id={}", role, memberId, e);
+            log.error("event=REDIS_DELETE_FAILED role={} id={} — 로그아웃 실패로 응답", role, memberId, e);
+            throw new AuthException(AuthErrorCode.LOGOUT_FAILED, e);
         }
 
         try {
