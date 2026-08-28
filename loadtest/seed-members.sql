@@ -2,7 +2,10 @@
 --
 -- Flyway 마이그레이션이 아니다. 운영에서 돌면 안 되는 데이터라 손으로 실행한다.
 --
---   docker exec -i mysql mysql -ufreshmarket -pfreshmarket freshmarket < loadtest/seed-members.sql
+--   docker exec -i freshmarket-mysql mysql --default-character-set=utf8mb4 \
+--     -ufreshmarket -pfreshmarket freshmarket < loadtest/seed-members.sql
+--
+-- 문자셋을 안 주면 마지막 확인 SELECT 의 한글 별칭에서 구문 오류가 난다.
 --
 -- 요구사항이 "재고 10,000장에 20,000명 동시 요청" 이라 2만 명을 만든다.
 
