@@ -245,8 +245,7 @@ class MemberTokenServiceTest {
 
         // revoke(1L, "ROLE_USER", false)가 실제로 호출돼 현재 세션(activeKey가 가리키는 해시)을 지웠는지
         verify(memberRepository).clearRefreshToken(1L);
-        verify(refreshTokenRepository).deleteByHash("current-hash");
-        verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
         verify(accessTokenValidAfterRepository).invalidateBefore(eq("ROLE_USER"), eq(1L), any(), any());
     }
 
@@ -276,7 +275,7 @@ class MemberTokenServiceTest {
                 .extracting(e -> ((AuthException) e).getErrorCode())
                 .isEqualTo(AuthErrorCode.REFRESH_TOKEN_INVALID);
         verify(memberRepository).clearRefreshToken(1L);
-        verify(refreshTokenRepository).deleteByHash("current-hash");
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
     }
 
     @Test
@@ -351,8 +350,7 @@ class MemberTokenServiceTest {
         sut.revoke(1L, "ROLE_USER", false);
 
         verify(memberRepository).clearRefreshToken(1L);
-        verify(refreshTokenRepository).deleteByHash("current-hash");
-        verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
         verify(accessTokenValidAfterRepository).invalidateBefore(eq("ROLE_USER"), eq(1L), any(), any());
     }
 
@@ -371,8 +369,8 @@ class MemberTokenServiceTest {
 
         sut.revoke(1L, "ROLE_USER", false);
 
-        verify(refreshTokenRepository).deleteByHash("db-backed-up-hash");
-        verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
+        verify(refreshTokenRepository)
+                .revokeIfActiveHashMatches("db-backed-up-hash", "ROLE_USER", 1L);
     }
 
     @Test
@@ -382,8 +380,7 @@ class MemberTokenServiceTest {
 
         sut.revoke(1L, "ROLE_USER", false);
 
-        verify(refreshTokenRepository).deleteByHash("current-hash");
-        verify(accessTokenValidAfterRepository).invalidateBefore(eq("ROLE_USER"), eq(1L), any(), any());
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
     }
 
     @Test
@@ -395,6 +392,7 @@ class MemberTokenServiceTest {
 
         verify(memberRepository).clearRefreshToken(1L);
         verify(accessTokenValidAfterRepository).invalidateBefore(eq("ROLE_USER"), eq(1L), any(), any());
+        verify(refreshTokenRepository).deleteActiveKey("ROLE_USER", 1L);
     }
 
     @Test
@@ -408,7 +406,7 @@ class MemberTokenServiceTest {
 
         assertThatCode(() -> sut.revoke(1L, "ROLE_USER", false)).doesNotThrowAnyException();
         verify(memberRepository).clearRefreshToken(1L);
-        verify(refreshTokenRepository).deleteByHash("current-hash");
+        verify(refreshTokenRepository).revokeIfActiveHashMatches("current-hash", "ROLE_USER", 1L);
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.freshmarket.common.auth.jwt;
 
 import com.freshmarket.common.auth.CustomUserDetails;
+import com.freshmarket.common.auth.RedisFailureClassifier;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
@@ -77,7 +78,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             return accessTokenValidAfterRepository.isValidAfter(role, id, issuedAt);
         } catch (DataAccessException e) {
-            log.warn("event=ACCESS_TOKEN_VALID_AFTER_CHECK_FAILED role={} id={} — fail-open으로 통과", role, id, e);
+            log.warn("event=ACCESS_TOKEN_VALID_AFTER_CHECK_FAILED role={} id={} cause={} — fail-open으로 통과",
+                    role, id, RedisFailureClassifier.causeLabel(e), e);
             return true;
         }
     }

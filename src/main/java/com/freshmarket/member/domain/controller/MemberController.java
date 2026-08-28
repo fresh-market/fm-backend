@@ -5,6 +5,9 @@ import com.freshmarket.common.response.ResponseEnvelope;
 import com.freshmarket.member.domain.service.MemberProfileUpdateService;
 import com.freshmarket.member.domain.dto.MemberProfileUpdateRequest;
 import com.freshmarket.member.domain.dto.MemberResponse;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -22,11 +25,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/v1/members")
 @RequiredArgsConstructor
+@Tag(name = "회원", description = "내 회원 정보 조회와 수정")
 class MemberController {
 
     private final MemberProfileUpdateService memberProfileUpdateService;
 
     @GetMapping("/me")
+    @Operation(summary = "내 회원 정보 조회")
+    @ApiResponse(responseCode = "200", description = "조회 성공")
     public ResponseEntity<ResponseEnvelope<MemberResponse>> getMyProfile(
             @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
@@ -34,6 +40,9 @@ class MemberController {
     }
 
     @PatchMapping("/me")
+    @Operation(summary = "내 회원 정보 수정", description = "수정한 정보로 회원 프로필을 갱신한다. 필수 항목이 모두 채워지면 온보딩이 완료된다.")
+    @ApiResponse(responseCode = "200", description = "수정 성공")
+    @ApiResponse(responseCode = "400", description = "요청 값이 유효하지 않음")
     public ResponseEntity<ResponseEnvelope<MemberResponse>> updateProfile(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestBody @Valid MemberProfileUpdateRequest request

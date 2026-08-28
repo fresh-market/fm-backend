@@ -64,7 +64,8 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
             }
             return count != null && count > LIMIT;
         } catch (DataAccessException e) {
-            log.warn("event=RATE_LIMIT_CHECK_FAILED ip={} — fail-open으로 통과시킴", ip, e);
+            log.warn("event=RATE_LIMIT_CHECK_FAILED ip={} cause={} — fail-open으로 통과시킴",
+                    ip, RedisFailureClassifier.causeLabel(e), e);
             return false;
         }
     }
