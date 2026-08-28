@@ -57,8 +57,50 @@ public interface StockLotRepository extends JpaRepository<StockLot, Long> {
     Set<Long> findProductOptionIdsByProductOptionIdInAndStatus(
             @Param("productOptionIds") List<Long> productOptionIds, @Param("status") LotStatus status);
 
-    // FEFO 배분 순서. idx_lot_fefo(product_option_id, status, expiry_date)를 그대로 탄다
-    List<StockLot> findByProductOptionIdAndStatusOrderByExpiryDateAsc(Long productOptionId, LotStatus status);
+    /*
+     * FEFO 배분 순서의 첫 청크. idx_lot_fefo(product_option_id, status, expiry_date)를 그대로 탄다.
+     * expiryDate만으로는 동률(같은 날짜)일 때 순서가 안 고정되므로 id를 tie-breaker로 더한다 —
+     * 이 인덱스는 UNIQUE가 아니라 InnoDB가 내부적으로 PK(stock_lot_id)를 각 엔트리에 붙여
+     * 정렬 순서를 이미 expiryDate, id 순으로 유지하고 있어 별도 filesort 없이 이 정렬을 그대로 탄다.
+     */
+    @Query("""
+            select s
+            from StockLot s
+            where s.productOptionId = :productOptionId
+              and s.status = :status
+            order by s.expiryDate asc, s.id asc
+            """)
+    List<StockLot> findFirstFefoChunk(
+            @Param("productOptionId") Long productOptionId,
+            @Param("status") LotStatus status,
+            Pageable pageable
+    );
+
+    /*
+     * FEFO 배분 순서의 다음 청크. OFFSET이 아니라 이전 청크의 마지막 (expiryDate, id)를 커서로 받아
+     * 그 다음부터 이어서 읽는다 — 옵션당 로트가 아무리 쌓여도 청크 하나당 비용이 늘지 않는다.
+     */
+    @Query("""
+            select s
+            from StockLot s
+            where s.productOptionId = :productOptionId
+              and s.status = :status
+              and (
+                    s.expiryDate > :lastExpiryDate
+                    or (
+                        s.expiryDate = :lastExpiryDate
+                        and s.id > :lastStockLotId
+                    )
+              )
+            order by s.expiryDate asc, s.id asc
+            """)
+    List<StockLot> findNextFefoChunk(
+            @Param("productOptionId") Long productOptionId,
+            @Param("status") LotStatus status,
+            @Param("lastExpiryDate") LocalDate lastExpiryDate,
+            @Param("lastStockLotId") Long lastStockLotId,
+            Pageable pageable
+    );
 
     /*
      * 가용 수량을 조건부로 줄인다(stock.md). WHERE 절의 availableQty >= qty가 읽고 쓰는 사이 없이
