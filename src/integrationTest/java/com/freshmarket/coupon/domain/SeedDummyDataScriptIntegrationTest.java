@@ -3,6 +3,10 @@ package com.freshmarket.coupon.domain;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.freshmarket.IntegrationTestSupport;
+import java.util.List;
+
+import com.freshmarket.coupon.domain.audit.CouponConsistencyReport;
+import com.freshmarket.coupon.domain.service.CouponConsistencyService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -29,6 +33,9 @@ class SeedDummyDataScriptIntegrationTest extends IntegrationTestSupport {
     private static final int ISSUES = 3_000_000;
 
     private JdbcTemplate jdbcTemplate;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private CouponConsistencyService couponConsistencyService;
 
     /*
      * 앱의 DataSource 를 안 쓴다.
@@ -119,6 +126,26 @@ class SeedDummyDataScriptIntegrationTest extends IntegrationTestSupport {
                 """);
 
         assertThat(상태_종류).isEqualTo(4);
+    }
+
+    /*
+     * 검증 배치를 300만 건 전체에 실제로 태운다.
+     * 요구사항이 "300만 건 전체를 대상으로" 를 요구하므로, 표본으로 도는 것이 아니라 전부 훑고
+     * 끝난다는 것이 확인되어야 한다. 상관 서브쿼리로 짜면 여기서 안 끝난다.
+     *
+     * 다른 시험이 남긴 쿠폰까지 리포트에 들어오므로 더미 쿠폰만 골라 본다.
+     */
+    @Test
+    void 검증_배치가_삼백만_건을_훑고_어긋남을_못_찾는다() {
+        List<Long> 더미_쿠폰 = jdbcTemplate.queryForList(
+                "SELECT coupon_id FROM coupon WHERE name LIKE '더미%'", Long.class);
+
+        CouponConsistencyReport report = couponConsistencyService.verify();
+
+        assertThat(report.stock()).noneMatch(counted -> 더미_쿠폰.contains(counted.couponId()));
+        assertThat(report.seqGaps()).noneMatch(span -> 더미_쿠폰.contains(span.couponId()));
+        assertThat(report.duplicates()).noneMatch(duplicate -> 더미_쿠폰.contains(duplicate.couponId()));
+        assertThat(report.statusHistoryMismatches()).isZero();
     }
 
     private Integer count(String sql) {
