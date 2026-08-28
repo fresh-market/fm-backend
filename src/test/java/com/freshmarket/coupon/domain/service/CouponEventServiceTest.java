@@ -96,6 +96,21 @@ class CouponEventServiceTest {
         verify(seqInitializer).prepare(COUPON_ID, NOW.plusDays(1));
     }
 
+    /*
+     * 마감 시각이 없으면 선착순 쿠폰이 아니다.
+     * 끄는 조건도 키의 수명도 걸 기준이 없어, 열리면 네 키가 아무도 못 지우는 채로 남는다.
+     */
+    @Test
+    void 마감_시각이_없으면_선착순이_아니라_열_수_없다() {
+        // given
+        givenCoupon(limitedCoupon(false, null));
+
+        // when, then
+        assertThatThrownBy(() -> sut.open(COUPON_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.NOT_LIMITED);
+        verifyNoInteractions(seqInitializer);
+    }
+
     // 남이 이미 열었다. 여기서 Redis 를 다시 세우면 도는 이벤트의 카운터를 지운다
     @Test
     void 이미_열린_이벤트는_카운터를_다시_세우지_않는다() {

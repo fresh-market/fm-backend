@@ -131,9 +131,14 @@ public class Coupon extends BaseMutableTimeEntity {
                 null, null, totalQuantity, issueStartAt, issueEndAt, null);
     }
 
-    // 선착순 쿠폰인가. 한정 수량이 있으면 선착순이다
+    /*
+     * 선착순 쿠폰인가. 한정 수량과 마감 시각이 둘 다 있어야 선착순이다.
+     * 수량이 0 초과인 것은 chk_coupon_quantity 와 validateTotalQuantity 가 이미 보장한다.
+     * 마감이 없으면 이벤트를 끄는 조건도 Redis 키의 수명도 걸 기준이 없어, 열리면 네 키가
+     * 아무도 못 지우는 채로 남는다. 그래서 마감 없는 수량 쿠폰은 선착순 경로에 안 들어온다.
+     */
     public boolean isLimited() {
-        return totalQuantity != null;
+        return totalQuantity != null && issueEndAt != null;
     }
 
     /*

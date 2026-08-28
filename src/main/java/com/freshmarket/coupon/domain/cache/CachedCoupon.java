@@ -34,17 +34,28 @@ public record CachedCoupon(long couponId,
                 coupon.isActive());
     }
 
-    /** 수량이 정해진 쿠폰만 선착순 대상이다. */
+    /**
+     * 선착순 대상인가. <b>수량과 마감 시각이 둘 다 있어야 한다.</b>
+     *
+     * <p>마감이 없으면 이벤트를 끄는 조건도 Redis 키의 수명도 걸 기준이 없다. 그런 쿠폰이
+     * 열리면 네 키가 아무도 못 지우는 채로 남으므로, 선착순 경로에 아예 안 들여보낸다.
+     */
     public boolean isLimited() {
-        return totalQuantity != null;
+        return totalQuantity != null && issueEndAt != null;
     }
 
-    /** 발급 창 안인가. 시작이 없으면 열려 있고, 끝이 없으면 소진까지 연다. */
+    /**
+     * 발급 창 안인가. 시작이 없으면 이미 열려 있는 것으로 본다.
+     *
+     * <p><b>마감은 반드시 있다.</b> 부르는 쪽이 {@link #isLimited} 를 먼저 보고 그 판정이
+     * 마감 시각을 요구한다. 그래서 여기에 널 검사를 두지 않는다. 두면 "마감 없는 선착순" 이라는
+     * 없는 규칙을 코드가 말하게 된다.
+     */
     public boolean isIssuableAt(LocalDateTime now) {
         if (issueStartAt != null && now.isBefore(issueStartAt)) {
             return false;
         }
-        return issueEndAt == null || !now.isAfter(issueEndAt);
+        return !now.isAfter(issueEndAt);
     }
 
     /** 대상 등급이 없으면 누구나 받는다. */
