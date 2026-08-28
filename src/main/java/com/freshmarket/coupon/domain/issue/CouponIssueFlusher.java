@@ -11,6 +11,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.freshmarket.coupon.domain.exception.DataAccessFailures;
 import com.freshmarket.coupon.domain.redis.CouponSeqCommitter;
 import com.freshmarket.coupon.domain.repository.MemberCouponBulkRepository;
 import lombok.RequiredArgsConstructor;
@@ -180,9 +181,10 @@ public class CouponIssueFlusher implements SmartLifecycle {
                  * 여기서 반납하면 남이 쓰는 번호를 내줄 수 있으므로 매핑을 그대로 두어, 재시도가 같은
                  * 번호로 오게 한다. 그 회원이 안 돌아오면 pending 이 시간으로 회수한다.
                  */
-                log.warn("event=COUPON_ISSUE_WRITE_FAILED couponId={} memberId={} seq={}",
-                        ticket.couponId(), ticket.memberId(), ticket.issueSeq(), e);
-                ticket.complete(new IssueOutcome.Congested());
+                log.warn("event=COUPON_ISSUE_WRITE_FAILED couponId={} memberId={} seq={} transient={}",
+                        ticket.couponId(), ticket.memberId(), ticket.issueSeq(),
+                        DataAccessFailures.isTransient(e), e);
+                ticket.complete(outcomeFor(e));
             }
         }
         completeIssued(issued);
@@ -200,7 +202,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
             // 가릴 수 없으면 이 메서드는 아무것도 건드리지 않는다. 매핑을 유지하는 쪽이 언제나 안전하다
             log.warn("event=COUPON_ISSUE_CLASSIFY_FAILED couponId={} memberId={}",
                     ticket.couponId(), ticket.memberId(), e);
-            ticket.complete(new IssueOutcome.Congested());
+            ticket.complete(outcomeFor(e));
             return;
         }
 
@@ -256,6 +258,18 @@ public class CouponIssueFlusher implements SmartLifecycle {
                     .put(ticket.memberId(), ticket.issueSeq());
         }
         byCoupon.forEach(committer::markCommitted);
+    }
+
+    /*
+     * 잠시 뒤면 될 실패만 혼잡으로 답한다.
+     * SQL 문법 오류처럼 고쳐야 할 것까지 "잠시 후 다시" 로 덮으면 그 버그가 재시도에 묻힌다.
+     * 그런 것은 실패로 답해 서버 오류로 드러나게 둔다.
+     */
+    private static IssueOutcome outcomeFor(DataAccessException e) {
+        if (DataAccessFailures.isTransient(e)) {
+            return new IssueOutcome.Congested();
+        }
+        return new IssueOutcome.Failed();
     }
 
     private void failAll(List<IssueTicket> batch) {

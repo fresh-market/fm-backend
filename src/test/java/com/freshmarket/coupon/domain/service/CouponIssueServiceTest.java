@@ -38,6 +38,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.BadSqlGrammarException;
+import org.springframework.dao.QueryTimeoutException;
 
 @ExtendWith(MockitoExtension.class)
 class CouponIssueServiceTest {
@@ -218,6 +220,56 @@ class CouponIssueServiceTest {
      * Redis 가 답하지 않거나 회로가 열렸다.
      * 재고는 남아 있을 수 있으므로 소진이 아니고, 큐에도 안 넣는다.
      */
+    @Test
+    void 쿠폰을_못_읽으면_혼잡으로_답한다() {
+        // given
+        when(couponCache.find(COUPON_ID)).thenThrow(new QueryTimeoutException("DB 가 답하지 않는다"));
+
+        // when, then
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
+        verifyNoInteractions(allocator, queue);
+    }
+
+    /*
+     * 이 항목의 핵심이다.
+     * 고쳐야 할 것까지 "잠시 후 다시" 로 덮으면 그 버그가 재시도에 묻혀 배포 뒤에도 안 드러난다.
+     */
+    @Test
+    void SQL_오류는_혼잡으로_덮지_않는다() {
+        // given
+        when(couponCache.find(COUPON_ID))
+                .thenThrow(new BadSqlGrammarException("발급", "SELECT ...", new java.sql.SQLException()));
+
+        // when, then
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .isInstanceOf(BadSqlGrammarException.class);
+    }
+
+    @Test
+    void 회원을_못_읽으면_혼잡으로_답한다() {
+        // given
+        givenCoupon(targetedCoupon(GOLD_GRADE));
+        when(memberApi.findMember(MEMBER_ID)).thenThrow(new QueryTimeoutException("DB 가 답하지 않는다"));
+
+        // when, then
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
+        verifyNoInteractions(allocator);
+    }
+
+    // 플러시가 고쳐야 할 실패를 만났다. 혼잡이 아니라 서버 오류로 드러나야 한다
+    @Test
+    void 플러시가_고칠_실패를_만나면_혼잡으로_답하지_않는다() {
+        // given
+        givenAllocated(new SeqOutcome.Allocated(6));
+        givenFlushResult(new IssueOutcome.Failed());
+
+        // when, then
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
     @Test
     void 순번을_못_받으면_혼잡으로_답하고_큐에_안_넣는다() {
         // given

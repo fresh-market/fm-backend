@@ -12,6 +12,7 @@ import com.freshmarket.coupon.domain.cache.CouponCache;
 import com.freshmarket.coupon.domain.dto.CouponIssueResponse;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
+import com.freshmarket.coupon.domain.exception.DataAccessFailures;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import com.freshmarket.coupon.domain.issue.CouponIssueQueue;
 import com.freshmarket.coupon.domain.issue.IssueOutcome;
@@ -22,6 +23,7 @@ import com.freshmarket.coupon.domain.redis.SeqOutcome;
 import com.freshmarket.member.MemberApi;
 import com.freshmarket.member.MemberInfo;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
 /**
@@ -52,8 +54,7 @@ public class CouponIssueService {
      * @throws CouponException 소진(최종)이거나 혼잡(다시 시도할 값이 있다)일 때
      */
     public CouponIssueResponse issue(long couponId, long memberId) {
-        CachedCoupon coupon = couponCache.find(couponId)
-                .orElseThrow(() -> new CouponException(CouponErrorCode.COUPON_NOT_FOUND));
+        CachedCoupon coupon = findCoupon(couponId);
         verifyIssuable(coupon, memberId);
 
         /*
@@ -72,6 +73,18 @@ public class CouponIssueService {
             // 준비 전이거나 재건 중이다. 재고는 있을 수 있으므로 최종이 아니다
             case SeqOutcome.NotPrepared ignored -> throw new CouponException(CouponErrorCode.CONGESTED);
         };
+    }
+
+    /*
+     * 캐시가 비어 있으면 이 호출이 DB 까지 간다. 이벤트가 도는 동안에는 대개 캐시가 답한다.
+     */
+    private CachedCoupon findCoupon(long couponId) {
+        try {
+            return couponCache.find(couponId)
+                    .orElseThrow(() -> new CouponException(CouponErrorCode.COUPON_NOT_FOUND));
+        } catch (DataAccessException e) {
+            throw congestedIfTransient(e);
+        }
     }
 
     /*
@@ -109,11 +122,27 @@ public class CouponIssueService {
          * memberId 는 검증된 토큰에서 온다. 그런데도 회원이 없다면 발급 이후에 탈퇴한 것이라,
          * 쿠폰이 아니라 자격 증명 쪽의 실패다.
          */
-        MemberInfo member = memberApi.findMember(memberId)
-                .orElseThrow(() -> new CouponException(CommonErrorCode.UNAUTHENTICATED));
+        MemberInfo member;
+        try {
+            member = memberApi.findMember(memberId)
+                    .orElseThrow(() -> new CouponException(CommonErrorCode.UNAUTHENTICATED));
+        } catch (DataAccessException e) {
+            throw congestedIfTransient(e);
+        }
         if (!coupon.isTargetGrade(member.memberGradeId())) {
             throw new CouponException(CouponErrorCode.NOT_TARGET_GRADE);
         }
+    }
+
+    /*
+     * 이 메서드는 잠시 뒤면 될 실패만 혼잡으로 바꾼다.
+     * SQL 문법 오류처럼 고쳐야 할 것까지 덮으면 그 버그가 재시도에 묻혀 안 드러난다.
+     */
+    private RuntimeException congestedIfTransient(DataAccessException e) {
+        if (DataAccessFailures.isTransient(e)) {
+            return new CouponException(CouponErrorCode.CONGESTED, e);
+        }
+        return e;
     }
 
     private CouponIssueResponse record(CachedCoupon coupon, long memberId, int issueSeq) {
@@ -131,6 +160,11 @@ public class CouponIssueService {
                 case IssueOutcome.Issued issued -> CouponIssueResponse.issued(issued.seq());
                 case IssueOutcome.AlreadyIssued already -> CouponIssueResponse.alreadyIssued(already.seq());
                 case IssueOutcome.Congested ignored -> throw new CouponException(CouponErrorCode.CONGESTED);
+                /*
+                 * 다시 시도해도 같을 실패다.
+                 * 혼잡으로 답하면 그 버그가 재시도에 묻히므로 서버 오류로 드러나게 둔다.
+                 */
+                case IssueOutcome.Failed ignored -> throw new IllegalStateException("발급 기록이 실패했다");
             };
         } catch (TimeoutException e) {
             /*

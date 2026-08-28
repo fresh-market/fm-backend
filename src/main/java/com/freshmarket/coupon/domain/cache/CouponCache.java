@@ -3,6 +3,7 @@ package com.freshmarket.coupon.domain.cache;
 import java.time.Clock;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
@@ -66,11 +67,11 @@ public class CouponCache {
     public Optional<CachedCoupon> find(long couponId) {
         CompletableFuture<CachedCoupon> hit = cache.getIfPresent(couponId);
         if (hit != null) {
-            return Optional.ofNullable(hit.join());
+            return Optional.ofNullable(join(hit));
         }
 
-        CachedCoupon loaded = cache.get(couponId,
-                (id, executor) -> CompletableFuture.supplyAsync(() -> load(id), executor)).join();
+        CachedCoupon loaded = join(cache.get(couponId,
+                (id, executor) -> CompletableFuture.supplyAsync(() -> load(id), executor)));
 
         /*
          * 켜진 쿠폰만 남긴다.
@@ -95,6 +96,22 @@ public class CouponCache {
 
     private CachedCoupon load(long couponId) {
         return couponRepository.findById(couponId).map(CachedCoupon::from).orElse(null);
+    }
+
+    /*
+     * 이 메서드가 읽다 난 예외를 CompletableFuture 의 포장 없이 그대로 내보낸다.
+     * 호출자가 CompletionException 을 벗겨 가며 원인을 찾게 두면, 이 클래스가 안에서 future 를
+     * 쓴다는 사실이 계약으로 새어 나간다.
+     */
+    private static CachedCoupon join(CompletableFuture<CachedCoupon> future) {
+        try {
+            return future.join();
+        } catch (CompletionException e) {
+            if (e.getCause() instanceof RuntimeException cause) {
+                throw cause;
+            }
+            throw e;
+        }
     }
 
     private static Ticker clockTicker(Clock clock) {

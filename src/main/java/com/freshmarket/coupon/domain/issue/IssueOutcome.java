@@ -21,7 +21,16 @@ public sealed interface IssueOutcome {
     record AlreadyIssued(int seq) implements IssueOutcome {
     }
 
-    /** 이번에는 못 썼고 다시 시도할 값이 있다. 순번 충돌과 타임아웃이 여기로 온다. */
+    /** 이번에는 못 썼고 다시 시도할 값이 있다. 순번 충돌과 일시적인 DB 실패가 여기로 온다. */
     record Congested() implements IssueOutcome {
+    }
+
+    /**
+     * 다시 시도해도 같을 실패다. SQL 문법 오류처럼 고쳐야 할 것이 여기로 온다.
+     *
+     * <p>{@link Congested} 와 나눈 이유가 있다. 버그까지 "잠시 후 다시" 로 덮으면 그것이
+     * <b>재시도에 묻혀 배포 뒤에도 한참 안 드러난다.</b> 서버 오류로 답해 눈에 띄게 둔다.
+     */
+    record Failed() implements IssueOutcome {
     }
 }

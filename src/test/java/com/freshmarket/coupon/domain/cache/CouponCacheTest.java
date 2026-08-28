@@ -1,6 +1,7 @@
 package com.freshmarket.coupon.domain.cache;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -28,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.QueryTimeoutException;
 
 @ExtendWith(MockitoExtension.class)
 class CouponCacheTest {
@@ -187,6 +189,20 @@ class CouponCacheTest {
 
         // then
         verify(couponRepository, times(1)).findById(COUPON_ID);
+    }
+
+    /*
+     * 캐시가 CompletableFuture 의 포장을 벗겨 내보내는지 본다.
+     * 안 벗기면 호출자의 catch(DataAccessException) 이 CompletionException 에 가려 안 걸린다.
+     */
+    @Test
+    void DB_실패가_포장_없이_그대로_나온다() {
+        // given
+        when(couponRepository.findById(COUPON_ID)).thenThrow(new QueryTimeoutException("DB 가 답하지 않는다"));
+
+        // when, then
+        assertThatThrownBy(() -> sut.find(COUPON_ID))
+                .isInstanceOf(QueryTimeoutException.class);
     }
 
     @Test
