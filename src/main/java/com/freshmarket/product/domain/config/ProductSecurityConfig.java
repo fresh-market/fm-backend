@@ -39,14 +39,21 @@ class ProductSecurityConfig {
                  * 여기서 함께 소유한다.
                  */
                 .securityMatcher("/v1/products", "/v1/products/**", "/v1/products:*", "/v1/categories",
-                        "/v1/admin/products", "/v1/admin/categories", "/v1/admin/categories/*")
+                        "/v1/admin/products", "/v1/admin/categories", "/v1/admin/categories/*",
+                        "/v1/admin/products/*/images:createUploadUrl", "/v1/admin/products/*/images/*")
                 .authorizeHttpRequests(auth -> auth
                         // 목록, 상세, 검색, 카테고리 목록은 비로그인도 본다
                         .requestMatchers(GET,
                                 "/v1/products", "/v1/products/**", "/v1/products:*", "/v1/categories")
                         .permitAll()
-                        // 상품 등록, 카테고리 CRUD는 관리자만 호출한다(SUPER_ADMIN도 RoleHierarchy로 포함됨)
-                        .requestMatchers("/v1/admin/products", "/v1/admin/categories", "/v1/admin/categories/*")
+                        /*
+                         * 상품 등록, 카테고리 CRUD, 이미지 발급·확정·삭제는 관리자만 호출한다(SUPER_ADMIN도
+                         * RoleHierarchy로 포함됨). 이미지 경로(INF-11-11)는 이전엔 이 매처에 없어서
+                         * SecurityConfig의 fallback 체인(anyRequest().authenticated())으로 떨어졌다 —
+                         * 로그인만 하면 회원도 호출할 수 있었다.
+                         */
+                        .requestMatchers("/v1/admin/products", "/v1/admin/categories", "/v1/admin/categories/*",
+                                "/v1/admin/products/*/images:createUploadUrl", "/v1/admin/products/*/images/*")
                                 .hasRole(ADMIN_ROLE)
 
                         .anyRequest().authenticated())
