@@ -2,7 +2,6 @@ package com.freshmarket.admin.domain.dto;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.freshmarket.admin.domain.entity.AdminRole;
 import org.junit.jupiter.api.Test;
 
 class AdminRegistrationRequestTest {
@@ -10,7 +9,7 @@ class AdminRegistrationRequestTest {
     @Test
     void toString은_초기비밀번호와_이름을_노출하지_않는다() {
         AdminRegistrationRequest request = new AdminRegistrationRequest(
-                "admin.lee", "Freshman!2026", "이관리", AdminRole.ADMIN);
+                "admin.lee", "Freshman!2026", "이관리", "ADMIN");
 
         String result = request.toString();
 

@@ -1,6 +1,5 @@
 package com.freshmarket.admin.domain.dto;
 
-import com.freshmarket.admin.domain.entity.AdminRole;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -36,7 +35,10 @@ public record AdminRegistrationRequest(
 
         @Schema(description = "관리자 권한", example = "ADMIN")
         @NotNull(message = "권한을 선택해 주세요.")
-        AdminRole role
+        @Pattern(
+                regexp = "^(ADMIN|SUPER_ADMIN)$",
+                message = "권한은 ADMIN 또는 SUPER_ADMIN이어야 합니다.")
+        String role
 ) {
 
     // record 기본 toString()을 재정의해 초기 비밀번호와 이름이 로그에 노출되지 않도록 마스킹한다.

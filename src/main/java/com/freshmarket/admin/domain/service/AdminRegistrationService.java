@@ -4,6 +4,7 @@ import com.freshmarket.admin.domain.dto.AdminRegistrationRequest;
 import com.freshmarket.admin.domain.dto.AdminRegistrationResponse;
 import com.freshmarket.admin.domain.entity.Admin;
 import com.freshmarket.admin.domain.entity.AdminAuditLog;
+import com.freshmarket.admin.domain.entity.AdminRole;
 import com.freshmarket.admin.domain.exception.AdminErrorCode;
 import com.freshmarket.admin.domain.exception.AdminException;
 import com.freshmarket.admin.domain.repository.AdminAuditLogRepository;
@@ -68,7 +69,8 @@ public class AdminRegistrationService {
             Long issuerAdminId,
             AdminRegistrationRequest request,
             String passwordHash) {
-        Admin admin = Admin.register(request.loginId(), passwordHash, request.name(), request.role());
+        AdminRole role = AdminRole.valueOf(request.role());
+        Admin admin = Admin.register(request.loginId(), passwordHash, request.name(), role);
         Admin saved = adminRepository.saveAndFlush(admin);
 
         adminAuditLogRepository.save(AdminAuditLog.of(

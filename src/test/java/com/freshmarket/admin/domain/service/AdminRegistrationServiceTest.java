@@ -114,6 +114,6 @@ class AdminRegistrationServiceTest {
     }
 
     private static AdminRegistrationRequest request(String loginId) {
-        return new AdminRegistrationRequest(loginId, RAW_PASSWORD, "이관리", AdminRole.ADMIN);
+        return new AdminRegistrationRequest(loginId, RAW_PASSWORD, "이관리", "ADMIN");
     }
 }

@@ -6,7 +6,6 @@ import static org.mockito.Mockito.when;
 
 import com.freshmarket.admin.domain.dto.AdminRegistrationRequest;
 import com.freshmarket.admin.domain.dto.AdminRegistrationResponse;
-import com.freshmarket.admin.domain.entity.AdminRole;
 import com.freshmarket.admin.domain.service.AdminRegistrationService;
 import com.freshmarket.common.auth.CustomUserDetails;
 import com.freshmarket.common.auth.jwt.TokenType;
@@ -24,7 +23,7 @@ class AdminRegistrationControllerTest {
     void 최고관리자_정보와_발급_요청을_서비스에_전달하고_201을_반환한다() {
         CustomUserDetails issuer = new CustomUserDetails(1L, TokenType.ADMIN, "ROLE_SUPER_ADMIN");
         AdminRegistrationRequest request = new AdminRegistrationRequest(
-                "admin.lee", "Freshman!2026", "이관리", AdminRole.ADMIN);
+                "admin.lee", "Freshman!2026", "이관리", "ADMIN");
         AdminRegistrationResponse registered = new AdminRegistrationResponse("admin.lee", "이관리", "ADMIN");
         when(service.register(issuer.getId(), issuer.getRole(), request)).thenReturn(registered);
 
