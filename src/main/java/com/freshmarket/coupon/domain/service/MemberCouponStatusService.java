@@ -21,8 +21,20 @@ import org.springframework.transaction.annotation.Transactional;
  * 한다"</b> 고 못 박은 것이 이 클래스가 지키는 것이다({@code docs/coupon/requirement.md}).
  *
  * <p>전이는 리포지터리의 조건부 갱신이 맡고, 이 클래스는 <b>갱신된 행 수가 0 일 때 그 사유를
- * 가르는 일</b>을 한다. 원인이 셋인데 결과가 같아서, 안 가르면 이미 사용한 쿠폰을 또 쓰려는 정당한
+ * 가르는 일</b>을 한다. 원인이 여럿인데 결과가 같아서, 안 가르면 이미 사용한 쿠폰을 또 쓰려는 정당한
  * 재시도와 남의 쿠폰을 건드리는 요청이 같은 응답을 받는다.
+ *
+ * <p><b>만료는 층이 셋이다.</b> 셋이 하는 일이 서로 달라 하나로 합칠 수 없다.
+ *
+ * <pre>
+ * 사용 조건    정확성.  기간이 지난 것은 표시가 어떻든 안 나간다
+ * 조회 시 해소  표시.    저장된 값이 늦어도 회원에게는 만료로 보인다
+ * 만료 배치    저장된 값을 맞춘다.  정합성 검증과 통계가 읽을 값이다
+ * </pre>
+ *
+ * <p>가운데 층은 아직 없다. 보유 쿠폰 조회 API 를 만들 때 <b>{@code status} 를 그대로 뿌리면
+ * 안 된다.</b> 기간 밖이면 만료로, 기간 안의 {@code CANCELED} 는 사용 가능으로 해소해야 한다
+ * ({@code V1__init_schema.sql} 의 {@code member_coupon.status} 주석).
  */
 @Slf4j
 @Service
@@ -35,6 +47,14 @@ public class MemberCouponStatusService {
      */
     private static final int EXPIRE_CHUNK = 1000;
 
+    /*
+     * 사용으로 갈 수 있는 출발 상태다.
+     * CANCELED 가 여기 있는 것은 주문 취소로 돌려받은 쿠폰이 기간이 남았으면 다시 쓸 수 있어서다.
+     * 한 번에 IN 으로 묶지 않고 하나씩 시도하는 것은 이력의 from_status 를 정확히 알기 위해서다.
+     */
+    private static final List<MemberCouponStatus> USABLE_FROM =
+            List.of(MemberCouponStatus.ISSUED, MemberCouponStatus.CANCELED);
+
     private final MemberCouponRepository memberCouponRepository;
     private final Clock clock;
 
@@ -43,16 +63,23 @@ public class MemberCouponStatusService {
      *
      * <p>이미 사용된 것이면 조용히 끝난다. <b>그것은 실패가 아니라 늦게 도착한 같은 요청</b>이고,
      * 실패로 답하면 재시도한 호출자가 못 쓴 줄 알고 다시 시도한다.
+     *
+     * <p>갱신을 출발 상태별로 나눠 시도한다. 정상 경로는 첫 번째({@code ISSUED})에서 끝나고,
+     * 두 번째는 <b>주문 취소로 돌려받은 쿠폰을 다시 쓰는 경우</b>에만 돈다. 한 문장으로 묶으면
+     * 무엇에서 출발했는지를 갱신 뒤에는 알 수 없어 이력의 {@code from_status} 를 못 채운다.
      */
     @Transactional
     public void use(long memberCouponId, long memberId) {
+        LocalDate today = LocalDate.now(clock);
         LocalDateTime now = LocalDateTime.now(clock);
-        if (memberCouponRepository.markUsed(memberCouponId, memberId, now) == 1) {
-            memberCouponRepository.recordTransition(memberCouponId,
-                    MemberCouponStatus.ISSUED.name(), MemberCouponStatus.USED.name(), "주문에서 사용", now);
-            return;
+        for (MemberCouponStatus from : USABLE_FROM) {
+            if (memberCouponRepository.markUsed(memberCouponId, memberId, from.name(), today, now) == 1) {
+                memberCouponRepository.recordTransition(memberCouponId,
+                        from.name(), MemberCouponStatus.USED.name(), "주문에서 사용", now);
+                return;
+            }
         }
-        verifyAlready(memberCouponId, memberId, MemberCouponStatus.USED);
+        verifyUsable(memberCouponId, memberId, today);
     }
 
     /**
@@ -73,25 +100,52 @@ public class MemberCouponStatusService {
     }
 
     /**
-     * 0행의 사유를 가른다.
+     * 사용이 0행으로 끝난 사유를 가른다.
      *
      * <pre>
      * 행이 없다        남의 것이거나 없다.  둘을 가르지 않는다
-     * 이미 그 상태다    늦게 도착한 같은 요청이다.  조용히 끝낸다
+     * 이미 사용됐다     늦게 도착한 같은 요청이다.  조용히 끝낸다
+     * 기간 밖이다      만료 표시가 아직 안 붙었어도 쓸 수 없다
      * 그 밖의 상태다    지금 상태에서 할 수 없는 전이다
      * </pre>
      *
-     * <p>0행일 때만 도는 경로라 정상 흐름에 읽기가 하나 더 붙지 않는다.
+     * <p>이미 사용된 것인지를 <b>기간보다 먼저</b> 본다. 순서를 뒤집으면 사용한 뒤 기간이 지난
+     * 쿠폰에서 같은 요청의 재시도가 기간 오류를 받는다. 그 요청은 이미 반영된 것이라 성공이다.
+     */
+    private void verifyUsable(long memberCouponId, long memberId, LocalDate today) {
+        String status = readStatus(memberCouponId, memberId);
+        if (MemberCouponStatus.USED.name().equals(status)) {
+            log.info("event=MEMBER_COUPON_ALREADY_IN_STATE memberCouponId={} status={}",
+                    memberCouponId, MemberCouponStatus.USED);
+            return;
+        }
+        if (memberCouponRepository.countWithinValidPeriod(memberCouponId, today) == 0) {
+            throw new CouponException(CouponErrorCode.NOT_USABLE_PERIOD);
+        }
+        throw new CouponException(CouponErrorCode.INVALID_STATUS_TRANSITION);
+    }
+
+    /**
+     * 사용 철회가 0행으로 끝난 사유를 가른다.
+     *
+     * <p>여기서는 유효기간을 안 본다. <b>주문 취소는 쿠폰 기간이 지난 뒤에도 일어난다.</b>
+     * 기간을 조건에 넣으면 늦게 취소된 주문이 쿠폰을 영영 못 돌려준다.
      */
     private void verifyAlready(long memberCouponId, long memberId, MemberCouponStatus target) {
+        String status = readStatus(memberCouponId, memberId);
+        if (!target.name().equals(status)) {
+            throw new CouponException(CouponErrorCode.INVALID_STATUS_TRANSITION);
+        }
+        log.info("event=MEMBER_COUPON_ALREADY_IN_STATE memberCouponId={} status={}", memberCouponId, target);
+    }
+
+    // 0행일 때만 도는 경로라 정상 흐름에 읽기가 하나 더 붙지 않는다
+    private String readStatus(long memberCouponId, long memberId) {
         List<String> found = memberCouponRepository.findStatus(memberCouponId, memberId);
         if (found.isEmpty()) {
             throw new CouponException(CouponErrorCode.MEMBER_COUPON_NOT_FOUND);
         }
-        if (!target.name().equals(found.get(0))) {
-            throw new CouponException(CouponErrorCode.INVALID_STATUS_TRANSITION);
-        }
-        log.info("event=MEMBER_COUPON_ALREADY_IN_STATE memberCouponId={} status={}", memberCouponId, target);
+        return found.get(0);
     }
 
     /**

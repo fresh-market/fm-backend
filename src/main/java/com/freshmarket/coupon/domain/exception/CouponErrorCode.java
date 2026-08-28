@@ -39,7 +39,12 @@ public enum CouponErrorCode implements ErrorCode {
      * 지금 상태에서 그 전이가 허용되지 않는다.
      * 이미 그 상태인 경우는 여기 오지 않는다. 그것은 늦게 도착한 같은 요청이라 성공으로 답한다.
      */
-    INVALID_STATUS_TRANSITION(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-010", "지금 상태에서는 할 수 없는 처리입니다.");
+    INVALID_STATUS_TRANSITION(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-010", "지금 상태에서는 할 수 없는 처리입니다."),
+    /*
+     * 상태는 쓸 수 있는데 쿠폰의 사용 유효기간 밖이다.
+     * 만료 배치가 아직 표시를 못 옮겼어도 이 쿠폰은 쓸 수 없다.
+     */
+    NOT_USABLE_PERIOD(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-011", "지금은 사용할 수 있는 기간이 아닙니다.");
 
     private final HttpStatus httpStatus;
     private final String code;

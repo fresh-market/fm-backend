@@ -122,6 +122,45 @@ class MemberCouponStatusIntegrationTest extends IntegrationTestSupport {
         assertThat(historyCount()).isEqualTo(2);
     }
 
+    /*
+     * 만료 배치가 아직 안 돌아 표시가 ISSUED 로 남아 있는 창이다.
+     * 상태만 조건에 넣으면 이 창에서 만료된 쿠폰이 쓰인다.
+     */
+    @Test
+    void 기간이_지났으면_표시가_ISSUED_여도_못_쓴다() {
+        기간을_넘긴다();
+
+        assertThatThrownBy(() -> sut.use(memberCouponId, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.NOT_USABLE_PERIOD);
+
+        assertThat(status()).isEqualTo("ISSUED");
+        assertThat(historyCount()).isZero();
+    }
+
+    // 주문 취소로 돌려받은 쿠폰은 기간이 남았으면 다시 쓸 수 있다
+    @Test
+    void 철회한_쿠폰을_다시_쓴다() {
+        sut.use(memberCouponId, MEMBER_ID);
+        sut.cancelUse(memberCouponId, MEMBER_ID);
+
+        sut.use(memberCouponId, MEMBER_ID);
+
+        assertThat(status()).isEqualTo("USED");
+        assertThat(historyCount()).isEqualTo(3);
+        assertThat(마지막_전이()).isEqualTo("CANCELED");
+    }
+
+    // 주문 취소는 쿠폰 기간이 지난 뒤에도 일어난다. 여기에 기간을 걸면 쿠폰을 영영 못 돌려준다
+    @Test
+    void 기간이_지나도_사용을_철회할_수_있다() {
+        sut.use(memberCouponId, MEMBER_ID);
+        기간을_넘긴다();
+
+        sut.cancelUse(memberCouponId, MEMBER_ID);
+
+        assertThat(status()).isEqualTo("CANCELED");
+    }
+
     @Test
     void 쓰지_않은_것은_철회할_수_없다() {
         assertThatThrownBy(() -> sut.cancelUse(memberCouponId, MEMBER_ID))
@@ -137,20 +176,32 @@ class MemberCouponStatusIntegrationTest extends IntegrationTestSupport {
 
     @Test
     void 만료가_상태와_이력을_함께_바꾼다() {
-        /*
-         * 유효기간은 coupon 이 갖는다. V30 이 발급 시점 복사본을 걷어냈다.
-         * chk_coupon_valid_period 가 시작일과 종료일의 순서를 묶고 있어 둘을 함께 옮긴다.
-         */
-        jdbcTemplate.update("""
-                UPDATE coupon SET valid_from = '2019-01-01', valid_to = '2020-01-01'
-                 WHERE coupon_id = ?
-                """, COUPON_ID);
+        기간을_넘긴다();
 
         // 만료 배치는 이 시험의 행만 보지 않는다. 다른 시험이 남긴 행까지 세므로 개수를 못 박지 않는다
         assertThat(sut.expireOverdueChunk()).isPositive();
 
         assertThat(status()).isEqualTo("EXPIRED");
         assertThat(historyCount()).isEqualTo(1);
+    }
+
+    /*
+     * 유효기간은 coupon 이 갖는다. V30 이 발급 시점 복사본을 걷어냈다.
+     * chk_coupon_valid_period 가 시작일과 종료일의 순서를 묶고 있어 둘을 함께 옮긴다.
+     */
+    private void 기간을_넘긴다() {
+        jdbcTemplate.update("""
+                UPDATE coupon SET valid_from = '2019-01-01', valid_to = '2020-01-01'
+                 WHERE coupon_id = ?
+                """, COUPON_ID);
+    }
+
+    private String 마지막_전이() {
+        return jdbcTemplate.queryForObject("""
+                SELECT from_status FROM member_coupon_status_history
+                 WHERE member_coupon_id = ?
+                 ORDER BY member_coupon_status_history_id DESC LIMIT 1
+                """, String.class, memberCouponId);
     }
 
     private String status() {

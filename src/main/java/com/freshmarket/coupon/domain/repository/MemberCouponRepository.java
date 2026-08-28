@@ -31,23 +31,49 @@ import org.springframework.transaction.annotation.Transactional;
 public interface MemberCouponRepository extends JpaRepository<MemberCoupon, Long> {
 
     /**
-     * 발급분을 사용 처리한다. 지금 {@code ISSUED} 일 때만 바뀐다.
+     * 발급분을 사용 처리한다. 넘긴 상태에서 출발하고 <b>쿠폰의 사용 유효기간 안일 때만</b> 바뀐다.
      *
      * <p>{@code memberId} 를 조건에 넣는 것이 소유권 검증이다. 남의 발급분 번호를 실어 보내도
      * 조건이 안 맞아 0행이 되고, 그 0행은 "없음" 과 구분되지 않는다.
      *
-     * @return 1 이면 이번 요청이 바꿨다. 0 이면 이미 바뀌었거나 쓸 수 없는 상태이거나 없다
+     * <p><b>유효기간을 여기에 넣는 것이 만료의 정확성을 지킨다.</b> 만료 배치는 하루에 한 번
+     * 돌아서 기간이 지난 발급분이 한동안 {@code ISSUED} 로 남아 있다. 상태만 보면 그 창 동안
+     * 만료된 쿠폰이 쓰인다. 배치는 저장된 표시를 맞추는 일만 하고, 쓸 수 있는지는 이 조건이 답한다.
+     *
+     * @return 1 이면 이번 요청이 바꿨다. 0 이면 이미 바뀌었거나 쓸 수 없거나 없다
      */
     @Modifying(clearAutomatically = true)
     @Transactional
     @Query(value = """
-            UPDATE member_coupon
-               SET status = 'USED', used_at = :now, updated_at = :now
-             WHERE member_coupon_id = :memberCouponId AND member_id = :memberId AND status = 'ISSUED'
+            UPDATE member_coupon mc
+              JOIN coupon c ON c.coupon_id = mc.coupon_id
+               SET mc.status = 'USED', mc.used_at = :now, mc.updated_at = :now
+             WHERE mc.member_coupon_id = :memberCouponId AND mc.member_id = :memberId
+               AND mc.status = :fromStatus
+               AND c.valid_from <= :today AND c.valid_to >= :today
             """, nativeQuery = true)
     int markUsed(@Param("memberCouponId") long memberCouponId,
                  @Param("memberId") long memberId,
+                 @Param("fromStatus") String fromStatus,
+                 @Param("today") LocalDate today,
                  @Param("now") LocalDateTime now);
+
+    /**
+     * 지금 이 발급분이 쿠폰의 사용 유효기간 안에 있는지 센다.
+     *
+     * <p>0행의 사유를 가를 때만 쓴다. 쓸 수 있는지를 실제로 정하는 것은
+     * {@link #markUsed} 의 조건이고, 이 조회는 <b>어떤 오류로 답할지만 고른다.</b>
+     *
+     * @return 1 이면 기간 안이다
+     */
+    @Query(value = """
+            SELECT COUNT(*)
+              FROM member_coupon mc
+              JOIN coupon c ON c.coupon_id = mc.coupon_id
+             WHERE mc.member_coupon_id = :memberCouponId
+               AND c.valid_from <= :today AND c.valid_to >= :today
+            """, nativeQuery = true)
+    int countWithinValidPeriod(@Param("memberCouponId") long memberCouponId, @Param("today") LocalDate today);
 
     /**
      * 주문이 취소되어 사용을 철회한다. 지금 {@code USED} 일 때만 바뀐다.
