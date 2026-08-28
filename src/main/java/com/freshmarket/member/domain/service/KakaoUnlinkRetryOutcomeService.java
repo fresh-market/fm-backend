@@ -3,6 +3,7 @@ package com.freshmarket.member.domain.service;
 import com.freshmarket.common.logging.PiiMasker;
 import com.freshmarket.member.domain.entity.KakaoUnlinkFailure;
 import com.freshmarket.member.domain.repository.KakaoUnlinkFailureRepository;
+import com.freshmarket.member.domain.repository.MemberRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -22,24 +23,19 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 public class KakaoUnlinkRetryOutcomeService {
 
     private final KakaoUnlinkFailureRepository failureRepository;
+    private final MemberRepository memberRepository;
 
     @Transactional
     public void markSucceeded(Long failureId) {
-        failureRepository.deleteById(failureId);
-    }
-
-    /**
-     * (2026-08-27, PR 리뷰 P1) 카카오 4xx(429 제외) 거절 전용 — markFailed()처럼 attemptCount를
-     * 한 칸씩 깎지 않고 markRejected()로 바로 포기 상태로 만든다. 재시도해도 같은 결과가
-     * 반복될 실패를 굳이 5번 두드리게 할 이유가 없다.
-     */
-    @Transactional
-    public void markRejected(Long failureId, Exception cause) {
         failureRepository.findById(failureId).ifPresent(failure -> {
-            failure.markRejected();
-            log.error("event=KAKAO_UNLINK_OUTBOX_REJECTED memberId={} kakaoUserId={} — 카카오 4xx 거절, "
-                            + "재시도 없이 즉시 포기 처리",
-                    failure.getMemberId(), PiiMasker.maskProviderId(failure.getKakaoUserId()), cause);
+            int updated = memberRepository.markWithdrawnAfterUnlink(failure.getMemberId());
+            if (updated == 1) {
+                failureRepository.delete(failure);
+            } else {
+                log.warn("event=KAKAO_UNLINK_RETRY_STATUS_NOT_UPDATED failureId={} memberId={} — "
+                                + "WITHDRAWN_FAILED 상태가 아니어서 아웃박스를 유지함",
+                        failureId, failure.getMemberId());
+            }
         });
     }
 
@@ -48,17 +44,9 @@ public class KakaoUnlinkRetryOutcomeService {
         failureRepository.findById(failureId).ifPresent(failure -> {
             failure.markRetryFailed();
             String causeType = rootCauseType(cause);
-            if (failure.shouldGiveUp()) {
-                // (DI-6-02) 이 지점부턴 "조용히"가 아니다 — 우리 DB는 WITHDRAWN인데 카카오는
-                // 연결이 살아있는 상태로 굳을 수 있는 컴플라이언스 문제라 사람이 봐야 한다.
-                log.error("event=KAKAO_UNLINK_OUTBOX_GAVE_UP memberId={} kakaoUserId={} attempts={} causeType={}",
-                        failure.getMemberId(), PiiMasker.maskProviderId(failure.getKakaoUserId()),
-                        failure.getAttemptCount(), causeType, cause);
-            } else {
-                log.warn("event=KAKAO_UNLINK_OUTBOX_RETRY_FAILED memberId={} kakaoUserId={} attempts={} causeType={}",
-                        failure.getMemberId(), PiiMasker.maskProviderId(failure.getKakaoUserId()),
-                        failure.getAttemptCount(), causeType, cause);
-            }
+            log.warn("event=KAKAO_UNLINK_OUTBOX_RETRY_FAILED memberId={} kakaoUserId={} attempts={} causeType={}",
+                    failure.getMemberId(), PiiMasker.maskProviderId(failure.getKakaoUserId()),
+                    failure.getAttemptCount(), causeType, cause);
         });
     }
 

@@ -2,6 +2,7 @@ package com.freshmarket.member.domain.service;
 
 import com.freshmarket.member.domain.entity.Member;
 import com.freshmarket.member.domain.entity.SocialType;
+import com.freshmarket.member.domain.client.KakaoUnlinkClient;
 import com.freshmarket.member.domain.oauth.KakaoIdTokenExchanger;
 import com.freshmarket.member.domain.repository.MemberRepository;
 import com.freshmarket.member.domain.exception.AuthErrorCode;
@@ -17,8 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
 // docs/api/member.md 기준 "탈퇴 전 카카오 재인증" 요구사항을 검증 단계로 구현한다.
 /**
  * 회원탈퇴 유스케이스. 순서: 0) 카카오 재인증(id_token) 검증 — 본인 계정인지 확인
- * 1) DB 상태 변경(WITHDRAWN) 2) refreshToken 삭제 3) accessTokenValidAfter 커트라인 등록
- * 4) 카카오 unlink는 AFTER_COMMIT 이벤트로 미룸(KakaoUnlinkEventListener).
+ * 1) DB 상태 변경(WITHDRAWN) 2) refreshToken 삭제 3) 카카오 unlink 호출
+ * 4) unlink 실패 시 WITHDRAWN_FAILED와 아웃박스를 기록하고 실패 응답.
  */
 @Slf4j
 @Service
@@ -31,6 +32,8 @@ public class MemberWithdrawalService {
     private final MemberTokenService memberTokenService;
     private final KakaoIdTokenExchanger kakaoIdTokenExchanger;
     private final MemberWithdrawalCompletionService memberWithdrawalCompletionService;
+    private final KakaoUnlinkClient kakaoUnlinkClient;
+    private final KakaoUnlinkRetryService kakaoUnlinkRetryService;
 
     // (2026-08-19) 예전엔 이 메서드 전체가 @Transactional이었다 — 카카오 재인증(동기 네트워크
     // 호출)까지 DB 트랜잭션 안에서 일어나 응답 대기 동안 커넥션이 묶였다(DI-4-02). login()과
@@ -52,7 +55,18 @@ public class MemberWithdrawalService {
 
         verifyReauth(member, authorizationCode, state);
 
-        memberWithdrawalCompletionService.complete(memberId, member.getProviderUserId(), member.getRole().name(), reason);
+        // 애플리케이션 탈퇴와 토큰 폐기는 먼저 짧은 DB 트랜잭션으로 끝낸다. 외부 호출을 그
+        // 트랜잭션에 넣으면 카카오 응답을 기다리는 동안 커넥션을 붙잡게 된다.
+        memberWithdrawalCompletionService.complete(memberId, member.getRole().name(), reason);
+
+        try {
+            kakaoUnlinkClient.unlink(member.getProviderUserId());
+        } catch (Exception e) {
+            // 카카오 unlink 실패는 사용자에게 실패로 응답하되, 이미 끝난 애플리케이션 탈퇴를
+            // WITHDRAWN_FAILED로 표시하고 아웃박스에 남겨 매일 03시에만 재시도한다.
+            kakaoUnlinkRetryService.recordInitialFailure(memberId, member.getProviderUserId());
+            throw e;
+        }
     }
 
     // GET /v1/auth/kakao/authorize?reauth=true 로 받은 code/state를 로그인 때와 같은 방식으로

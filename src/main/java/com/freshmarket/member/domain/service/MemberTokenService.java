@@ -224,11 +224,9 @@ public class MemberTokenService {
 
     /**
      * 로그아웃/탈퇴 시 토큰 폐기. logoutExternalSession=true면 카카오 세션도 끊는다(일반
-     * /members/logout에서만 true — 탈퇴 흐름은 카카오 unlink를 MemberWithdrawalEvent로 별도
-     * 처리하므로 여기서는 false로 호출한다). 카카오 로그아웃 자체는 MemberLogoutEvent로 커밋
-     * 이후에 호출한다(KakaoLogoutEventListener) — MemberWithdrawalEvent/KakaoUnlinkEventListener와
-     * 같은 이유(DI-4-02): @Transactional 안에서 동기로 부르면 카카오 응답 대기 동안 DB 커넥션이
-     * 묶인다.
+     * /members/logout에서만 true — 탈퇴 흐름의 카카오 unlink는 MemberWithdrawalService가 DB
+     * 탈퇴 트랜잭션 밖에서 호출하므로 여기서는 false로 호출한다). 카카오 로그아웃 자체는
+     * MemberLogoutEvent로 커밋 이후에 호출한다(KakaoLogoutEventListener).
      *
      * (2026-08-19 추가) 보조 인덱스(findActiveHash)가 Redis 축출/재시작으로 유실됐으면 DB 백업
      * (Member.refreshTokenHash)에서 해시를 구해 대신 지운다 — 그래야 그 해시가 자기 TTL로 자연
