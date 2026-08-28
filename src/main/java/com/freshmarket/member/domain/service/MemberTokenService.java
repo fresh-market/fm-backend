@@ -109,7 +109,6 @@ public class MemberTokenService {
                     memberId, role);
         } else {
             response.addHeader(HttpHeaders.SET_COOKIE, authCookieFactory.refreshTokenCookie(refreshToken, rememberMe).toString());
-            log.warn("event=REDIS_SAVE_FAILED role={} id={} cause={} — DB 백업만 반영됨", role, memberId, RedisFailureClassifier.causeLabel(e), e);
         }
         // (2026-08-18 16:20) accessToken도 다시 쿠키로 내려준다(요청에 따라 헤더 방식에서 되돌림).
         response.addHeader(HttpHeaders.SET_COOKIE, authCookieFactory.accessTokenCookie(accessToken).toString());
