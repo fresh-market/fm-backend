@@ -24,7 +24,12 @@ import org.springframework.jdbc.datasource.init.ScriptUtils;
  *
  * 스크립트를 클래스당 한 번만 돌린다. 400만 행을 넣는 준비를 시험마다 다시 할 이유가 없다.
  */
-@SpringBootTest
+/*
+ * 전역 socketTimeout 10초를 이 시험에서만 푼다.
+ * 검증 배치가 300만 행을 통째로 훑도록 만든 것이라 그 한 문장이 10초를 넘긴다.
+ * 운영에서는 application-batch.yml 이 같은 이유로 300초를 준다.
+ */
+@SpringBootTest(properties = "spring.datasource.hikari.data-source-properties.socketTimeout=300000")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class SeedDummyDataScriptIntegrationTest extends IntegrationTestSupport {
 
