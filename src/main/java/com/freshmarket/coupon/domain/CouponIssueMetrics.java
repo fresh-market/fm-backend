@@ -24,17 +24,17 @@ public class CouponIssueMetrics {
 
     private static final String RESULTS = "coupon.issue.results";
 
-    private final Map<IssueResult, Counter> results;
+    private final Map<IssueResult, Counter> countersByResult;
 
     public CouponIssueMetrics(MeterRegistry registry, CouponIssueQueue queue, CouponCache couponCache) {
         registerQueueSize(registry, queue);
         registerCacheStats(registry, couponCache);
-        this.results = registerResults(registry);
+        this.countersByResult = registerResults(registry);
     }
 
     /** 발급 한 건이 어떻게 끝났는지 센다. 서비스가 모든 갈래에서 부른다. */
     public void record(IssueResult result) {
-        results.get(result).increment();
+        countersByResult.get(result).increment();
     }
 
     /*

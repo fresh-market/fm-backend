@@ -1,6 +1,7 @@
 package com.freshmarket.coupon.domain.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -193,7 +194,10 @@ class CouponEventServiceTest {
         verify(couponRepository, never()).deactivateIfClosable(anyLong(), any(), any());
     }
 
-    // 확인과 갱신 사이에 남이 껐다. 결과가 같으므로 실패로 답하지 않는다
+    /*
+     * 확인과 갱신 사이에 남이 껐다. 결과가 같으므로 실패로 답하지 않는다.
+     * 다만 이 호출이 끈 것은 아니므로 발급 수를 맞추거나 키를 치우지도 않아야 한다.
+     */
     @Test
     void 끄는_사이에_남이_먼저_꺼도_실패로_답하지_않는다() {
         // given
@@ -201,7 +205,9 @@ class CouponEventServiceTest {
         when(couponRepository.deactivateIfClosable(eq(COUPON_ID), any(), any())).thenReturn(0);
 
         // when, then
-        sut.close(COUPON_ID);
+        assertThatCode(() -> sut.close(COUPON_ID)).doesNotThrowAnyException();
+        verify(couponRepository, never()).syncIssuedQuantity(anyLong());
+        verifyNoInteractions(seqInitializer);
     }
 
     @Test
