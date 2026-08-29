@@ -32,6 +32,8 @@ spring:
       minimum-idle: 1
 
       data-source-properties:
+        # 이 값이 무엇을 재는지는 application.yml 의 hikari 블록에 적어 두었다.
+        #
         # 배치는 전역 기본값 10초로 못 산다. 정합성 검증이 member_coupon 300만 행과
         # 이력 420만 행을 통째로 훑도록 만든 배치라, 그 한 문장이 10초를 넘긴다.
         # 로컬에서 12초였고 CI 러너에서는 그보다 느려 실제로 끊겼다.
