@@ -68,7 +68,7 @@ public class CouponIssueService {
         /*
          * DB 회로가 열려 있으면 이 메서드는 순번을 받지 않고 여기서 끊는다.
          * DB 가 죽어도 Redis 는 멀쩡해서 순번 확보 회로는 안 열리기 때문에, 이 확인이 없으면
-         * 요청마다 번호를 태우고 요청 예산 2초를 다 기다린 뒤에야 실패한다.
+         * 요청마다 번호를 태우고 요청 예산을 다 기다린 뒤에야 실패한다.
          */
         if (!writeCircuit.acceptsWrites()) {
             throw congested(IssueResult.WRITE_CIRCUIT);
