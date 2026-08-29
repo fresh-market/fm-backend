@@ -8,6 +8,7 @@ import com.freshmarket.coupon.domain.cache.CouponCache;
 import com.freshmarket.coupon.domain.entity.Coupon;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
+import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
 import com.freshmarket.coupon.domain.redis.CouponSeqInitializer;
 import com.freshmarket.coupon.domain.repository.CouponRepository;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,7 @@ public class CouponEventService {
 
     private final CouponRepository couponRepository;
     private final CouponSeqInitializer seqInitializer;
+    private final CouponSeqAllocator allocator;
     private final CouponCache couponCache;
     private final Clock clock;
 
@@ -66,6 +68,13 @@ public class CouponEventService {
             return;
         }
         seqInitializer.prepare(couponId, coupon.getIssueEndAt());
+        /*
+         * 순번 확보 스크립트를 Redis 서버에 미리 올려 둔다.
+         * 안 올려 두면 이벤트의 첫 요청이 EVALSHA 로 튕긴 뒤 EVAL 로 다시 보내, 발급이 가장
+         * 몰리는 순간에 왕복 하나와 예외 하나를 더 문다. 실패해도 던지지 않으므로 이벤트
+         * 열기가 이것 때문에 되돌아가지 않는다.
+         */
+        allocator.preloadScript();
         couponCache.evict(couponId);
         log.info("event=COUPON_EVENT_OPENED couponId={} issueEndAt={}", couponId, coupon.getIssueEndAt());
     }

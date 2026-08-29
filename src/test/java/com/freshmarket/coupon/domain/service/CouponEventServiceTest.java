@@ -25,6 +25,7 @@ import com.freshmarket.coupon.domain.entity.DiscountType;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.cache.CouponCache;
+import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
 import com.freshmarket.coupon.domain.redis.CouponSeqInitializer;
 import com.freshmarket.coupon.domain.repository.CouponRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,6 +48,9 @@ class CouponEventServiceTest {
     private CouponSeqInitializer seqInitializer;
 
     @Mock
+    private CouponSeqAllocator allocator;
+
+    @Mock
     private CouponCache couponCache;
 
     private CouponEventService sut;
@@ -54,7 +58,7 @@ class CouponEventServiceTest {
     @BeforeEach
     void setUp() {
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
-        sut = new CouponEventService(couponRepository, seqInitializer, couponCache, fixed);
+        sut = new CouponEventService(couponRepository, seqInitializer, allocator, couponCache, fixed);
     }
 
     @Test
@@ -95,6 +99,8 @@ class CouponEventServiceTest {
 
         // then
         verify(seqInitializer).prepare(COUPON_ID, NOW.plusDays(1));
+        // 첫 요청이 EVALSHA 로 튕기지 않게 스크립트를 미리 올려 둔다
+        verify(allocator).preloadScript();
     }
 
     /*

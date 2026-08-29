@@ -2,6 +2,7 @@ package com.freshmarket.coupon.domain.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -12,7 +13,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 
 /*
  * 순번 확보 스크립트와 그 래퍼를 실제 Valkey 로 검증한다.
@@ -85,6 +89,37 @@ class CouponSeqAllocatorIntegrationTest extends IntegrationTestSupport {
 
         assertThat(남은_수명(SEQ)).isEqualTo(-1L);
         assertThat(남은_수명(PENDING)).isEqualTo(-1L);
+    }
+
+    /*
+     * 앱은 스크립트 본문을 자기 힙에 들고 있을 뿐 서버에 올려 두지는 않는다.
+     * 스프링이 EVALSHA 를 먼저 시도하고 서버가 그 sha 를 모르면 NOSCRIPT 로 튕긴 뒤 EVAL 로
+     * 다시 보내는데, 그 대가를 이벤트의 첫 요청이 문다. 발급이 가장 몰리는 순간이다.
+     */
+    @Test
+    void 이벤트를_열_때_스크립트를_서버에_올려_둔다() throws Exception {
+        String sha = 스크립트_sha();
+        redisTemplate.execute((RedisCallback<Object>) connection -> {
+            connection.scriptingCommands().scriptFlush();
+            return null;
+        });
+        assertThat(서버가_아는가(sha)).isFalse();
+
+        allocator.preloadScript();
+
+        assertThat(서버가_아는가(sha)).isTrue();
+    }
+
+    private String 스크립트_sha() throws Exception {
+        try (var in = new ClassPathResource("redis/scripts/coupon-issue-seq.lua").getInputStream()) {
+            return RedisScript.of(new String(in.readAllBytes(), StandardCharsets.UTF_8), String.class).getSha1();
+        }
+    }
+
+    private boolean 서버가_아는가(String sha) {
+        List<Boolean> found = redisTemplate.execute((RedisCallback<List<Boolean>>) connection ->
+                connection.scriptingCommands().scriptExists(sha));
+        return found != null && !found.isEmpty() && Boolean.TRUE.equals(found.get(0));
     }
 
     @Test
