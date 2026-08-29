@@ -1,0 +1,54 @@
+# 이 파일을 프로젝트 루트에 application-local.yml 로 복사해서 필요한 줄만 주석을 풀고 채운다.
+# application-local.yml 은 .gitignore 로 막혀 있어 실제 값을 그대로 적어도 커밋되지 않는다.
+#
+#   cp application-local.yml.example application-local.yml
+#
+# [중요] 여기 있는 키가 "존재"하기만 하면 값이 무엇이든(빈 문자열 포함) 셸 환경변수보다
+# 우선순위가 높아 무조건 이긴다. 그래서 규칙은 둘 중 하나다:
+#   - 이 파일로 채우고 싶다   -> 주석을 풀고 실제 값을 적는다
+#   - 환경변수로 채우고 싶다  -> 그 줄을 주석 상태로 남긴다(빈 문자열로 두지 않는다)
+# 아무 줄도 안 풀면 이 파일은 존재해도 아무것도 덮어쓰지 않는다 — application.yml 의 기본값이나
+# 셸 환경변수가 그대로 산다.
+#
+# .env 와 역할이 다르다: .env 는 Docker Compose(MySQL/Redis 컨테이너)만 관여하고, 이 파일은
+# Spring(애플리케이션)이 직접 쓰는 값만 담당한다. 인프라 값을 여기 적어도 Compose 는 못 본다.
+
+spring:
+  # 로컬 MySQL 이 이미 3306 을 쓰고 있어서 도커 컨테이너를 다른 포트로 띄운 경우에만 채운다.
+  # .env 의 MYSQL_PORT 를 바꿨다면 여기 포트 번호도 맞춰야 한다.
+  # datasource:
+  #   url: "jdbc:mysql://localhost:3307/freshmarket?serverTimezone=UTC&characterEncoding=UTF-8"
+
+  security:
+    oauth2:
+      client:
+        registration:
+          # 회원 로그인(카카오 OIDC). 카카오 개발자 콘솔의 내 애플리케이션 > 앱 키 / 카카오
+          # 로그인에서 확인한다. redirect-uri 는 카카오 개발자 콘솔에 등록한 값과 정확히 같아야
+          # 한다(docs/api/auth.md: 카카오가 이 주소로 code 를 붙여 302 리다이렉트하면 프론트가
+          # 받아서 백엔드로 넘긴다).
+          # kakao:
+          #   client-id: ""
+          #   client-secret: ""
+          #   redirect-uri: "http://localhost:5173/oauth/callback"
+
+# 연결 해제 웹훅 검증, 로그아웃 시 카카오 로그아웃 API 호출에 쓰는 어드민 키
+# kakao:
+#   app-id: ""
+#   admin-key: ""
+
+# 회원 JWT 서명 키. 최소 32바이트(HS256 기준) 이상의 랜덤 값이어야 한다 — PowerShell:
+#   [Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(64))
+# jwt:
+#   secret: ""
+#   # 기본값: access 30분(1800000ms), refresh 14일(1209600000ms) — docs/api/auth.md 기준
+#   access-token-validity-ms: 1800000
+#   refresh-token-validity-ms: 1209600000
+#   cookie:
+#     # 로컬은 http 라 꺼둔다. 운영(https)에서는 반드시 true 로
+#     secure: false
+
+# 프론트 배포 주소. CORS 허용 오리진으로 쓰인다(쉼표로 여러 개 가능)
+# app:
+#   cors:
+#     allowed-origins: "http://localhost:5173"

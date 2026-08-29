@@ -3,9 +3,12 @@ package com.freshmarket;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.freshmarket.common.auth.jwt.JwtTokenProvider;
+import com.freshmarket.common.auth.jwt.TokenType;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +33,9 @@ class SecurityAuthorizationIntegrationTest extends IntegrationTestSupport {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private JwtTokenProvider jwtTokenProvider;
 
     @Test
     void 상품_목록은_비로그인도_연다() throws Exception {
@@ -90,6 +96,120 @@ class SecurityAuthorizationIntegrationTest extends IntegrationTestSupport {
     @Test
     void 어느_도메인도_주장하지_않는_경로는_막힌다() throws Exception {
         mockMvc.perform(get("/v1/admin/categories"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    /*
+     * 관리자 경로에 로그인한 일반 회원(TYPE_MEMBER)이 들어오면 인증은 통과하지만 권한이 없어
+     * 403이어야 한다. 앞의 "어느_도메인도_주장하지_않는_경로는_막힌다"는 비로그인(401)만 확인해서,
+     * "로그인만 하면 관리자 API가 열리는" 진짜 문제는 이 테스트가 아니면 못 잡는다.
+     */
+    @Test
+    void 로그인한_일반_회원은_관리자_카테고리_조회를_할_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(get("/v1/admin/categories").header("Authorization", "Bearer " + memberToken))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void 관리자로_로그인하면_관리자_카테고리_조회를_할_수_있다() throws Exception {
+        String adminToken = jwtTokenProvider.createAccessToken(1L, TokenType.ADMIN, "ROLE_ADMIN");
+
+        mockMvc.perform(get("/v1/admin/categories").header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk());
+    }
+
+    /*
+     * hasRole("ADMIN")이 AdminSecurityConfig에 등록된 RoleHierarchy(SUPER_ADMIN implies ADMIN)를
+     * 실제로 타는지 확인한다. 이게 안 타면 role=ROLE_SUPER_ADMIN인 사람이 오히려 막히는 회귀가 난다.
+     */
+    @Test
+    void 최고관리자로_로그인해도_관리자_카테고리_조회를_할_수_있다() throws Exception {
+        String superAdminToken = jwtTokenProvider.createAccessToken(1L, TokenType.ADMIN, "ROLE_SUPER_ADMIN");
+
+        mockMvc.perform(get("/v1/admin/categories").header("Authorization", "Bearer " + superAdminToken))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void 로그인한_일반_회원은_관리자_로트_입고_등록을_할_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(post("/v1/admin/products/1/options/1/lots")
+                        .header("Authorization", "Bearer " + memberToken)
+                        .contentType("application/json")
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+    }
+
+    /*
+     * ProductSecurityConfig의 securityMatcher가 이미지 경로(createUploadUrl, confirm, delete)를
+     * 빠뜨리면 SecurityConfig의 fallback 체인(anyRequest().authenticated())으로 떨어져 로그인한
+     * 일반 회원도 호출할 수 있게 된다(INF-11-11). 그 회귀를 이 테스트가 잡는다.
+     */
+    @Test
+    void 로그인한_일반_회원은_상품_이미지_업로드_URL_발급을_할_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(post("/v1/admin/products/1/images:createUploadUrl")
+                        .header("Authorization", "Bearer " + memberToken)
+                        .contentType("application/json")
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+    }
+
+    /*
+     * 쿠폰 이벤트를 여는 것은 Redis 카운터를 세우는 일이다.
+     * 도는 이벤트에 그것을 다시 걸면 카운터가 0 으로 돌아가 선착순이 처음부터 다시 시작한다.
+     * 그래서 로그인만 한 회원이 이 경로에 닿으면 안 된다.
+     */
+    @Test
+    void 로그인한_일반_회원은_쿠폰_이벤트를_열_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(post("/v1/admin/coupons/1/event:open")
+                        .header("Authorization", "Bearer " + memberToken))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void 로그인한_일반_회원은_쿠폰_발급_시각을_바꿀_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(patch("/v1/admin/coupons/1/issue-period")
+                        .header("Authorization", "Bearer " + memberToken)
+                        .contentType("application/json")
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+    }
+
+    // 없는 쿠폰이라 404 지만, 관리자가 인가를 통과해 컨트롤러까지 닿았다는 것이 확인 대상이다
+    @Test
+    void 관리자는_쿠폰_이벤트_경로에_닿는다() throws Exception {
+        String adminToken = jwtTokenProvider.createAccessToken(1L, TokenType.ADMIN, "ROLE_ADMIN");
+
+        mockMvc.perform(post("/v1/admin/coupons/999999/event:open")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isNotFound());
+    }
+
+    /*
+     * 발급은 로그인한 회원이면 누구나 한다.
+     * 관리자 경로를 막으면서 이 경로까지 같이 막히면 선착순이 통째로 안 돈다.
+     */
+    @Test
+    void 로그인한_회원은_쿠폰_발급_경로에_닿는다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(post("/v1/coupons/999999/issues")
+                        .header("Authorization", "Bearer " + memberToken))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void 쿠폰_발급은_비로그인을_막는다() throws Exception {
+        mockMvc.perform(post("/v1/coupons/1/issues"))
                 .andExpect(status().isUnauthorized());
     }
 

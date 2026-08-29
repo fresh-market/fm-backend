@@ -7,10 +7,13 @@ package com.freshmarket.member;
 // 그대로 내보내면 호출부가 그 값을 쓰려고 다른 도메인의 domain 패키지를 직접 import해야 해서
 // ArchitectureTest의 도메인 경계 규칙(도메인_내부는_다른_도메인에_닫혀_있다)을 어기게 된다
 // (ProductOptionInfo.purchasable이 SaleStatus 대신 boolean을 주는 것과 같은 이유).
+// memberGradeId는 Long 그대로 내보낸다 — 등급 표(member_grade)의 식별자일 뿐이고, 호출부가
+// 하는 일이 "이 쿠폰의 대상 등급과 같은가" 같은 대조라 이름이나 승급 규칙까지 필요하지 않다.
 public record MemberInfo(
         Long memberId,
         String email,
         String name,
+        Long memberGradeId,
         boolean active
 ) {
 }

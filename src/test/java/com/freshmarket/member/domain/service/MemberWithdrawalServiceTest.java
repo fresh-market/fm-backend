@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.freshmarket.member.domain.entity.Member;
 import com.freshmarket.member.domain.entity.SocialType;
+import com.freshmarket.member.domain.client.KakaoUnlinkClient;
 import com.freshmarket.member.domain.oauth.KakaoIdTokenExchanger;
 import com.freshmarket.member.domain.repository.MemberRepository;
 import com.freshmarket.member.domain.exception.AuthErrorCode;
@@ -45,11 +46,18 @@ class MemberWithdrawalServiceTest {
     @Mock
     private MemberWithdrawalCompletionService memberWithdrawalCompletionService;
 
+    @Mock
+    private KakaoUnlinkClient kakaoUnlinkClient;
+
+    @Mock
+    private KakaoUnlinkRetryService kakaoUnlinkRetryService;
+
     private MemberWithdrawalService sut;
 
     @BeforeEach
     void setUp() {
-        sut = new MemberWithdrawalService(memberRepository, memberTokenService, kakaoIdTokenExchanger, memberWithdrawalCompletionService);
+        sut = new MemberWithdrawalService(memberRepository, memberTokenService, kakaoIdTokenExchanger,
+                memberWithdrawalCompletionService, kakaoUnlinkClient, kakaoUnlinkRetryService);
     }
 
     private static Member newMember(Long id) {
@@ -124,7 +132,21 @@ class MemberWithdrawalServiceTest {
 
         sut.withdraw(1L, "이유", "code", "state");
 
-        verify(memberWithdrawalCompletionService).complete(1L, "kakao-1", "ROLE_USER", "이유");
+        verify(memberWithdrawalCompletionService).complete(1L, "ROLE_USER", "이유");
+        verify(kakaoUnlinkClient).unlink("kakao-1");
+    }
+
+    @Test
+    void unlink_실패시_실패상태와_아웃박스를_기록하고_예외를_전파한다() {
+        Member member = newMember(1L);
+        when(memberRepository.findById(1L)).thenReturn(Optional.of(member));
+        when(kakaoIdTokenExchanger.exchange("code", "state")).thenReturn(idTokenWithSub("kakao-1"));
+        RuntimeException failure = new RuntimeException("kakao unavailable");
+        org.mockito.Mockito.doThrow(failure).when(kakaoUnlinkClient).unlink("kakao-1");
+
+        assertThatThrownBy(() -> sut.withdraw(1L, "이유", "code", "state")).isSameAs(failure);
+
+        verify(kakaoUnlinkRetryService).recordInitialFailure(1L, "kakao-1");
     }
 
     @Test

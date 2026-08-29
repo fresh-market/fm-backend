@@ -1,5 +1,6 @@
 package com.freshmarket.member.domain.service;
 
+import com.freshmarket.member.MemberRegisteredEvent;
 import com.freshmarket.member.domain.entity.Member;
 import com.freshmarket.member.domain.entity.SocialType;
 import com.freshmarket.member.domain.oauth.KakaoAuthorizationService;
@@ -15,6 +16,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.support.TransactionTemplate;
 
 // docs/api/auth.md의 "POST /v1/auth/tokens"(회원 로그인 완료) 전체를 오케스트레이션한다.
 // Spring Security의 oauth2Login() 필터 체인을 쓰지 않기로 하면서 — 리다이렉트 콜백을 백엔드가
@@ -33,6 +36,8 @@ public class MemberLoginService {
     private final MemberRepository memberRepository;
     private final MemberGradeRepository memberGradeRepository;
     private final MemberTokenService memberTokenService;
+    private final TransactionTemplate transactionTemplate;
+    private final ApplicationEventPublisher eventPublisher;
 
     public String authorizationUrl(boolean forceReauth) {
         return kakaoAuthorizationService.buildAuthorizationUrl(forceReauth);
@@ -69,10 +74,14 @@ public class MemberLoginService {
 
     private Member registerNewMember(OAuthAttributes attrs, String activeProviderKey) {
         try {
-            Long defaultGradeId = memberGradeRepository.findByIsDefaultTrue()
-                    .map(grade -> grade.getId())
-                    .orElseThrow(() -> new MemberException(MemberErrorCode.DEFAULT_MEMBER_GRADE_NOT_FOUND));
-            return memberRepository.saveAndFlush(attrs.toEntity(defaultGradeId));
+            return transactionTemplate.execute(status -> {
+                Long defaultGradeId = memberGradeRepository.findByIsDefaultTrue()
+                        .map(grade -> grade.getId())
+                        .orElseThrow(() -> new MemberException(MemberErrorCode.DEFAULT_MEMBER_GRADE_NOT_FOUND));
+                Member member = memberRepository.saveAndFlush(attrs.toEntity(defaultGradeId));
+                eventPublisher.publishEvent(new MemberRegisteredEvent(member.getId()));
+                return member;
+            });
         } catch (DataIntegrityViolationException e) {
             return memberRepository.findByActiveProviderKey(activeProviderKey)
                     .orElseThrow(() -> {

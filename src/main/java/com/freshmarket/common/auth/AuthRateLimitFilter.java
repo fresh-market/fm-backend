@@ -6,11 +6,16 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -35,8 +40,17 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
     private static final Set<String> LIMITED_PATHS = Set.of("/v1/auth/tokens", "/v1/auth/tokens:refresh");
     private static final int LIMIT = 10;
     private static final Duration WINDOW = Duration.ofMinutes(1);
+    private static final Pattern SAFE_IP = Pattern.compile("^[0-9a-fA-F.:]{1,45}$");
+    private static final RedisScript<Long> RATE_LIMIT_SCRIPT = loadRateLimitScript();
 
     private final StringRedisTemplate redisTemplate;
+
+    private static RedisScript<Long> loadRateLimitScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("scripts/auth_rate_limit.lua"));
+        script.setResultType(Long.class);
+        return script;
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -47,7 +61,7 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
-        if (isOverLimit(request.getRemoteAddr())) {
+        if (isOverLimit(resolveClientIp(request))) {
             response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
             return;
         }
@@ -58,14 +72,32 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
     private boolean isOverLimit(String ip) {
         String key = KEY_PREFIX + ip;
         try {
-            Long count = redisTemplate.opsForValue().increment(key);
-            if (count != null && count == 1) {
-                redisTemplate.expire(key, WINDOW);
-            }
+            Long count = redisTemplate.execute(
+                    RATE_LIMIT_SCRIPT,
+                    List.of(key),
+                    String.valueOf(WINDOW.toMillis())
+            );
             return count != null && count > LIMIT;
         } catch (DataAccessException e) {
-            log.warn("event=RATE_LIMIT_CHECK_FAILED ip={} — fail-open으로 통과시킴", ip, e);
+            log.warn("event=RATE_LIMIT_CHECK_FAILED ip={} cause={} — fail-open으로 통과시킴",
+                    ip, RedisFailureClassifier.causeLabel(e), e);
             return false;
         }
+    }
+
+    /**
+     * ALB 기본 설정(append)은 실제 클라이언트 IP를 X-Forwarded-For의 마지막 항목에 덧붙인다.
+     * 이 앱의 8080 포트는 ALB 보안 그룹에서만 접근 가능해야 한다. 그렇지 않으면 직접 접속한
+     * 클라이언트가 X-Forwarded-For를 위조할 수 있다.
+     */
+    private String resolveClientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded == null || forwarded.isBlank()) {
+            return request.getRemoteAddr();
+        }
+
+        String[] addresses = forwarded.split(",");
+        String candidate = addresses[addresses.length - 1].trim();
+        return SAFE_IP.matcher(candidate).matches() ? candidate : request.getRemoteAddr();
     }
 }

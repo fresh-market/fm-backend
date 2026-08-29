@@ -17,6 +17,7 @@ import com.freshmarket.member.domain.repository.MemberGradeRepository;
 import com.freshmarket.member.domain.repository.MemberRepository;
 import com.freshmarket.member.domain.exception.MemberErrorCode;
 import com.freshmarket.member.domain.exception.MemberException;
+import com.freshmarket.member.MemberRegisteredEvent;
 import jakarta.servlet.http.HttpServletResponse;
 import java.lang.reflect.Field;
 import java.time.Instant;
@@ -27,7 +28,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 // (2026-08-18 19:10) API 점검 중 발견한 커버리지 게이트 갭(0개)을 메운다. 예전 "닉네임 레이스
 // 회귀 테스트" 시도가 노렸던 것과 같은 시나리오(가입 경합)를 registerNewMember()의
@@ -54,6 +59,12 @@ class MemberLoginServiceTest {
     private MemberTokenService memberTokenService;
 
     @Mock
+    private TransactionTemplate transactionTemplate;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
+    @Mock
     private HttpServletResponse response;
 
     private MemberLoginService sut;
@@ -61,7 +72,12 @@ class MemberLoginServiceTest {
     @BeforeEach
     void setUp() {
         sut = new MemberLoginService(
-                kakaoAuthorizationService, kakaoIdTokenExchanger, memberRepository, memberGradeRepository, memberTokenService);
+                kakaoAuthorizationService, kakaoIdTokenExchanger, memberRepository, memberGradeRepository,
+                memberTokenService, transactionTemplate, eventPublisher);
+        org.mockito.Mockito.lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(org.mockito.Mockito.mock(TransactionStatus.class));
+        });
     }
 
     private static Jwt kakaoIdToken() {
@@ -115,7 +131,11 @@ class MemberLoginServiceTest {
         when(kakaoIdTokenExchanger.exchange("code", "state")).thenReturn(kakaoIdToken());
         when(memberRepository.findByActiveProviderKey(ACTIVE_PROVIDER_KEY)).thenReturn(Optional.empty());
         when(memberGradeRepository.findByIsDefaultTrue()).thenReturn(Optional.of(newGrade(2L)));
-        when(memberRepository.saveAndFlush(any(Member.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(memberRepository.saveAndFlush(any(Member.class))).thenAnswer(invocation -> {
+            Member member = invocation.getArgument(0);
+            setId(member, 3L);
+            return member;
+        });
         when(memberTokenService.issue(any(Member.class), eq(true), eq(response)))
                 .thenReturn(new MemberTokenService.IssueResult("access-token", 1800L));
 
@@ -123,6 +143,7 @@ class MemberLoginServiceTest {
 
         assertThat(result.member().getMemberGradeId()).isEqualTo(2L);
         assertThat(result.member().getProvider()).isEqualTo(SocialType.KAKAO);
+        verify(eventPublisher).publishEvent(new MemberRegisteredEvent(3L));
     }
 
     @Test

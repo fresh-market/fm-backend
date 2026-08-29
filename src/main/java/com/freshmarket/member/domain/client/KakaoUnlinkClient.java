@@ -3,6 +3,7 @@ package com.freshmarket.member.domain.client;
 import com.freshmarket.common.logging.PiiMasker;
 import com.freshmarket.member.domain.exception.MemberErrorCode;
 import com.freshmarket.member.domain.exception.MemberException;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,6 +27,7 @@ public class KakaoUnlinkClient {
     @Value("${kakao.admin-key}")
     private String adminKey;
 
+    @CircuitBreaker(name = "kakaoUnlink")
     public void unlink(String kakaoUserId) {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("target_id_type", "user_id");
@@ -62,4 +64,5 @@ public class KakaoUnlinkClient {
             throw new MemberException(MemberErrorCode.KAKAO_UNLINK_FAILED, e);
         }
     }
+
 }

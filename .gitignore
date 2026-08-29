@@ -39,6 +39,7 @@ bin/
 # application-local.yml.example 은 올린다. 실제 값이 든 application-local.yml 은 올리지 않는다
 src/main/resources/application-local.yml
 application-local.yaml
+application-local.yml
 application-local.properties
 
 ### 비밀 ###
@@ -50,3 +51,6 @@ application-local.properties
 
 
 .gradle-user/
+
+# 부하 시험이 찍는 토큰이다. 로컬 시크릿으로 만든 값이라 올리지 않는다
+loadtest/tokens.csv

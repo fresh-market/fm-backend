@@ -67,6 +67,22 @@ dependencies {
     implementation 'io.micrometer:micrometer-registry-prometheus'
 
     /*
+     * 자격 확인용 쿠폰 스냅샷을 JVM 안에 잠깐 들고 있으려고 쓴다.
+     * AsyncCache 가 필요해서 직접 만든 것을 걷어냈다. 값을 계산하는 함수가 ConcurrentHashMap 의
+     * 버킷 모니터 안에서 돌면 가상 스레드가 캐리어를 못 놓는데, AsyncCache 는 그 안에서 future 만
+     * 만들고 실제 읽기는 바깥에서 한다. 핀 없이 단일 로딩을 얻는 자리라 직접 만들기 번거롭다.
+     */
+    implementation 'com.github.ben-manes.caffeine:caffeine'
+
+    /*
+     * 선착순 발급의 Redis 호출에만 회로를 건다.
+     * 상태 전이(닫힘 -> 열림 -> 반열림)와 슬라이딩 윈도우 집계를 직접 짜면 틀리기 쉽고,
+     * 정작 장애 때 처음 도는 코드라 그 위험을 안 지는 편이 낫다. Boot BOM 이 관리하지 않아
+     * 버전을 직접 적는다.
+     */
+    implementation 'io.github.resilience4j:resilience4j-circuitbreaker:2.3.0'
+
+    /*
      * 인증 방식은 아직 확정 항목이 아니다.
      * infra 의 기술스택 확정문서 8장이 "프로젝트 적용 시 채워야 할 항목" 으로 남겨 두었다.
      * 지금은 서버 세션을 두지 않는 구성으로 시작하고, 확정되면 SecurityConfig 를 그에 맞춘다.
@@ -119,6 +135,33 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
 
     /*
+     * Boot 4가 아웃바운드 WebClient 자동구성(WebClientAutoConfiguration,
+     * org.springframework.boot.webclient.WebClientCustomizer)을 spring-boot-webflux와
+     * 별도 모듈(spring-boot-webclient)로 쪼개놨다 — 위 webflux 스타터만으로는 이 모듈이
+     * 안 끌려온다. WebClientConfig의 defaultExternalApiCustomizer(공통 타임아웃/풀/필터)가
+     * 실제로 적용되려면 이 스타터가 필요하다.
+     */
+    implementation 'org.springframework.boot:spring-boot-starter-webclient'
+
+    /*
+     * 카카오 OIDC 외부 API(로그인 토큰교환/로그아웃/unlink) 서킷브레이커.
+     * Boot 4는 spring-boot-starter-webflux(위)와 별도로 spring-boot4 전용 아티팩트가 있다
+     * (spring-boot-starter-resilience4j가 아니라 spring-boot3용과 나뉘어 있음).
+     */
+    implementation 'io.github.resilience4j:resilience4j-spring-boot4:2.4.0'
+    /*
+     * 상품 이미지 업로드(#21). S3Presigner로 업로드 URL을 발급하고, HeadObject로 실제 업로드를
+     * 확인한다(백엔드공통_이미지저장소_설계.md 6.2절). presigned POST 생성 기능은 Java SDK v2에
+     * 없어 PUT만 쓴다 — 그래서 s3 모듈 하나로 충분하다(별도 presigner 아티팩트가 없다).
+     *
+     * s3 모듈은 동기 HTTP 클라이언트를 직접 들여오지 않는다(전이 의존은 비동기용 netty-nio-client
+     * 뿐이다) — S3Client(동기)에 연결 타임아웃을 명시하려면(REL-2-01) apache5-client가 필요하다.
+     */
+    implementation platform('software.amazon.awssdk:bom:2.46.7')
+    implementation 'software.amazon.awssdk:s3'
+    implementation 'software.amazon.awssdk:apache5-client'
+
+    /*
      * @Scheduled 메서드 공통 로깅(SchedulerLoggingAspect)이 커스텀 애노테이션
      * 포인트컷(@annotation(...))을 쓴다. spring-aop 자체는 spring-data-jpa가
      * (→ @Transactional 프록시) 전이 의존성으로 이미 들여오지만, AspectJ 애노테이션
@@ -168,7 +211,8 @@ dependencies {
      * spring-boot-starter-webmvc-test 로 뺐다. API 계층까지 검증하는 통합 테스트에 필요하다.
      */
     integrationTestImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
-    integrationTestImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test' 
+    integrationTestImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+    integrationTestImplementation 'org.springframework.security:spring-security-test'
     integrationTestImplementation 'org.springframework.boot:spring-boot-testcontainers'
     /*
      * Boot 4.0.5 의 BOM 이 Testcontainers 2.0.4 를 관리한다.
@@ -177,15 +221,23 @@ dependencies {
     integrationTestImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     integrationTestImplementation 'org.testcontainers:testcontainers-mysql'
 
-    /*
-     * 검증용 엔티티가 이 소스셋에 있으므로 APT 를 여기에도 건다.
-     * 걸지 않으면 Q클래스가 생성되지 않아 컴파일이 깨진다.
-     */
+    /* 검증용 엔티티가 이 소스셋에 있으므로 APT 를 여기에도 건다.
+       걸지 않으면 Q클래스가 생성되지 않아 컴파일이 깨진다. */
     integrationTestCompileOnly 'org.projectlombok:lombok'
     integrationTestAnnotationProcessor 'org.projectlombok:lombok'
     integrationTestAnnotationProcessor 'com.querydsl:querydsl-apt::jakarta'
     integrationTestAnnotationProcessor 'jakarta.annotation:jakarta.annotation-api'
     integrationTestAnnotationProcessor 'jakarta.persistence:jakarta.persistence-api'
+
+}
+
+/*
+ * bootJar 만 만든다.
+ * 의존성이 빠진 plain jar 가 함께 있으면 Dockerfile 의 COPY *.jar 가 무엇을 담을지 글롭 순서에 좌우된다.
+ * 잘못 담기면 기동 시점에야 드러난다.
+ */
+tasks.named('jar') {
+    enabled = false
 }
 
 /*

@@ -169,7 +169,7 @@ GET /v1/admin/members?query={검색어}&status={상태}&gradeId={등급}
 | 파라미터 | 설명 |
 |---|---|
 | `query` | 이름, 아이디, 연락처 부분 일치 |
-| `status` | `PENDING_PROFILE`, `ACTIVE`, `BLOCKED`, `WITHDRAWN` |
+| `status` | `PENDING_PROFILE`, `ACTIVE`, `BLOCKED`, `WITHDRAWN_FAILED`, `WITHDRAWN` |
 | `gradeId` | 등급 |
 
 가입일, 등급, 상태, 카카오 연동 일시를 함께 준다. **여기서도 개인정보는 마스킹한다.**
