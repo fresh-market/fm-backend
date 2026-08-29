@@ -34,7 +34,7 @@ class CouponProfileBindingTest {
             assertThat(properties.batchWindow()).isEqualTo(Duration.ofMillis(20));
             assertThat(properties.batchSize()).isEqualTo(500);
             assertThat(properties.flushThreads()).isEqualTo(1);
-            assertThat(properties.requestBudget()).isEqualTo(Duration.ofSeconds(2));
+            assertThat(properties.requestBudget()).isEqualTo(Duration.ofMillis(400));
             assertThat(properties.couponCacheTtl()).isEqualTo(Duration.ofSeconds(5));
             assertThat(properties.reclaimAfter()).isEqualTo(Duration.ofSeconds(60));
         });
@@ -46,8 +46,8 @@ class CouponProfileBindingTest {
         runner.run(context -> {
             CouponCircuitProperties properties = context.getBean(CouponCircuitProperties.class);
 
-            assertThat(properties.seq().slowCallDuration()).isEqualTo(Duration.ofMillis(100));
-            assertThat(properties.write().slowCallDuration()).isEqualTo(Duration.ofMillis(500));
+            assertThat(properties.seq().slowCallDuration()).isEqualTo(Duration.ofMillis(50));
+            assertThat(properties.write().slowCallDuration()).isEqualTo(Duration.ofMillis(150));
             assertThat(properties.seq().minimumNumberOfCalls()).isEqualTo(20);
             assertThat(properties.write().waitDurationInOpen()).isEqualTo(Duration.ofSeconds(10));
         });
@@ -61,9 +61,23 @@ class CouponProfileBindingTest {
     void 요청_예산이_안쪽_합보다_길다() {
         runner.run(context -> {
             CouponIssueProperties properties = context.getBean(CouponIssueProperties.class);
-            Duration 안쪽_합 = Duration.ofMillis(300 + 1000);   // connection-timeout + socketTimeout
+            Duration 안쪽_합 = Duration.ofMillis(100 + 250);   // connection-timeout + socketTimeout
 
             assertThat(properties.requestBudget()).isGreaterThan(안쪽_합);
+        });
+    }
+
+    /*
+     * 8장의 SLO 가 처리된 응답 p99 500ms 다.
+     * 요청 예산이 곧 성공 응답의 지연 상한이라, 예산이 그보다 길면 SLO 를 구조적으로 못 지킨다.
+     * Redis 왕복 둘이 예산 밖에서 최악 200ms 를 더 쓰므로 그만큼 남겨 둔다.
+     */
+    @Test
+    void 요청_예산이_SLO_안에_들어온다() {
+        runner.run(context -> {
+            CouponIssueProperties properties = context.getBean(CouponIssueProperties.class);
+
+            assertThat(properties.requestBudget()).isLessThan(Duration.ofMillis(500));
         });
     }
 
