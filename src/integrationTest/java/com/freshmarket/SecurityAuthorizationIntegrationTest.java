@@ -144,6 +144,22 @@ class SecurityAuthorizationIntegrationTest extends IntegrationTestSupport {
     }
 
     /*
+     * ProductSecurityConfig의 securityMatcher가 이미지 경로(createUploadUrl, confirm, delete)를
+     * 빠뜨리면 SecurityConfig의 fallback 체인(anyRequest().authenticated())으로 떨어져 로그인한
+     * 일반 회원도 호출할 수 있게 된다(INF-11-11). 그 회귀를 이 테스트가 잡는다.
+     */
+    @Test
+    void 로그인한_일반_회원은_상품_이미지_업로드_URL_발급을_할_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(post("/v1/admin/products/1/images:createUploadUrl")
+                        .header("Authorization", "Bearer " + memberToken)
+                        .contentType("application/json")
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+    }
+
+    /*
      * 쿠폰 이벤트를 여는 것은 Redis 카운터를 세우는 일이다.
      * 도는 이벤트에 그것을 다시 걸면 카운터가 0 으로 돌아가 선착순이 처음부터 다시 시작한다.
      * 그래서 로그인만 한 회원이 이 경로에 닿으면 안 된다.

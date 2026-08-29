@@ -10,6 +10,9 @@ import com.freshmarket.member.domain.dto.MemberLoginRequest;
 import com.freshmarket.member.domain.dto.MemberTokenResponse;
 import com.freshmarket.member.domain.exception.AuthErrorCode;
 import com.freshmarket.member.domain.exception.AuthException;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -34,6 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/v1/auth")
 @RequiredArgsConstructor
+@Tag(name = "회원 인증", description = "카카오 로그인, 토큰 재발급, 로그아웃")
 class MemberAuthController {
 
     private final MemberLoginService memberLoginService;
@@ -41,6 +45,8 @@ class MemberAuthController {
     private final AuthCookieFactory authCookieFactory;
 
     @GetMapping("/kakao/authorize")
+    @Operation(summary = "카카오 인가 URL 조회", description = "카카오 로그인 또는 재인증을 시작할 인가 URL을 반환한다.")
+    @ApiResponse(responseCode = "200", description = "조회 성공")
     public ResponseEntity<ResponseEnvelope<KakaoAuthorizeResponse>> authorize(
             @RequestParam(defaultValue = "false") boolean reauth
     ) {
@@ -51,6 +57,9 @@ class MemberAuthController {
     }
 
     @PostMapping("/tokens")
+    @Operation(summary = "회원 로그인", description = "카카오 인가 코드를 검증해 회원 세션 토큰을 발급한다.")
+    @ApiResponse(responseCode = "201", description = "로그인 성공")
+    @ApiResponse(responseCode = "401", description = "카카오 인가 코드가 유효하지 않음")
     public ResponseEntity<ResponseEnvelope<MemberTokenResponse>> login(
             @RequestBody @Valid MemberLoginRequest request, HttpServletResponse response) {
         // (2026-08-18 16:20) accessToken 쿠키 설정은 memberTokenService.issue() 내부에서
@@ -66,6 +75,9 @@ class MemberAuthController {
     // 미리 검증할 게 없다 — 쿠키에서 꺼낸 문자열을 그대로 넘기면 memberTokenService.reissue()가
     // Redis 조회부터 시작해서 유효성/소유자를 판단한다(누구 건지도 그 조회 결과로만 안다).
     @PostMapping("/tokens:refresh")
+    @Operation(summary = "회원 토큰 재발급", description = "쿠키의 리프레시 토큰을 회전하고 새 토큰을 발급한다.")
+    @ApiResponse(responseCode = "200", description = "재발급 성공")
+    @ApiResponse(responseCode = "401", description = "리프레시 토큰이 없거나 유효하지 않음")
     public ResponseEntity<ResponseEnvelope<MemberTokenResponse>> reissue(
             HttpServletRequest request, HttpServletResponse response) {
         String refreshToken = resolveRefreshTokenFromCookie(request);
@@ -86,6 +98,8 @@ class MemberAuthController {
     }
 
     @DeleteMapping("/tokens")
+    @Operation(summary = "회원 로그아웃", description = "현재 회원의 토큰을 폐기하고 쿠키를 만료시킨다.")
+    @ApiResponse(responseCode = "204", description = "로그아웃 성공")
     public ResponseEntity<Void> logout(@AuthenticationPrincipal CustomUserDetails userDetails, HttpServletResponse response) {
         memberTokenService.revoke(userDetails.getId(), userDetails.getRole(), true);
 

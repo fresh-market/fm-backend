@@ -3,6 +3,7 @@ package com.freshmarket.member.domain.service;
 import com.freshmarket.common.logging.PiiMasker;
 import com.freshmarket.member.domain.entity.KakaoUnlinkFailure;
 import com.freshmarket.member.domain.repository.KakaoUnlinkFailureRepository;
+import com.freshmarket.member.domain.repository.MemberRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -22,10 +23,20 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 public class KakaoUnlinkRetryOutcomeService {
 
     private final KakaoUnlinkFailureRepository failureRepository;
+    private final MemberRepository memberRepository;
 
     @Transactional
     public void markSucceeded(Long failureId) {
-        failureRepository.deleteById(failureId);
+        failureRepository.findById(failureId).ifPresent(failure -> {
+            int updated = memberRepository.markWithdrawnAfterUnlink(failure.getMemberId());
+            if (updated == 1) {
+                failureRepository.delete(failure);
+            } else {
+                log.warn("event=KAKAO_UNLINK_RETRY_STATUS_NOT_UPDATED failureId={} memberId={} — "
+                                + "WITHDRAWN_FAILED 상태가 아니어서 아웃박스를 유지함",
+                        failureId, failure.getMemberId());
+            }
+        });
     }
 
     @Transactional
@@ -33,17 +44,9 @@ public class KakaoUnlinkRetryOutcomeService {
         failureRepository.findById(failureId).ifPresent(failure -> {
             failure.markRetryFailed();
             String causeType = rootCauseType(cause);
-            if (failure.shouldGiveUp()) {
-                // (DI-6-02) 이 지점부턴 "조용히"가 아니다 — 우리 DB는 WITHDRAWN인데 카카오는
-                // 연결이 살아있는 상태로 굳을 수 있는 컴플라이언스 문제라 사람이 봐야 한다.
-                log.error("event=KAKAO_UNLINK_OUTBOX_GAVE_UP memberId={} kakaoUserId={} attempts={} causeType={}",
-                        failure.getMemberId(), PiiMasker.maskProviderId(failure.getKakaoUserId()),
-                        failure.getAttemptCount(), causeType, cause);
-            } else {
-                log.warn("event=KAKAO_UNLINK_OUTBOX_RETRY_FAILED memberId={} kakaoUserId={} attempts={} causeType={}",
-                        failure.getMemberId(), PiiMasker.maskProviderId(failure.getKakaoUserId()),
-                        failure.getAttemptCount(), causeType, cause);
-            }
+            log.warn("event=KAKAO_UNLINK_OUTBOX_RETRY_FAILED memberId={} kakaoUserId={} attempts={} causeType={}",
+                    failure.getMemberId(), PiiMasker.maskProviderId(failure.getKakaoUserId()),
+                    failure.getAttemptCount(), causeType, cause);
         });
     }
 

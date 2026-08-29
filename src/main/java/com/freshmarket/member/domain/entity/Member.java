@@ -33,11 +33,11 @@ import org.hibernate.annotations.Check;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Table(name = "member")
 @AttributeOverride(name = "id", column = @Column(name = "member_id"))
-@Check(name = "chk_member_status", constraints = "status IN ('PENDING_PROFILE','ACTIVE','BLOCKED','WITHDRAWN')")
+@Check(name = "chk_member_status", constraints = "status IN ('PENDING_PROFILE','ACTIVE','BLOCKED','WITHDRAWN_FAILED','WITHDRAWN')")
 @Check(name = "chk_member_refresh_token", constraints = "(refresh_token_hash IS NULL AND refresh_token_expires_at IS NULL) "
         + "OR (refresh_token_hash IS NOT NULL AND refresh_token_expires_at IS NOT NULL)")
-@Check(name = "chk_member_withdrawn", constraints = "(status = 'WITHDRAWN' AND deleted_at IS NOT NULL) "
-        + "OR (status <> 'WITHDRAWN' AND deleted_at IS NULL)")
+@Check(name = "chk_member_withdrawn", constraints = "(status IN ('WITHDRAWN_FAILED','WITHDRAWN') AND deleted_at IS NOT NULL) "
+        + "OR (status NOT IN ('WITHDRAWN_FAILED','WITHDRAWN') AND deleted_at IS NULL)")
 public class Member extends BaseMutableTimeEntity {
 
     @Enumerated(EnumType.STRING)
@@ -177,7 +177,7 @@ public class Member extends BaseMutableTimeEntity {
     }
 
     public boolean isWithdrawn() {
-        return this.status == MemberStatus.WITHDRAWN;
+        return this.status == MemberStatus.WITHDRAWN || this.status == MemberStatus.WITHDRAWN_FAILED;
     }
 
     /**

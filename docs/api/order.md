@@ -48,27 +48,31 @@ POST /v1/orders
 
 ```json
 {
-  "items": [ { "productOptionId": 31, "qty": 2, "memberCouponId": 77 } ],
-  "orderCouponId": 55,
-  "address": {
-    "recipient": "홍길동",
-    "phone": "01012345678",
-    "zipcode": "06234",
-    "roadAddress": "서울 강남구 테헤란로 1",
-    "detailAddress": "10층"
-  },
+  "requestId": "f5f3d14a-2a9b-4f3f-a46d-d2a2d5f83575",
+  "items": [ { "productOptionId": 31, "qty": 2 } ],
+  "addressId": 55,
   "shipMessage": "부재 시 경비실"
 }
 ```
 
+장바구니 주문과 바로구매 중 하나만 선택한다.
+
+```json
+{ "requestId": "...", "cartItemIds": [101, 102], "addressId": 55 }
+```
+
+```json
+{ "requestId": "...", "items": [{ "productOptionId": 31, "qty": 2 }], "addressId": 55 }
+```
+
 | 필드 | 필수 | 설명 |
 |---|---|---|
-| `items` | O | 1개 이상 |
-| `items[].memberCouponId` | | **상품 쿠폰. 라인당 최대 1장** |
-| `orderCouponId` | | **장바구니 쿠폰. 주문당 최대 1장** |
-| `address` | O | 배송지. 저장된 배송지를 골라도 값을 스냅샷으로 넣는다 |
+| `requestId` | O | 재시도와 중복 클릭을 같은 주문으로 수렴시키는 식별자 |
+| `cartItemIds` | 조건부 | 장바구니 주문 대상. `items`와 함께 보낼 수 없다 |
+| `items` | 조건부 | 바로구매 옵션과 수량. `cartItemIds`와 함께 보낼 수 없다 |
+| `addressId` | O | 회원 소유의 저장된 배송지. 주문에는 배송지 정보를 스냅샷으로 저장한다 |
 
-장바구니를 거치지 않는 바로구매도 같은 경로다. `items` 에 한 건만 넣으면 된다.
+장바구니를 거치지 않는 바로구매도 같은 경로다. `items` 에 한 건 이상 넣으면 된다.
 
 **주문 시점의 상품명, 옵션명, 가격을 스냅샷으로 저장한다.** 나중에 상품이 바뀌어도 주문 내역은
 그대로 남는다.

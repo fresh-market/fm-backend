@@ -13,7 +13,7 @@ public interface KakaoUnlinkFailureRepository extends JpaRepository<KakaoUnlinkF
 
     Optional<KakaoUnlinkFailure> findByMemberId(Long memberId);
 
-    List<KakaoUnlinkFailure> findByAttemptCountLessThanAndResolvedFalse(int threshold);
+    List<KakaoUnlinkFailure> findByResolvedFalse();
 
     long countByAttemptCountGreaterThanEqualAndResolvedFalse(int threshold);
 

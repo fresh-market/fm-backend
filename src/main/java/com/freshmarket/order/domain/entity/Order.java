@@ -23,6 +23,12 @@ public class Order extends BaseMutableTimeEntity {
     @Column(name = "order_no", nullable = false, length = 30)
     private String orderNo;
 
+    @Column(name = "request_id", length = 64, unique = true)
+    private String requestId;
+
+    @Column(name = "request_hash", length = 64)
+    private String requestHash;
+
     @Column(name = "member_id", nullable = false)
     private Long memberId;
 
@@ -71,15 +77,17 @@ public class Order extends BaseMutableTimeEntity {
     private LocalDateTime orderedAt;
 
     @Builder(access = AccessLevel.PRIVATE)
-    private Order(Long memberId, String orderNo, OrderStatus status, int productAmount,
+    private Order(Long memberId, String orderNo, String requestId, String requestHash, OrderStatus status, int productAmount,
                   int discountAmount, Long memberCouponId, String couponScope, int couponDiscount,
                   int shippingFee, int totalAmount, String shipRecipient, String shipPhone,
                   String shipZipcode, String shipAddress, String shipMessage, LocalDateTime orderedAt) {
-        validate(memberId, orderNo, productAmount, discountAmount, memberCouponId, couponScope,
+        validate(memberId, orderNo, requestId, requestHash, productAmount, discountAmount, memberCouponId, couponScope,
                 couponDiscount, shippingFee, totalAmount, shipRecipient, shipPhone, shipZipcode,
                 shipAddress, shipMessage, orderedAt);
         this.memberId = memberId;
         this.orderNo = orderNo;
+        this.requestId = requestId;
+        this.requestHash = requestHash;
         this.status = status;
         this.productAmount = productAmount;
         this.discountAmount = discountAmount;
@@ -122,13 +130,76 @@ public class Order extends BaseMutableTimeEntity {
                 .build();
     }
 
-    private static void validate(Long memberId, String orderNo, int productAmount, int discountAmount,
+    public static Order place(OrderPlacement placement) {
+        if (placement == null) {
+            throw new IllegalArgumentException("주문 생성 정보는 필수입니다.");
+        }
+        return Order.builder()
+                .memberId(placement.memberId())
+                .orderNo(placement.orderNo())
+                .requestId(placement.requestId())
+                .requestHash(placement.requestHash())
+                .status(OrderStatus.PAYMENT_PENDING)
+                .productAmount(placement.productAmount())
+                .discountAmount(placement.discountAmount())
+                .couponDiscount(0)
+                .shippingFee(placement.shippingFee())
+                .totalAmount(placement.totalAmount())
+                .shipRecipient(placement.shipRecipient())
+                .shipPhone(placement.shipPhone())
+                .shipZipcode(placement.shipZipcode())
+                .shipAddress(placement.shipAddress())
+                .shipMessage(placement.shipMessage())
+                .orderedAt(placement.orderedAt())
+                .build();
+    }
+
+    /*
+     * orderNo는 NOT NULL+UNIQUE(uk_order_no)라 insert 시점에 값이 있어야 하는데, order_id(PK)는
+     * IDENTITY라 insert 이후에만 안다. OrderCreateService가 OrderNoGenerator로 만든 임시
+     * 고유값으로 먼저 저장해 PK를 받은 뒤, 이 메서드로 "orderNo = orderId" 정책값을 되돌려
+     * 채운다(주문번호 체계를 아직 정하지 않은 지금 단계에서 팀이 정한 임시 정책).
+     */
+    public void assignOrderNo(String orderNo) {
+        if (orderNo == null || orderNo.isBlank() || orderNo.length() > 30) {
+            throw new IllegalArgumentException("orderNo는 필수이며 최대 길이를 넘을 수 없습니다.");
+        }
+        this.orderNo = orderNo;
+    }
+
+    public void markPaid() {
+        if (status == OrderStatus.PAID) {
+            return;
+        }
+        requireStatus(OrderStatus.PAYMENT_PENDING, "결제 완료");
+        this.status = OrderStatus.PAID;
+    }
+
+    public void cancel() {
+        if (status == OrderStatus.CANCELED) {
+            return;
+        }
+        requireStatus(OrderStatus.PAYMENT_PENDING, "주문 취소");
+        this.status = OrderStatus.CANCELED;
+    }
+
+    private static void validate(Long memberId, String orderNo, String requestId, String requestHash,
+                                 int productAmount, int discountAmount,
                                  Long memberCouponId, String couponScope, int couponDiscount,
                                  int shippingFee, int totalAmount, String shipRecipient, String shipPhone,
                                  String shipZipcode, String shipAddress, String shipMessage,
                                  LocalDateTime orderedAt) {
         requirePositive(memberId, "memberId");
         requireText(orderNo, 30, "orderNo");
+        if ((requestId == null) != (requestHash == null)) {
+            throw new IllegalArgumentException("주문 요청 식별자와 요청 해시는 함께 있어야 합니다.");
+        }
+        if (requestId != null) {
+            requireText(requestId, 64, "requestId");
+            if (!requestHash.matches("[0-9a-f]{64}")) {
+                throw new IllegalArgumentException("requestHash는 SHA-256 16진수여야 합니다.");
+            }
+        }
         requireNonNegative(productAmount, "productAmount");
         requireNonNegative(discountAmount, "discountAmount");
         requireNonNegative(couponDiscount, "couponDiscount");
@@ -171,6 +242,12 @@ public class Order extends BaseMutableTimeEntity {
     private static void requireText(String value, int maxLength, String fieldName) {
         if (value == null || value.isBlank() || value.length() > maxLength) {
             throw new IllegalArgumentException(fieldName + "은 필수이며 최대 길이를 넘을 수 없습니다.");
+        }
+    }
+
+    private void requireStatus(OrderStatus expected, String action) {
+        if (status != expected) {
+            throw new IllegalStateException("현재 주문 상태에서는 " + action + "할 수 없습니다.");
         }
     }
 }

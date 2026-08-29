@@ -50,11 +50,18 @@ class AdminSecurityConfig {
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .ignoringRequestMatchers(
-                                PathPatternRequestMatcher.withDefaults().matcher(POST, "/v1/admin/auth/tokens")))
+                                PathPatternRequestMatcher.withDefaults().matcher(
+                                        POST, "/v1/admin/auth/tokens"),
+                                PathPatternRequestMatcher.withDefaults().matcher(
+                                        POST, "/v1/admin/auth/tokens:refresh")))
                 .authorizeHttpRequests(auth -> auth
-                        // 로그인(POST)은 인증 그 자체라 공개해야 한다
-                        .requestMatchers(POST, "/v1/admin/auth/tokens").permitAll()
-                        // 재발급/로그아웃 등 로그인 외 관리자 인증 API는 TYPE_ADMIN 권한을 요구한다
+                        // 로그인과 토큰 재발급은 기존 Access Token 인증 없이 호출할 수 있어야 한다
+                        .requestMatchers(
+                                POST,
+                                "/v1/admin/auth/tokens",
+                                "/v1/admin/auth/tokens:refresh")
+                        .permitAll()
+                        // 로그아웃(DELETE /tokens)을 포함한 그 외 관리자 인증 API는 TYPE_ADMIN 권한을 요구한다
                         .anyRequest().hasAuthority(ADMIN))
                 .build();
     }
@@ -79,7 +86,7 @@ class AdminSecurityConfig {
         return expressionHandler;
     }
 
-    // 관리자 비밀번호 해싱 전용. 회원은 카카오에 인증을 위임하므로 비밀번호 자체가 없다
+    // 관리자 비밀번호 해싱 전용. 회원은 카카오에 인증을 위임하므로 비밀번호 자체가 없다.
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();

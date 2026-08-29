@@ -4,6 +4,7 @@ import com.freshmarket.stock.domain.entity.AllocationStatus;
 import com.freshmarket.stock.domain.entity.StockAllocation;
 import jakarta.persistence.LockModeType;
 import java.util.List;
+import java.util.Set;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -12,8 +13,18 @@ import org.springframework.data.repository.query.Param;
 // 할당(StockAllocation) 기본 CRUD
 public interface StockAllocationRepository extends JpaRepository<StockAllocation, Long> {
 
-    // 재시도 감지: 이 주문상품에 이미 만들어진 할당이 있는지 본다(reserve 멱등 처리)
-    List<StockAllocation> findByOrderItemId(Long orderItemId);
+    /*
+     * 재시도 감지: 이 주문상품들 중 이미 할당이 만들어진 게 있는지 한 번에 본다(reserve 멱등 처리).
+     * 기존에는 orderItemId마다 개별 조회했는데, IN 절 하나로 묶어 주문 항목 수만큼 나가던 쿼리를
+     * 요청당 1회로 줄인다. status는 따지지 않는다 — 예전에도 allocation이 하나라도 있으면(상태
+     * 무관) 재예약을 건너뛰었으므로, 그 동작을 그대로 유지한다.
+     */
+    @Query("""
+            select distinct a.orderItemId
+            from StockAllocation a
+            where a.orderItemId in :orderItemIds
+            """)
+    Set<Long> findOrderItemIdsWithAllocation(@Param("orderItemIds") List<Long> orderItemIds);
 
     /*
      * confirm/release 대상 RESERVED 할당을 잠그며 조회한다(DI-2-01). 락이 없으면 같은 orderItemIds로
