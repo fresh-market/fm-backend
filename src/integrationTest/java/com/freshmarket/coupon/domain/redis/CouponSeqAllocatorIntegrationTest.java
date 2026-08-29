@@ -95,9 +95,12 @@ class CouponSeqAllocatorIntegrationTest extends IntegrationTestSupport {
      * 앱은 스크립트 본문을 자기 힙에 들고 있을 뿐 서버에 올려 두지는 않는다.
      * 스프링이 EVALSHA 를 먼저 시도하고 서버가 그 sha 를 모르면 NOSCRIPT 로 튕긴 뒤 EVAL 로
      * 다시 보내는데, 그 대가를 이벤트의 첫 요청이 문다. 발급이 가장 몰리는 순간이다.
+     *
+     * 이 시험은 preloadScript 하나만 본다. 이벤트를 여는 경로가 그것을 실제로 부르는지는
+     * CouponEventOpenedListenerIntegrationTest 가 따로 본다.
      */
     @Test
-    void 이벤트를_열_때_스크립트를_서버에_올려_둔다() throws Exception {
+    void 스크립트를_미리_올리면_서버가_그것을_안다() throws Exception {
         String sha = 스크립트_sha();
         redisTemplate.execute((RedisCallback<Object>) connection -> {
             connection.scriptingCommands().scriptFlush();

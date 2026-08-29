@@ -19,13 +19,13 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 
+import com.freshmarket.coupon.domain.CouponEventOpenedEvent;
 import com.freshmarket.coupon.domain.entity.Coupon;
 import com.freshmarket.coupon.domain.entity.CouponScope;
 import com.freshmarket.coupon.domain.entity.DiscountType;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.cache.CouponCache;
-import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
 import com.freshmarket.coupon.domain.redis.CouponSeqInitializer;
 import com.freshmarket.coupon.domain.repository.CouponRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 @ExtendWith(MockitoExtension.class)
 class CouponEventServiceTest {
@@ -48,7 +49,7 @@ class CouponEventServiceTest {
     private CouponSeqInitializer seqInitializer;
 
     @Mock
-    private CouponSeqAllocator allocator;
+    private ApplicationEventPublisher eventPublisher;
 
     @Mock
     private CouponCache couponCache;
@@ -58,7 +59,7 @@ class CouponEventServiceTest {
     @BeforeEach
     void setUp() {
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
-        sut = new CouponEventService(couponRepository, seqInitializer, allocator, couponCache, fixed);
+        sut = new CouponEventService(couponRepository, seqInitializer, eventPublisher, couponCache, fixed);
     }
 
     @Test
@@ -99,8 +100,8 @@ class CouponEventServiceTest {
 
         // then
         verify(seqInitializer).prepare(COUPON_ID, NOW.plusDays(1));
-        // 첫 요청이 EVALSHA 로 튕기지 않게 스크립트를 미리 올려 둔다
-        verify(allocator).preloadScript();
+        // 첫 요청이 EVALSHA 로 튕기지 않게 CouponEventOpenedListener 가 커밋 뒤에 스크립트를 올린다
+        verify(eventPublisher).publishEvent(new CouponEventOpenedEvent(COUPON_ID));
     }
 
     /*
