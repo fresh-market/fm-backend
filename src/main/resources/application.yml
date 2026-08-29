@@ -13,7 +13,9 @@ spring:
     # rewriteBatchedStatements 는 JDBC 배치를 여러 행짜리 문장 하나로 합친다.
     # 지금 배치를 쓰는 곳은 선착순 발급뿐이지만, 전용 프로파일에만 넣으면 테스트와 운영이
     # 서로 다른 실패 모양을 보게 되어 그 분기를 검증할 수 없다
-    url: "${DB_URL:jdbc:mysql://localhost:3306/freshmarket?serverTimezone=UTC&characterEncoding=UTF-8&rewriteBatchedStatements=true}"
+    # 드라이버 옵션을 여기 붙이지 않는다. 아래 data-source-properties 가 갖는다.
+    # 여기 적으면 DB_URL 이 주입되는 환경에서 콜론 뒤가 통째로 버려져 로컬에서만 적용된다.
+    url: "${DB_URL:jdbc:mysql://localhost:3306/freshmarket}"
     username: "${DB_USERNAME:freshmarket}"
     password: "${DB_PASSWORD:freshmarket}"
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -70,6 +72,22 @@ spring:
       data-source-properties:
         connectTimeout: 3000
         socketTimeout: 10000
+        # 아래 셋은 위 url 의 기본값 문자열에도 적혀 있지만 운영에서는 안 쓰였다.
+        # ${DB_URL:...} 문법이라 환경 변수가 있으면 콜론 뒤가 통째로 버려지는데,
+        # 운영은 compose 가 DB_URL 을 주입하기 때문이다. 그래서 로컬에서만 적용돼 왔다.
+        #
+        # rewriteBatchedStatements 가 없으면 jdbcTemplate.batchUpdate 로 묶은 배치를
+        # 드라이버가 건별 INSERT 로 풀어 보낸다. 1차 부하 시험(2026-08-30)에서 494 행이
+        # 495 개의 INSERT 문으로 나갔다. 플러시는 14 번 돌며 회당 약 35 행을 모았는데
+        # (COMMIT 14 회) 그 35 건이 각각 왕복했다. 발급이 재고만큼 나가기 시작하면
+        # 이 왕복이 그대로 플러시 스레드의 병목이 된다.
+        #
+        # characterEncoding 과 serverTimezone 은 지금 동작을 바꾸지 않는다. RDS 실측이
+        # character_set_server=utf8mb4, time_zone=UTC 라 드라이버가 추론하는 값과 같다.
+        # 명시하는 것은 파라미터 그룹이 바뀌었을 때 조용히 깨지지 않게 하려는 것이다.
+        rewriteBatchedStatements: true
+        characterEncoding: UTF-8
+        serverTimezone: UTC
 
   jpa:
     # 스키마는 Flyway 가 소유한다. Hibernate 는 어긋나면 기동을 막는 역할만 한다
