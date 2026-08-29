@@ -51,3 +51,6 @@ application-local.properties
 
 
 .gradle-user/
+
+# 부하 시험이 찍는 토큰이다. 로컬 시크릿으로 만든 값이라 올리지 않는다
+loadtest/tokens.csv

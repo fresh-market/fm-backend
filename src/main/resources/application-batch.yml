@@ -13,6 +13,15 @@ spring:
       maximum-pool-size: 10
       minimum-idle: 10
 
+      data-source-properties:
+        # 배치는 전역 기본값 10초로 못 산다. 정합성 검증이 member_coupon 300만 행과
+        # 이력 420만 행을 통째로 훑도록 만든 배치라, 그 한 문장이 10초를 넘긴다.
+        # 로컬에서 12초였고 CI 러너에서는 그보다 느려 실제로 끊겼다.
+        #
+        # 사용자를 기다리게 하는 경로가 아니라서 길게 잡아도 된다. 그래도 무한으로 두지는
+        # 않는다. 매달린 문장 하나가 배치 커넥션을 영영 물고 있으면 다음 회차가 못 돈다.
+        socketTimeout: 300000
+
 management:
   endpoints:
     web:

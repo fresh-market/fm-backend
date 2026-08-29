@@ -37,6 +37,7 @@ class MemberApiImpl implements MemberApi {
                 member.getId(),
                 member.getEmail(),
                 member.getName(),
+                member.getMemberGradeId(),
                 member.getStatus() == MemberStatus.ACTIVE);
     }
 
