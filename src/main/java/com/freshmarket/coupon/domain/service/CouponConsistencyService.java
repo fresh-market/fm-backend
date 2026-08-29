@@ -48,6 +48,15 @@ public class CouponConsistencyService {
      *
      * <p>{@code readOnly} 는 여기서 <b>선언이자 방어</b>다. 이 경로가 무엇도 안 고친다는 것을
      * 드러내고, 실수로 쓰기가 섞이면 그때 막힌다.
+     *
+     * <p><b>대가는 그동안 InnoDB 가 undo 로그를 못 지우는 것이다.</b> InnoDB 는 열려 있는 리드
+     * 뷰보다 새로운 undo 를 purge 하지 못하므로, 이 트랜잭션이 300만 행을 훑는 몇 분 내내
+     * history list 가 자란다. 읽기라서 락은 안 잡지만 공짜는 아니다. {@code application-batch.yml}
+     * 이 {@code socketTimeout} 을 300초로 늘려 둔 것이 이 회차가 분 단위라는 증거다.
+     *
+     * <p>그 대가를 감당하는 방법이 <b>새벽 4시 반</b>이라는 시각이다. 쓰기가 거의 없는 창이라
+     * 자란 history list 가 곧 따라잡힌다. 이 배치를 주간으로 옮기거나 주기를 당기려는 사람은
+     * 스냅숏 이득이 아니라 이 대가부터 다시 재야 한다.
      */
     @Transactional(readOnly = true)
     public CouponConsistencyReport verify() {
