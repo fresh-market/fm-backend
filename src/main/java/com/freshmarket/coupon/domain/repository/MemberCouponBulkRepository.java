@@ -2,8 +2,6 @@ package com.freshmarket.coupon.domain.repository;
 
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.sql.Timestamp;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -19,6 +17,15 @@ import org.springframework.stereotype.Repository;
  *
  * <p>{@code status} 와 시각을 SQL 안에서 박는다. 발급 시점의 값이 행마다 다를 이유가 없고,
  * 파라미터를 줄이면 배치가 한 문장으로 압축될 때 문장이 짧아진다.
+ *
+ * <p><b>시각은 앱이 아니라 DB 가 찍는다.</b> 발급 인스턴스가 여럿이라 앱 시계는 서로 어긋나고,
+ * 그러면 {@code issue_seq} 가 매긴 순서와 {@code created_at} 이 말하는 순서가 달라진다. 선착순을
+ * 나중에 증명할 근거가 둘인데 그 둘이 다른 이야기를 하게 된다. 순번 확보 스크립트가 앱 시계를
+ * 마다하고 Redis {@code TIME} 을 받아 쓰는 것과 같은 이유다({@code coupon-issue-seq.lua}).
+ *
+ * <p>{@code rewriteBatchedStatements=true} 가 배치를 다중행 INSERT 문장 하나로 합치고, MySQL 은
+ * {@code NOW(6)} 을 한 문장에서 한 번만 평가한다. <b>그래서 한 번의 플러시로 나간 행들이 모두
+ * 같은 시각을 갖는다.</b> 앱이 행마다 시각을 만들던 이전 방식은 한 배치 안에서도 값이 흩어졌다.
  */
 @Repository
 @RequiredArgsConstructor
@@ -27,7 +34,7 @@ public class MemberCouponBulkRepository {
     private static final String INSERT_SQL = """
             INSERT INTO member_coupon
                 (coupon_id, member_id, scope, issue_limit, issue_seq, status, issued_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'ISSUED', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, 'ISSUED', NOW(6), NOW(6), NOW(6))
             """;
 
     private static final String FIND_SEQ_SQL = """
@@ -46,7 +53,7 @@ public class MemberCouponBulkRepository {
         jdbcTemplate.batchUpdate(INSERT_SQL, new BatchPreparedStatementSetter() {
             @Override
             public void setValues(PreparedStatement ps, int i) throws SQLException {
-                bind(ps, batch.get(i), LocalDateTime.now());
+                bind(ps, batch.get(i));
             }
 
             @Override
@@ -57,7 +64,7 @@ public class MemberCouponBulkRepository {
     }
 
     public void insertOne(IssueTicket ticket) {
-        jdbcTemplate.update(INSERT_SQL, ps -> bind(ps, ticket, LocalDateTime.now()));
+        jdbcTemplate.update(INSERT_SQL, ps -> bind(ps, ticket));
     }
 
     /**
@@ -71,15 +78,11 @@ public class MemberCouponBulkRepository {
         return found.isEmpty() ? Optional.empty() : Optional.ofNullable(found.get(0));
     }
 
-    private static void bind(PreparedStatement ps, IssueTicket ticket, LocalDateTime now) throws SQLException {
-        Timestamp at = Timestamp.valueOf(now);
+    private static void bind(PreparedStatement ps, IssueTicket ticket) throws SQLException {
         ps.setLong(1, ticket.couponId());
         ps.setLong(2, ticket.memberId());
         ps.setString(3, ticket.scope().name());
         ps.setInt(4, ticket.issueLimit());
         ps.setInt(5, ticket.issueSeq());
-        ps.setTimestamp(6, at);
-        ps.setTimestamp(7, at);
-        ps.setTimestamp(8, at);
     }
 }
