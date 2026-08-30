@@ -191,27 +191,3 @@ coupon:
     # 마감으로 스위치가 꺼진 뒤 이 앱이 요청을 더 받아 주는 시간이기도 하다.
     # 종료 절차의 키 TTL(issue_end_at + 1분) 안에 넉넉히 들어간다
     coupon-cache-ttl: 5s
-
-  circuit:
-    # Redis 호출 실패를 세고 순번 확보를 막는다
-    seq:
-      failure-rate-threshold: 50
-      sliding-window-size: 100
-      minimum-number-of-calls: 20
-      wait-duration-in-open: 10s
-      permitted-in-half-open: 5
-      # Redis 타임아웃 100ms 보다 앞이어야 한다. 같으면 실제로 끊긴 호출만 세게 되어,
-      # 느려지는 구간에서 회로가 안 열리고 요청마다 100ms 를 그대로 문다.
-      # 정상 지연이 1밀리초 아래라 50ms 면 이미 한참 상한 상태다
-      slow-call-duration: 50ms
-
-    # DB 쓰기 실패를 세고 역시 순번 확보를 막는다.
-    # DB 가 죽어도 Redis 는 멀쩡해 위 회로가 안 열리기 때문에 따로 둔다
-    write:
-      failure-rate-threshold: 50
-      sliding-window-size: 100
-      minimum-number-of-calls: 20
-      wait-duration-in-open: 10s
-      permitted-in-half-open: 5
-      # socketTimeout 250ms 보다 앞이라, 매달린 쓰기가 실패로 확정되기 전에 느림으로 먼저 잡힌다
-      slow-call-duration: 150ms
