@@ -45,10 +45,10 @@ public class StockLotQueryRepository {
      * 2) "소진율 하위 10%" 는 전체 대상 안에서의 상대적 순위라 애초에 SQL 한 줄로
      *    표현하기 어렵다.
      *
-     * expiry_date 범위가 idx_lot_expiry_date 를 탄다 (V21). 기존 idx_lot_fefo 는 선두가
+     * expiry_date 범위가 idx_lot_expiry_date 를 탄다 (V23). 기존 idx_lot_fefo 는 선두가
      * product_option_id 라 여기서 탈 수 없어, 인덱스가 없으면 stock_lot 전체를 훑는다.
      * 선두를 status 로 잡을 수는 없다 — CollationExpressions 가 컬럼을 collate() 로 감싸
-     * 인덱스를 못 타기 때문이다. 자세한 근거는 V21 마이그레이션 주석에 있다.
+     * 인덱스를 못 타기 때문이다. 자세한 근거는 V23 마이그레이션 주석에 있다.
      */
     public List<CampaignTargetLotCandidate> findCandidatesExpiringBetween(
             LocalDate from, LocalDate to, int minAvailableQty) {
