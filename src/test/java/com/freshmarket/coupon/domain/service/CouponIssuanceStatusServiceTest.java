@@ -23,6 +23,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.InvalidDataAccessApiUsageException;
+import org.springframework.dao.QueryTimeoutException;
 
 @ExtendWith(MockitoExtension.class)
 class CouponIssuanceStatusServiceTest {
@@ -114,6 +116,39 @@ class CouponIssuanceStatusServiceTest {
         // then
         assertThat(response.issuedQuantity()).isZero();
         assertThat(response.remaining()).isEqualTo(10000);
+    }
+
+    // Redis 가 죽었어도 발급 경로는 멀쩡하므로 이 조회는 실패로 답하지 않고 DB 값으로 대신한다
+    @Test
+    void 레디스가_일시적으로_실패해도_DB_값으로_대신한다() {
+        // given
+        when(couponCache.find(COUPON_ID)).thenReturn(Optional.of(limitedCoupon(10000)));
+        when(seqAllocator.currentIssuedCount(COUPON_ID))
+                .thenThrow(new QueryTimeoutException("Redis 가 응답하지 않는다"));
+        Coupon coupon = Coupon.draftLimited("선착순 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
+                LocalDate.now(), LocalDate.now().plusDays(3),
+                10000, LocalDateTime.now().minusDays(1), LocalDateTime.now().minusHours(1));
+        setField(coupon, "issuedQuantity", 8231);
+        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
+
+        // when
+        CouponIssuanceStatusResponse response = sut.findStatus(COUPON_ID);
+
+        // then
+        assertThat(response.issuedQuantity()).isEqualTo(8231);
+    }
+
+    // 일시적이지 않은 실패(코드가 잘못 부른 경우 등)까지 덮으면 진짜 버그가 묻힌다
+    @Test
+    void 레디스_실패가_일시적이지_않으면_그대로_던진다() {
+        // given
+        when(couponCache.find(COUPON_ID)).thenReturn(Optional.of(limitedCoupon(10000)));
+        when(seqAllocator.currentIssuedCount(COUPON_ID))
+                .thenThrow(new InvalidDataAccessApiUsageException("잘못된 호출"));
+
+        // when, then
+        assertThatThrownBy(() -> sut.findStatus(COUPON_ID))
+                .isInstanceOf(InvalidDataAccessApiUsageException.class);
     }
 
     private static CachedCoupon unlimitedCoupon() {
