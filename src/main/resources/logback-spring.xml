@@ -55,7 +55,7 @@
          프로덕션: JSON 구조화 로그 (ELK / Loki / CloudWatch 수집용)
          의존성: net.logstash.logback:logstash-logback-encoder:8.0
          - MDC 필드(traceId, method, uri, clientIp)가 JSON 키로 자동 포함
-         - AsyncAppender + neverBlock 으로 로깅이 요청 스레드를 막지 않게 함
+         - AsyncAppender 로 로깅 I/O 가 요청 스레드를 블로킹하지 않게 함
          ================================================================ -->
     <springProfile name="prod">
         <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
@@ -79,30 +79,12 @@
             </encoder>
         </appender>
 
-        <!--
-             neverBlock=true 가 이 블록의 요점이다.
-
-             false 로 두면 큐가 찼을 때 요청 스레드가 자리 날 때까지 기다린다. 그러면
-             "로깅 I/O 가 요청 스레드를 블로킹하지 않게" 라는 이 appender 의 목적이
-             포화 구간에서만 정확히 뒤집힌다. 로그가 제일 많이 나오는 때가 그 구간이다.
-
-             실제로 그렇게 무너졌다. 2026-08-30 부하 시험에서 혼잡 24,000건이 몰리자
-             큐가 차고 요청 스레드가 거기서 막혔다. 스레드가 묶이니 새 연결을 못 받아
-             ALB 가 연결 오류 11,590건과 504 13,374건을 냈다. 혼잡이 5,134건이던 회차는
-             연결 오류가 0 이었다.
-
-             그래서 맞바꿈을 뒤집는다. 로그를 잃느니 느려지겠다에서, 느려지느니 로그를
-             버리겠다로 간다. 버려도 건수는 coupon_issue_results_total 이 정확히 센다.
-
-             queueSize 는 1024 에서 8192 로 올린다. 버리는 것은 마지막 수단이고, 순간의
-             폭주는 큐가 흡수하는 것이 낫다. 이벤트는 인코딩 전 객체라 한 건이 가볍다.
-        -->
         <appender name="ASYNC_JSON" class="ch.qos.logback.classic.AsyncAppender">
             <appender-ref ref="JSON_CONSOLE"/>
-            <queueSize>8192</queueSize>
-            <!-- 0 이면 자리가 모자랄 때 INFO 이하를 미리 버리지 않는다 -->
+            <queueSize>1024</queueSize>
+            <!-- 큐 포화 시에도 WARN/ERROR 는 절대 버리지 않음 -->
             <discardingThreshold>0</discardingThreshold>
-            <neverBlock>true</neverBlock>
+            <neverBlock>false</neverBlock>
             <includeCallerData>false</includeCallerData>
         </appender>
 

@@ -52,7 +52,7 @@ class CouponSeqAllocatorCircuitTest {
         CouponCircuitProperties.Settings seq = new CouponCircuitProperties.Settings(
                 50f, 10, MINIMUM_CALLS, WAIT_IN_OPEN, 2, Duration.ofMillis(500));
         sut = new CouponSeqAllocator(redisTemplate, issueProperties,
-                new CouponCircuitProperties(seq, seq), new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+                new CouponCircuitProperties(seq, seq));
     }
 
     @Test
