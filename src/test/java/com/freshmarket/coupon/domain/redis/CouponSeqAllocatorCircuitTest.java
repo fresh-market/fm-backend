@@ -1,5 +1,6 @@
 package com.freshmarket.coupon.domain.redis;
 
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -52,7 +53,7 @@ class CouponSeqAllocatorCircuitTest {
         CouponCircuitProperties.Settings seq = new CouponCircuitProperties.Settings(
                 50f, 10, MINIMUM_CALLS, WAIT_IN_OPEN, 2, Duration.ofMillis(500));
         sut = new CouponSeqAllocator(redisTemplate, issueProperties,
-                new CouponCircuitProperties(seq, seq));
+                new CouponCircuitProperties(seq, seq), CircuitBreakerRegistry.ofDefaults());
     }
 
     @Test
