@@ -2,8 +2,6 @@ package com.freshmarket.coupon.domain.issue;
 
 import java.util.concurrent.Callable;
 
-import com.freshmarket.coupon.domain.CouponCircuitProperties;
-import com.freshmarket.coupon.domain.CouponCircuits;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.springframework.stereotype.Component;
@@ -29,9 +27,12 @@ public class CouponWriteCircuit {
 
     private final CircuitBreaker circuitBreaker;
 
-    public CouponWriteCircuit(CouponCircuitProperties properties,
-                              CircuitBreakerRegistry circuitBreakerRegistry) {
-        this.circuitBreaker = CouponCircuits.forDatabaseWrite(circuitBreakerRegistry, properties.write());
+    public CouponWriteCircuit(CircuitBreakerRegistry circuitBreakers) {
+        /*
+         * 무엇을 실패로 세느냐는 application.yml 의 recordExceptions 가 정한다.
+         * 중복 키를 세면 이벤트가 정상일 때 회로가 열리므로 그 목록에서 빠져 있다.
+         */
+        this.circuitBreaker = circuitBreakers.circuitBreaker("couponWrite");
     }
 
     /**
