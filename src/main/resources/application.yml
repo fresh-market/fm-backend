@@ -290,3 +290,60 @@ resilience4j:
         base-config: kakao-low-traffic
       kakaoUnlink:
         base-config: kakao-low-traffic
+
+      # 선착순 발급이 쓰는 회로 둘이다. 값의 근거는 docs/coupon/coupon.md 9장에 있다.
+      #
+      # 창을 시간 기준으로 두는 것이 이 설정의 요점이다. 건수 기준이면 유입이 빠를수록 판정
+      # 근거의 시간 폭이 좁아진다. 초당 2천이면 100건이 50밀리초 어치라, GC 정지 하나가 창을
+      # 통째로 덮어 회로가 열린다. 실제로 그렇게 무너졌다 (2026-08-30 부하 시험, 최대 정지
+      # 330밀리초, 느린 호출 비율 100%, 발급 7,281건에서 295건으로). 10초 창이면 3% 라 묻힌다.
+      couponSeq:
+        slidingWindowType: TIME_BASED
+        slidingWindowSize: 10
+        # 시간 창이라 표본이 많다. 이벤트가 없을 때 소수 호출로 열리는 것을 막는다
+        minimumNumberOfCalls: 100
+        failureRateThreshold: 50
+        slowCallRateThreshold: 50
+        # Redis 타임아웃 100ms 보다 앞이어야 한다. 같으면 실제로 끊긴 호출만 세게 되어,
+        # 느려지는 구간에서 회로가 안 열리고 요청마다 100ms 를 그대로 문다.
+        # 정상 지연이 1밀리초 아래라 50ms 면 이미 한참 상한 상태다
+        slowCallDurationThreshold: 50ms
+        # 90초짜리 이벤트에서 10초를 닫아 두면 그것만으로 11% 를 잃는다. 여는 것을 막는 값이
+        # 아니라 회복을 얼마나 빨리 알아채느냐를 정하는 값이다
+        waitDurationInOpenState: 3s
+        # 회복 판정에 쓰는 표본이다. 5 면 초당 2천에서 2.5밀리초 어치라 그 다섯의 운에 걸린다
+        permittedNumberOfCallsInHalfOpenState: 30
+        # 발급이 몰리는 구간이라 다음 요청이 올 때까지 전환을 미루지 않는다
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        # 캐시 장애로 health 가 DOWN 되면 ALB 가 인스턴스를 빼 상황이 악화된다 (INF-4-01)
+        registerHealthIndicator: false
+        eventConsumerBufferSize: 100
+
+      # DB 쓰기 회로다. DB 가 죽어도 Redis 는 멀쩡해 위 회로가 안 열리기 때문에 따로 둔다.
+      couponWrite:
+        slidingWindowType: TIME_BASED
+        slidingWindowSize: 10
+        # 플러시 스레드가 하나라 쓰기가 한 번에 하나씩 돈다. 초당 50번 남짓이라 100 은 못 채운다
+        minimumNumberOfCalls: 20
+        failureRateThreshold: 50
+        slowCallRateThreshold: 50
+        # socketTimeout 250ms 보다 앞이라, 매달린 쓰기가 실패로 확정되기 전에 느림으로 먼저 잡힌다
+        slowCallDurationThreshold: 150ms
+        waitDurationInOpenState: 3s
+        permittedNumberOfCallsInHalfOpenState: 30
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        registerHealthIndicator: false
+        eventConsumerBufferSize: 100
+        # 무엇을 실패로 세느냐가 이 회로의 요점이다. 여기 적힌 것만 센다.
+        #
+        # DuplicateKeyException 을 세면 이벤트가 정상일 때 회로가 열린다. 재시도와 매핑 유실로
+        # 중복이 꾸준히 나오는 것이 이 설계의 정상 동작이기 때문이다. BadSqlGrammarException 도
+        # 안 센다. 그것은 버그이고, 세면 회로가 열린 뒤 영영 안 닫힌다.
+        #
+        # 스프링의 TransientDataAccessException 만으로는 부족하다. 커넥션을 못 얻은 실패를
+        # 스프링은 비일시적으로 분류하는데, Multi-AZ 페일오버는 60~120초 뒤에 끝나므로 여기서는
+        # 일시적이다. 그래서 DataAccessResourceFailureException 을 함께 적는다.
+        recordExceptions:
+          - org.springframework.dao.DataAccessResourceFailureException
+          - org.springframework.dao.TransientDataAccessException
+          - org.springframework.dao.RecoverableDataAccessException

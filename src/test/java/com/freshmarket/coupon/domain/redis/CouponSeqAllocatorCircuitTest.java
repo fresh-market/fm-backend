@@ -11,8 +11,10 @@ import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 
-import com.freshmarket.coupon.domain.CouponCircuitProperties;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -49,10 +51,48 @@ class CouponSeqAllocatorCircuitTest {
         CouponIssueProperties issueProperties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
                 Duration.ofSeconds(2), Duration.ofSeconds(5));
-        CouponCircuitProperties.Settings seq = new CouponCircuitProperties.Settings(
-                50f, 10, MINIMUM_CALLS, WAIT_IN_OPEN, 2, Duration.ofMillis(500));
-        sut = new CouponSeqAllocator(redisTemplate, issueProperties,
-                new CouponCircuitProperties(seq, seq), new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+        /*
+         * 운영 값은 application.yml 이 갖는다. 여기서는 시험이 짧게 끝나도록 작게 잡은
+         * 설정으로 레지스트리를 만들어 넣는다. 이름이 couponSeq 여야 코드가 그것을 집는다.
+         */
+        CircuitBreakerRegistry registry = CircuitBreakerRegistry.of(CircuitBreakerConfig.custom()
+                .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
+                .slidingWindowSize(10)
+                .minimumNumberOfCalls(MINIMUM_CALLS)
+                .failureRateThreshold(50f)
+                .waitDurationInOpenState(WAIT_IN_OPEN)
+                .permittedNumberOfCallsInHalfOpenState(2)
+                // 운영과 같게 둔다. 안 켜면 다음 호출이 올 때까지 OPEN 인 채로 남아
+                // getState() 로 회복을 못 본다
+                .automaticTransitionFromOpenToHalfOpenEnabled(true)
+                .slowCallDurationThreshold(Duration.ofMillis(500))
+                .build());
+        sut = new CouponSeqAllocator(redisTemplate, issueProperties, registry);
+        /*
+         * 운영에서는 이 회로가 METRICS_ONLY 로 떠서 호출을 안 막는다 (CouponSeqAllocator 참조).
+         * 아래 시험들은 회로가 열리는 동작 자체를 보는 것이라 여기서 닫힘으로 되돌린다.
+         * 켜기로 결정이 바뀌면 이 줄을 지우고 시험이 그대로 통과해야 한다.
+         */
+        registry.circuitBreaker("couponSeq").transitionToClosedState();
+    }
+
+    /*
+     * 이 회로는 지금 호출을 막지 않는다. 재서 그렇게 정했고 근거는 CouponSeqAllocator 에 있다.
+     *
+     * DISABLED 가 아니라 METRICS_ONLY 인 것이 요점이다. 둘 다 안 막지만 이쪽은 실패율과 느림
+     * 비율을 계속 기록해서, 나중에 "이제 켜도 되는가" 를 판단할 근거가 남는다.
+     */
+    @Test
+    void 순번_회로는_호출을_막지_않는다() {
+        CircuitBreakerRegistry registry = CircuitBreakerRegistry.of(CircuitBreakerConfig.ofDefaults());
+        CouponIssueProperties properties = new CouponIssueProperties(
+                Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
+                Duration.ofSeconds(2), Duration.ofSeconds(5));
+
+        new CouponSeqAllocator(redisTemplate, properties, registry);
+
+        assertThat(registry.circuitBreaker("couponSeq").getState())
+                .isEqualTo(CircuitBreaker.State.METRICS_ONLY);
     }
 
     @Test

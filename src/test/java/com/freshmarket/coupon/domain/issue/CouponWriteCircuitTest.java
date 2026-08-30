@@ -5,9 +5,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.sql.SQLException;
 import java.time.Duration;
+
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import java.util.concurrent.Callable;
 
-import com.freshmarket.coupon.domain.CouponCircuitProperties;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,10 +34,23 @@ class CouponWriteCircuitTest {
 
     @BeforeEach
     void setUp() {
-        CouponCircuitProperties.Settings settings = new CouponCircuitProperties.Settings(
-                50f, 10, MINIMUM_CALLS, WAIT_IN_OPEN, 2, Duration.ofSeconds(5));
-        sut = new CouponWriteCircuit(new CouponCircuitProperties(settings, settings),
-                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+        // 운영 값은 application.yml 이 갖는다. 여기서는 시험이 짧게 끝나도록 작게 잡는다
+        CircuitBreakerRegistry registry = CircuitBreakerRegistry.of(CircuitBreakerConfig.custom()
+                .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
+                .slidingWindowSize(10)
+                .minimumNumberOfCalls(MINIMUM_CALLS)
+                .failureRateThreshold(50f)
+                .waitDurationInOpenState(WAIT_IN_OPEN)
+                .permittedNumberOfCallsInHalfOpenState(2)
+                // 운영과 같게 둔다. 안 켜면 다음 호출이 올 때까지 OPEN 인 채로 남아
+                // getState() 로 회복을 못 본다
+                .automaticTransitionFromOpenToHalfOpenEnabled(true)
+                .slowCallDurationThreshold(Duration.ofSeconds(5))
+                .recordExceptions(org.springframework.dao.DataAccessResourceFailureException.class,
+                        org.springframework.dao.TransientDataAccessException.class,
+                        org.springframework.dao.RecoverableDataAccessException.class)
+                .build());
+        sut = new CouponWriteCircuit(registry);
     }
 
     @Test

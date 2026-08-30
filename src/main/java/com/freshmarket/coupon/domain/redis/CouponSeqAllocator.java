@@ -6,12 +6,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 
-import com.freshmarket.coupon.domain.CouponCircuitProperties;
-import com.freshmarket.coupon.domain.CouponCircuits;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
-import io.micrometer.core.instrument.MeterRegistry;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
@@ -55,12 +53,37 @@ public class CouponSeqAllocator {
 
     public CouponSeqAllocator(StringRedisTemplate redisTemplate,
                               CouponIssueProperties properties,
-                              CouponCircuitProperties circuitProperties,
-                              MeterRegistry meterRegistry) {
+                              CircuitBreakerRegistry circuitBreakers) {
         this.redisTemplate = redisTemplate;
         this.reclaimAfter = properties.reclaimAfter();
         this.allocateScript = loadAllocateScript();
-        this.circuitBreaker = CouponCircuits.forRedis(meterRegistry, circuitProperties.seq());
+        /*
+         * 회로를 여기서 만들지 않고 레지스트리에서 받는다.
+         * 값은 application.yml 의 resilience4j.circuitbreaker.instances.couponSeq 가 갖고,
+         * 지표도 스타터가 함께 붙여 준다. 이름이 그 설정 키와 같아야 짝이 맞는다.
+         */
+        this.circuitBreaker = circuitBreakers.circuitBreaker("couponSeq");
+
+        /*
+         * 이 회로는 지금 호출을 막지 않는다. 재서 그렇게 정했다.
+         *
+         * 2026-08-30 부하 시험에서 회로만 끄고 같은 조건으로 돌렸더니 발급이 196건에서
+         * 5,513건으로 늘었다. 리팩토링 뒤 회차에서는 seq 실패 32,799건 중 29,016건이 회로가
+         * 막은 것이었고, 진짜 Redis 실패는 3,783건뿐이었다. 그 회차는 연결 실패가 6,018건으로
+         * 여섯 회차 중 가장 적어 기계가 제일 멀쩡했는데도 그랬다.
+         *
+         * 원인은 회로가 읽는 신호에 있다. 지연 하나에 Redis 건강과 이 JVM 의 GC 정지가 섞여
+         * 있는데, 정지가 104~330밀리초라 느림 기준 50밀리초를 늘 넘는다. Redis 가 멀쩡해도
+         * 정지 한 번이 그 사이의 호출을 전부 느린 것으로 만든다.
+         *
+         * DISABLED 가 아니라 METRICS_ONLY 를 쓴다. 둘 다 호출을 안 막지만 이쪽은 실패율과
+         * 느림 비율을 계속 기록한다. 그 값이 있어야 "이제 켜도 되는가" 를 나중에 판단할 수 있다.
+         *
+         * 켜기 전에 풀어야 할 것은 느림 판정과 GC 정지를 가르는 방법이다. 지금 기준으로는
+         * 둘이 구분되지 않는다. DB 쓰기 회로(couponWrite)는 그대로 켜 둔다. 그쪽은 실패를
+         * 예외 목록으로 세고 느림 기준도 150밀리초라 정지에 덜 휘둘린다.
+         */
+        this.circuitBreaker.transitionToMetricsOnlyState();
     }
 
     /**

@@ -11,7 +11,9 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.convert.DurationStyle;
 import org.springframework.core.env.Environment;
+import org.springframework.boot.convert.DurationStyle;
 import org.springframework.core.env.Environment;
 
 /*
@@ -42,16 +44,23 @@ class CouponProfileBindingTest {
         });
     }
 
-    // 회로가 둘이고 세는 대상이 달라 느림 기준도 다르다
+    /*
+     * 회로 값은 resilience4j 스타터가 갖는다. 우리가 레코드로 다시 정의하지 않으므로
+     * 여기서는 그 키가 실제로 적혀 있는지를 환경에서 읽어 확인한다.
+     *
+     * 창이 시간 기준인 것이 이 확인의 요점이다. 건수 기준이면 유입이 빠를수록 판정 근거의
+     * 시간 폭이 좁아져, GC 정지 하나가 창을 통째로 덮고 회로가 열린다.
+     */
     @Test
-    void 회로_값이_둘_다_프로파일에서_온다() {
+    void 회로_둘이_시간_창을_쓴다() {
         runner.run(context -> {
-            CouponCircuitProperties properties = context.getBean(CouponCircuitProperties.class);
+            Environment env = context.getEnvironment();
 
-            assertThat(properties.seq().slowCallDuration()).isEqualTo(Duration.ofMillis(50));
-            assertThat(properties.write().slowCallDuration()).isEqualTo(Duration.ofMillis(150));
-            assertThat(properties.seq().minimumNumberOfCalls()).isEqualTo(20);
-            assertThat(properties.write().waitDurationInOpen()).isEqualTo(Duration.ofSeconds(10));
+            for (String name : new String[] {"couponSeq", "couponWrite"}) {
+                String prefix = "resilience4j.circuitbreaker.instances." + name + ".";
+                assertThat(env.getProperty(prefix + "slidingWindowType")).isEqualTo("TIME_BASED");
+                assertThat(env.getProperty(prefix + "slidingWindowSize")).isEqualTo("10");
+            }
         });
     }
 
@@ -105,15 +114,14 @@ class CouponProfileBindingTest {
     @Test
     void 회로_느림_기준이_소켓_타임아웃보다_앞이다() {
         runner.run(context -> {
-            CouponCircuitProperties circuits = context.getBean(CouponCircuitProperties.class);
             Environment env = context.getEnvironment();
 
             long 응답대기 = Long.parseLong(
                     env.getProperty("spring.datasource.hikari.data-source-properties.socketTimeout"));
             long redis = Long.parseLong(env.getProperty("spring.data.redis.timeout").replace("ms", ""));
 
-            assertThat(circuits.write().slowCallDuration()).isLessThan(Duration.ofMillis(응답대기));
-            assertThat(circuits.seq().slowCallDuration()).isLessThan(Duration.ofMillis(redis));
+            assertThat(느림기준밀리초(env, "couponWrite")).isLessThan(응답대기);
+            assertThat(느림기준밀리초(env, "couponSeq")).isLessThan(redis);
         });
     }
 
@@ -141,8 +149,15 @@ class CouponProfileBindingTest {
         });
     }
 
+    // resilience4j 는 이 값을 "50ms" 같은 문자열로 받는다. 스프링이 쓰는 파서로 그대로 읽는다
+    private static long 느림기준밀리초(Environment env, String circuitName) {
+        String raw = env.getProperty(
+                "resilience4j.circuitbreaker.instances." + circuitName + ".slowCallDurationThreshold");
+        return DurationStyle.detectAndParse(raw).toMillis();
+    }
+
     @Configuration(proxyBeanMethods = false)
-    @EnableConfigurationProperties({CouponIssueProperties.class, CouponCircuitProperties.class})
+    @EnableConfigurationProperties(CouponIssueProperties.class)
     static class BindOnly {
     }
 }
