@@ -246,7 +246,8 @@ class CouponCacheTest {
     private static Coupon coupon(boolean active) {
         Coupon coupon = Coupon.draftLimited("선착순 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
                 LocalDate.of(2026, 1, 1), LocalDate.of(2030, 1, 1),
-                100, LocalDateTime.of(2026, 5, 1, 0, 0), LocalDateTime.of(2026, 7, 1, 0, 0));
+                100, LocalDateTime.of(2026, 5, 1, 0, 0), LocalDateTime.of(2026, 7, 1, 0, 0),
+                null, null, null);
         setField(coupon, "id", COUPON_ID);
         setField(coupon, "active", active);
         return coupon;
