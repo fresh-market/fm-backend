@@ -1,11 +1,17 @@
 package com.freshmarket.coupon.domain.service;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import com.freshmarket.coupon.domain.audit.CouponConsistencyReport;
 import com.freshmarket.coupon.domain.audit.CouponIssueCount;
 import com.freshmarket.coupon.domain.audit.CouponSeqSpan;
 import com.freshmarket.coupon.domain.audit.DuplicateIssue;
+import com.freshmarket.coupon.domain.dto.CouponConsistencyCheckResponse;
+import com.freshmarket.coupon.domain.exception.CouponErrorCode;
+import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.repository.CouponConsistencyRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -73,6 +79,42 @@ public class CouponConsistencyService {
                 couponConsistencyRepository.countIssuesWithoutHistory());
         report(report);
         return report;
+    }
+
+    /**
+     * 쿠폰 한 장만 관리자 요청에 맞춰 즉시 확인한다.
+     *
+     * <p>{@link #verify()} 의 새벽 배치와 서비스 메서드를 공유하지 않는다. 그 배치는 300만 건
+     * 전체를 REPEATABLE READ 스냅숏 안에서 훑어야 하지만, 여기는 이 쿠폰의 발급 행만 보므로
+     * 그 스냅숏이 필요 없다. 한정 수량 자체가 작아 각 쿼리가 짧게 끝난다.
+     *
+     * @throws com.freshmarket.coupon.domain.exception.CouponException 그 쿠폰이 없으면
+     */
+    public CouponConsistencyCheckResponse verify(long couponId) {
+        CouponIssueCount counts = couponConsistencyRepository.findIssueCount(couponId)
+                .orElseThrow(() -> new CouponException(CouponErrorCode.COUPON_NOT_FOUND));
+        List<Integer> seqGaps = findSeqGaps(couponId);
+        long duplicatedMembers = couponConsistencyRepository.countDuplicateMembers(couponId);
+        boolean consistent = !counts.counterMismatched() && duplicatedMembers == 0 && seqGaps.isEmpty();
+        return new CouponConsistencyCheckResponse(
+                counts.issuedQuantity(), counts.actual(), duplicatedMembers, seqGaps, consistent);
+    }
+
+    // 나간 순번들 사이에서 비어 있는 번호를 찾는다. 한정 수량만큼만 훑으므로 전체 배치와 비용이 다르다
+    private List<Integer> findSeqGaps(long couponId) {
+        List<Integer> seqs = couponConsistencyRepository.findIssueSeqs(couponId);
+        if (seqs.isEmpty()) {
+            return List.of();
+        }
+        Set<Integer> present = new HashSet<>(seqs);
+        int maxSeq = seqs.get(seqs.size() - 1);
+        List<Integer> gaps = new ArrayList<>();
+        for (int seq = 1; seq <= maxSeq; seq++) {
+            if (!present.contains(seq)) {
+                gaps.add(seq);
+            }
+        }
+        return gaps;
     }
 
     /*

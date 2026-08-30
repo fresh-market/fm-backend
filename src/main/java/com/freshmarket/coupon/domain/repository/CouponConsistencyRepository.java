@@ -1,6 +1,7 @@
 package com.freshmarket.coupon.domain.repository;
 
 import java.util.List;
+import java.util.Optional;
 
 import com.freshmarket.coupon.domain.audit.CouponIssueCount;
 import com.freshmarket.coupon.domain.audit.CouponSeqSpan;
@@ -80,7 +81,53 @@ public class CouponConsistencyRepository {
                                 WHERE h.member_coupon_id = mc.member_coupon_id)
             """;
 
+    // 쿠폰 하나만 즉시 확인할 때 쓴다. WHERE 로 좁혀도 LEFT JOIN 구조는 findIssueCounts()와 같다
+    private static final String ISSUE_COUNT_SQL = """
+            SELECT c.coupon_id, c.issued_quantity, c.total_quantity, COUNT(mc.member_coupon_id) AS actual
+              FROM coupon c
+              LEFT JOIN member_coupon mc ON mc.coupon_id = c.coupon_id
+             WHERE c.coupon_id = ?
+             GROUP BY c.coupon_id, c.issued_quantity, c.total_quantity
+            """;
+
+    // 쿠폰 하나의 순번만 읽는다. 한정 수량만큼만 나오므로 빈 자리는 이 목록에서 앱이 직접 계산한다
+    private static final String ISSUE_SEQS_SQL = """
+            SELECT issue_seq FROM member_coupon
+             WHERE coupon_id = ? AND issue_seq IS NOT NULL
+             ORDER BY issue_seq
+            """;
+
+    private static final String DUPLICATE_MEMBER_COUNT_SQL = """
+            SELECT COUNT(*) FROM (
+                SELECT member_id FROM member_coupon
+                 WHERE coupon_id = ?
+                 GROUP BY member_id
+                HAVING COUNT(*) > 1
+            ) duplicated
+            """;
+
     private final JdbcTemplate jdbcTemplate;
+
+    /** 쿠폰 하나의 카운터, 한정 수량, 실제 발급 행 수를 읽는다. 행이 없으면 그 쿠폰이 없는 것이다. */
+    public Optional<CouponIssueCount> findIssueCount(long couponId) {
+        return jdbcTemplate.query(ISSUE_COUNT_SQL, (rs, rowNum) -> new CouponIssueCount(
+                        rs.getLong("coupon_id"),
+                        rs.getLong("issued_quantity"),
+                        rs.getObject("total_quantity", Integer.class),
+                        rs.getLong("actual")),
+                couponId).stream().findFirst();
+    }
+
+    /** 쿠폰 하나에 나간 순번을 오름차순으로 읽는다. 무제한 쿠폰은 빈 목록이다. */
+    public List<Integer> findIssueSeqs(long couponId) {
+        return jdbcTemplate.query(ISSUE_SEQS_SQL, (rs, rowNum) -> rs.getInt("issue_seq"), couponId);
+    }
+
+    /** 쿠폰 하나에서 같은 회원이 둘 이상 받은 건수를 센다. */
+    public long countDuplicateMembers(long couponId) {
+        Long counted = jdbcTemplate.queryForObject(DUPLICATE_MEMBER_COUNT_SQL, Long.class, couponId);
+        return counted == null ? 0L : counted;
+    }
 
     /** 쿠폰마다 카운터, 한정 수량, 실제 발급 행 수를 한 행으로 읽는다. */
     public List<CouponIssueCount> findIssueCounts() {
