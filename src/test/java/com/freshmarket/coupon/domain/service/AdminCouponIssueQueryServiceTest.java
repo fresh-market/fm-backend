@@ -17,9 +17,9 @@ import com.freshmarket.coupon.domain.dto.AdminMemberCouponHistoryResponse;
 import com.freshmarket.coupon.domain.entity.MemberCouponStatus;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
-import com.freshmarket.coupon.domain.repository.CouponQueryRepository;
 import com.freshmarket.coupon.domain.repository.CouponRepository;
 import com.freshmarket.coupon.domain.repository.MemberCouponHistoryRepository;
+import com.freshmarket.coupon.domain.repository.MemberCouponQueryRepository;
 import com.freshmarket.coupon.domain.repository.MemberCouponRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -38,7 +38,7 @@ class AdminCouponIssueQueryServiceTest {
     private CouponRepository couponRepository;
 
     @Mock
-    private CouponQueryRepository couponQueryRepository;
+    private MemberCouponQueryRepository memberCouponQueryRepository;
 
     @Mock
     private MemberCouponRepository memberCouponRepository;
@@ -69,7 +69,7 @@ class AdminCouponIssueQueryServiceTest {
         when(couponRepository.existsById(1L)).thenReturn(true);
         AdminMemberCouponSearchCondition condition = new AdminMemberCouponSearchCondition(1L, null, null, 1);
         LocalDateTime now = LocalDateTime.now();
-        when(couponQueryRepository.searchIssues(condition)).thenReturn(List.of(
+        when(memberCouponQueryRepository.searchIssues(condition)).thenReturn(List.of(
                 new AdminMemberCouponListRow(2L, 20L, 2, MemberCouponStatus.ISSUED, now, null),
                 new AdminMemberCouponListRow(1L, 10L, 1, MemberCouponStatus.ISSUED, now.minusMinutes(1), null)));
 
@@ -87,7 +87,7 @@ class AdminCouponIssueQueryServiceTest {
         // given
         when(couponRepository.existsById(1L)).thenReturn(true);
         AdminMemberCouponSearchCondition condition = new AdminMemberCouponSearchCondition(1L, null, null, 20);
-        when(couponQueryRepository.searchIssues(any())).thenReturn(List.of(
+        when(memberCouponQueryRepository.searchIssues(any())).thenReturn(List.of(
                 new AdminMemberCouponListRow(1L, 10L, 1, MemberCouponStatus.ISSUED, LocalDateTime.now(), null)));
 
         // when

@@ -11,9 +11,9 @@ import com.freshmarket.coupon.domain.dto.AdminMemberCouponSearchCondition;
 import com.freshmarket.coupon.domain.dto.AdminMemberCouponHistoryResponse;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
-import com.freshmarket.coupon.domain.repository.CouponQueryRepository;
 import com.freshmarket.coupon.domain.repository.CouponRepository;
 import com.freshmarket.coupon.domain.repository.MemberCouponHistoryRepository;
+import com.freshmarket.coupon.domain.repository.MemberCouponQueryRepository;
 import com.freshmarket.coupon.domain.repository.MemberCouponRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -33,7 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class AdminCouponIssueQueryService {
 
     private final CouponRepository couponRepository;
-    private final CouponQueryRepository couponQueryRepository;
+    private final MemberCouponQueryRepository memberCouponQueryRepository;
     private final MemberCouponRepository memberCouponRepository;
     private final MemberCouponHistoryRepository memberCouponHistoryRepository;
 
@@ -47,7 +47,7 @@ public class AdminCouponIssueQueryService {
         if (!couponRepository.existsById(condition.couponId())) {
             throw new CouponException(CouponErrorCode.COUPON_NOT_FOUND);
         }
-        List<AdminMemberCouponListRow> found = couponQueryRepository.searchIssues(condition);
+        List<AdminMemberCouponListRow> found = memberCouponQueryRepository.searchIssues(condition);
 
         boolean hasNext = found.size() > condition.pageSize();
         List<AdminMemberCouponListRow> page = hasNext ? found.subList(0, condition.pageSize()) : found;

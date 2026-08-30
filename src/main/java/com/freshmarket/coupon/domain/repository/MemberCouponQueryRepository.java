@@ -18,10 +18,13 @@ import org.springframework.stereotype.Repository;
  *
  * ProductQueryRepository 와 같은 이유로 Spring Data 의 Repository+Impl 자동 결합 관례를 쓰지
  * 않는다(DPB-4-10, 레포지토리 이름 규칙과 충돌).
+ *
+ * 이름은 조회 대상 엔티티(MemberCoupon)를 따른다. 관리자 전용이라고 Admin 접두사를 붙이지
+ * 않는다(DPB-4-09) — 저장 모델은 소비자가 누구든 하나다.
  */
 @Repository
 @RequiredArgsConstructor
-public class CouponQueryRepository {
+public class MemberCouponQueryRepository {
 
     private final JPAQueryFactory queryFactory;
 
