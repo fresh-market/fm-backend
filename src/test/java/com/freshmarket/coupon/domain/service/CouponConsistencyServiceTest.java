@@ -1,14 +1,19 @@
 package com.freshmarket.coupon.domain.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Optional;
 
 import com.freshmarket.coupon.domain.audit.CouponConsistencyReport;
 import com.freshmarket.coupon.domain.audit.CouponIssueCount;
 import com.freshmarket.coupon.domain.audit.CouponSeqSpan;
 import com.freshmarket.coupon.domain.audit.DuplicateIssue;
+import com.freshmarket.coupon.domain.dto.CouponConsistencyCheckResponse;
+import com.freshmarket.coupon.domain.exception.CouponErrorCode;
+import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.repository.CouponConsistencyRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -72,5 +77,101 @@ class CouponConsistencyServiceTest {
         assertThat(report.duplicates()).hasSize(1);
         assertThat(report.statusHistoryMismatches()).isEqualTo(5);
         assertThat(report.issuesWithoutHistory()).isEqualTo(11);
+    }
+
+    @Test
+    void 쿠폰_하나만_검증할_때_그_쿠폰이_없으면_예외를_던진다() {
+        // given
+        when(couponConsistencyRepository.findIssueCount(999L)).thenReturn(Optional.empty());
+
+        // when, then
+        assertThatThrownBy(() -> sut.verify(999L))
+                .isInstanceOf(CouponException.class)
+                .extracting(e -> ((CouponException) e).getErrorCode())
+                .isEqualTo(CouponErrorCode.COUPON_NOT_FOUND);
+    }
+
+    @Test
+    void 쿠폰_하나만_검증할_때_전부_어긋나지_않았으면_일치한다() {
+        // given
+        when(couponConsistencyRepository.findIssueCount(1L))
+                .thenReturn(Optional.of(new CouponIssueCount(1L, 1000, 1000, 1000)));
+        when(couponConsistencyRepository.findIssueSeqs(1L)).thenReturn(List.of(1, 2, 3));
+        when(couponConsistencyRepository.countDuplicateMembers(1L)).thenReturn(0L);
+
+        // when
+        CouponConsistencyCheckResponse response = sut.verify(1L);
+
+        // then
+        assertThat(response.issuedQuantityOnCoupon()).isEqualTo(1000);
+        assertThat(response.actualIssueCount()).isEqualTo(1000);
+        assertThat(response.duplicatedMembers()).isZero();
+        assertThat(response.seqGaps()).isEmpty();
+        assertThat(response.consistent()).isTrue();
+    }
+
+    // 순번 없이 나간 무제한 쿠폰. findIssueSeqs가 빈 목록이라 구멍을 물을 대상이 아니다
+    @Test
+    void 쿠폰_하나만_검증할_때_무제한_쿠폰은_순번_구멍이_없다() {
+        // given
+        when(couponConsistencyRepository.findIssueCount(2L))
+                .thenReturn(Optional.of(new CouponIssueCount(2L, 50, null, 50)));
+        when(couponConsistencyRepository.findIssueSeqs(2L)).thenReturn(List.of());
+        when(couponConsistencyRepository.countDuplicateMembers(2L)).thenReturn(0L);
+
+        // when
+        CouponConsistencyCheckResponse response = sut.verify(2L);
+
+        // then
+        assertThat(response.seqGaps()).isEmpty();
+        assertThat(response.consistent()).isTrue();
+    }
+
+    @Test
+    void 쿠폰_하나만_검증할_때_카운터가_어긋나면_불일치로_답한다() {
+        // given
+        when(couponConsistencyRepository.findIssueCount(3L))
+                .thenReturn(Optional.of(new CouponIssueCount(3L, 900, 1000, 997)));
+        when(couponConsistencyRepository.findIssueSeqs(3L)).thenReturn(List.of(1, 2, 3));
+        when(couponConsistencyRepository.countDuplicateMembers(3L)).thenReturn(0L);
+
+        // when
+        CouponConsistencyCheckResponse response = sut.verify(3L);
+
+        // then
+        assertThat(response.consistent()).isFalse();
+    }
+
+    // seq가 [1,2,4]면 개수(3)가 maxSeq(4)와 달라 3이 빈 자리로 잡힌다
+    @Test
+    void 쿠폰_하나만_검증할_때_순번에_구멍이_있으면_그_번호를_찾는다() {
+        // given
+        when(couponConsistencyRepository.findIssueCount(4L))
+                .thenReturn(Optional.of(new CouponIssueCount(4L, 4, 10, 3)));
+        when(couponConsistencyRepository.findIssueSeqs(4L)).thenReturn(List.of(1, 2, 4));
+        when(couponConsistencyRepository.countDuplicateMembers(4L)).thenReturn(0L);
+
+        // when
+        CouponConsistencyCheckResponse response = sut.verify(4L);
+
+        // then
+        assertThat(response.seqGaps()).containsExactly(3);
+        assertThat(response.consistent()).isFalse();
+    }
+
+    @Test
+    void 쿠폰_하나만_검증할_때_중복_발급이_있으면_불일치로_답한다() {
+        // given
+        when(couponConsistencyRepository.findIssueCount(5L))
+                .thenReturn(Optional.of(new CouponIssueCount(5L, 3, 10, 3)));
+        when(couponConsistencyRepository.findIssueSeqs(5L)).thenReturn(List.of(1, 2, 3));
+        when(couponConsistencyRepository.countDuplicateMembers(5L)).thenReturn(1L);
+
+        // when
+        CouponConsistencyCheckResponse response = sut.verify(5L);
+
+        // then
+        assertThat(response.duplicatedMembers()).isEqualTo(1);
+        assertThat(response.consistent()).isFalse();
     }
 }

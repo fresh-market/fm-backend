@@ -17,11 +17,16 @@ import com.freshmarket.coupon.domain.repository.MemberCouponHistoryRepository;
 import com.freshmarket.coupon.domain.repository.MemberCouponRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 관리자가 이미 나간 발급분을 조회하는 두 API를 담당한다. 쿠폰 하나의 발급 목록과 발급분 하나의
  * 상태 전이 이력이다. 둘 다 읽기 전용이고, 발급 경로({@link CouponIssueService})와 자원을
  * 다투지 않도록 별도 서비스로 둔다.
+ *
+ * <p>각 메서드는 존재 확인과 실제 조회를 별도 쿼리로 한다. {@code @Transactional(readOnly = true)}
+ * 로 그 둘을 한 스냅숏에 묶지 않으면, 확인과 조회 사이에 대상이 사라졌을 때 404 대신 빈 결과가
+ * 나갈 수 있다.
  */
 @Service
 @RequiredArgsConstructor
@@ -37,6 +42,7 @@ public class AdminCouponIssueQueryService {
      *
      * @throws CouponException 그 쿠폰이 없으면
      */
+    @Transactional(readOnly = true)
     public CursorPageResponse<AdminMemberCouponListItem> findIssues(AdminMemberCouponSearchCondition condition) {
         if (!couponRepository.existsById(condition.couponId())) {
             throw new CouponException(CouponErrorCode.COUPON_NOT_FOUND);
@@ -69,6 +75,7 @@ public class AdminCouponIssueQueryService {
      *
      * @throws CouponException 그 발급분이 없으면
      */
+    @Transactional(readOnly = true)
     public MemberCouponHistoryResponse findHistory(long memberCouponId) {
         if (!memberCouponRepository.existsById(memberCouponId)) {
             throw new CouponException(CouponErrorCode.MEMBER_COUPON_NOT_FOUND);

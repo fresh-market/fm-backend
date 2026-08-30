@@ -85,11 +85,16 @@ public class CouponConsistencyService {
      * 쿠폰 한 장만 관리자 요청에 맞춰 즉시 확인한다.
      *
      * <p>{@link #verify()} 의 새벽 배치와 서비스 메서드를 공유하지 않는다. 그 배치는 300만 건
-     * 전체를 REPEATABLE READ 스냅숏 안에서 훑어야 하지만, 여기는 이 쿠폰의 발급 행만 보므로
-     * 그 스냅숏이 필요 없다. 한정 수량 자체가 작아 각 쿼리가 짧게 끝난다.
+     * 전체를 훑어야 하지만, 여기는 이 쿠폰의 발급 행만 본다.
+     *
+     * <p><b>스냅숏 자체는 그 배치와 같은 이유로 여전히 필요하다.</b> 세 쿼리를 나눠 읽으면 그
+     * 사이에 들어온 발급이 앞 쿼리에는 없고 뒤 쿼리에는 있어, 이벤트가 아직 도는 중이면 아무도
+     * 안 틀렸는데 어긋남으로 잡힌다. 대상이 이 쿠폰 하나뿐이라 짧게 끝나는 것뿐이지, 스냅숏이
+     * 왜 필요한지는 {@link #verify()} 의 이유와 같다.
      *
      * @throws com.freshmarket.coupon.domain.exception.CouponException 그 쿠폰이 없으면
      */
+    @Transactional(readOnly = true)
     public CouponConsistencyCheckResponse verify(long couponId) {
         CouponIssueCount counts = couponConsistencyRepository.findIssueCount(couponId)
                 .orElseThrow(() -> new CouponException(CouponErrorCode.COUPON_NOT_FOUND));
@@ -106,8 +111,16 @@ public class CouponConsistencyService {
         if (seqs.isEmpty()) {
             return List.of();
         }
-        Set<Integer> present = new HashSet<>(seqs);
         int maxSeq = seqs.get(seqs.size() - 1);
+        /*
+         * issue_seq 는 쿠폰마다 유일하다(uk_mc_coupon_seq). 그래서 개수가 maxSeq 와 같다는 것은
+         * 1..maxSeq 가 빈틈없이 다 있다는 뜻이고, 그 반대(구멍이 있으면 개수가 모자란다)도 성립한다.
+         * 이 등식으로 대부분인 "구멍 없음" 케이스가 O(maxSeq) 순회 없이 곧장 끝난다.
+         */
+        if (seqs.size() == maxSeq) {
+            return List.of();
+        }
+        Set<Integer> present = new HashSet<>(seqs);
         List<Integer> gaps = new ArrayList<>();
         for (int seq = 1; seq <= maxSeq; seq++) {
             if (!present.contains(seq)) {
