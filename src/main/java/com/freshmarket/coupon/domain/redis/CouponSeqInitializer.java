@@ -27,6 +27,17 @@ public class CouponSeqInitializer {
     private final StringRedisTemplate redisTemplate;
 
     /**
+     * 이벤트가 쓰는 네 키가 사라지는 시각이다.
+     *
+     * <p>이 식을 공개하는 것은 {@code CouponCache} 가 같은 시각에 스냅샷을 버리기 때문이다.
+     * 스냅샷이 유효한 기간과 그 스냅샷이 가리키는 키가 살아 있는 기간은 같아야 하는데,
+     * 양쪽에 따로 적으면 <b>한쪽만 고쳤을 때 둘이 어긋난다.</b>
+     */
+    public static LocalDateTime keysExpireAt(LocalDateTime issueEndAt) {
+        return issueEndAt.plusSeconds(TTL_TAIL_SECONDS);
+    }
+
+    /**
      * 이벤트를 받을 준비를 한다. 카운터가 서야 스크립트가 순번을 내주기 시작한다.
      *
      * <p>이 메서드가 먼저 지우는 것이 중요하다. 지난 이벤트의 매핑이 남아 있으면 스크립트가 그
@@ -60,7 +71,7 @@ public class CouponSeqInitializer {
             return;
         }
         redisTemplate.expireAt(CouponSeqKeys.counter(couponId),
-                issueEndAt.plusSeconds(TTL_TAIL_SECONDS).atZone(ZoneId.systemDefault()).toInstant());
+                keysExpireAt(issueEndAt).atZone(ZoneId.systemDefault()).toInstant());
     }
 
     /*
