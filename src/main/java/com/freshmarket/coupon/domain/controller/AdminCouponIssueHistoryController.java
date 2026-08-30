@@ -26,6 +26,8 @@ class AdminCouponIssueHistoryController {
 
     // (CMP-3-03과 같은 이유) pageToken 길이 상한. AdminProductController와 같은 값
     private static final int MAX_PAGE_TOKEN_LENGTH = 500;
+    // (SEC-3-03) status 길이 상한. MemberCouponStatus의 가장 긴 값(CANCELED)보다 넉넉히 잡는다
+    private static final int MAX_STATUS_LENGTH = 20;
 
     private final AdminCouponIssueQueryService adminCouponIssueQueryService;
 
@@ -38,7 +40,7 @@ class AdminCouponIssueHistoryController {
     @GetMapping("/v1/admin/coupons/{couponId}/issues")
     public ResponseEntity<ResponseEnvelope<CursorPageResponse<AdminMemberCouponListItem>>> findIssues(
             @PathVariable @Positive Long couponId,
-            @RequestParam(required = false) String status,
+            @RequestParam(required = false) @Size(max = MAX_STATUS_LENGTH) String status,
             @RequestParam(required = false) @Size(max = MAX_PAGE_TOKEN_LENGTH) String pageToken,
             @RequestParam(required = false, defaultValue = "" + AdminMemberCouponSearchCondition.DEFAULT_PAGE_SIZE)
                     int pageSize) {

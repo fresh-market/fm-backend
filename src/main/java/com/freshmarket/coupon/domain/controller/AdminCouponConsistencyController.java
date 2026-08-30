@@ -1,7 +1,7 @@
 package com.freshmarket.coupon.domain.controller;
 
 import com.freshmarket.common.response.ResponseEnvelope;
-import com.freshmarket.coupon.domain.dto.CouponConsistencyCheckResponse;
+import com.freshmarket.coupon.domain.dto.AdminCouponConsistencyCheckResponse;
 import com.freshmarket.coupon.domain.service.CouponConsistencyService;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.constraints.Positive;
@@ -30,7 +30,7 @@ class AdminCouponConsistencyController {
     @Operation(summary = "쿠폰 정합성 검증",
             description = "발급 이력과 재고가 어긋나지 않는지 이 쿠폰 하나만 즉시 확인한다.")
     @PostMapping("/v1/admin/coupons/{couponId}:verifyConsistency")
-    public ResponseEntity<ResponseEnvelope<CouponConsistencyCheckResponse>> verifyConsistency(
+    public ResponseEntity<ResponseEnvelope<AdminCouponConsistencyCheckResponse>> verifyConsistency(
             @PathVariable @Positive Long couponId) {
         return ResponseEntity.ok(ResponseEnvelope.success(couponConsistencyService.verify(couponId)));
     }

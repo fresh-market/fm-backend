@@ -97,6 +97,17 @@ public class CouponConsistencyRepository {
              ORDER BY issue_seq
             """;
 
+    /*
+     * 구멍이 있는지부터 가볍게 물을 때 쓴다. MAX() 하나만 집계하므로 findIssueSeqs()처럼
+     * 순번을 전부 애플리케이션 메모리로 끌어오지 않는다. totalQuantity 에 상한이 없어 관리자가
+     * 아주 큰 수량의 한정 쿠폰을 만들 수 있으므로, "구멍 없음"이 정상인 대부분의 호출에서
+     * 이 가벼운 조회만으로 끝내는 것이 중요하다.
+     */
+    private static final String MAX_ISSUE_SEQ_SQL = """
+            SELECT MAX(issue_seq) FROM member_coupon
+             WHERE coupon_id = ? AND issue_seq IS NOT NULL
+            """;
+
     private static final String DUPLICATE_MEMBER_COUNT_SQL = """
             SELECT COUNT(*) FROM (
                 SELECT member_id FROM member_coupon
@@ -121,6 +132,11 @@ public class CouponConsistencyRepository {
     /** 쿠폰 하나에 나간 순번을 오름차순으로 읽는다. 무제한 쿠폰은 빈 목록이다. */
     public List<Integer> findIssueSeqs(long couponId) {
         return jdbcTemplate.query(ISSUE_SEQS_SQL, (rs, rowNum) -> rs.getInt("issue_seq"), couponId);
+    }
+
+    /** 쿠폰 하나의 가장 큰 순번만 읽는다. 발급이 없거나 무제한 쿠폰이면 비어 있다. */
+    public Optional<Integer> findMaxIssueSeq(long couponId) {
+        return Optional.ofNullable(jdbcTemplate.queryForObject(MAX_ISSUE_SEQ_SQL, Integer.class, couponId));
     }
 
     /** 쿠폰 하나에서 같은 회원이 둘 이상 받은 건수를 센다. */

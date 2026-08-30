@@ -9,7 +9,7 @@ import com.freshmarket.coupon.domain.audit.CouponConsistencyReport;
 import com.freshmarket.coupon.domain.audit.CouponIssueCount;
 import com.freshmarket.coupon.domain.audit.CouponSeqSpan;
 import com.freshmarket.coupon.domain.audit.DuplicateIssue;
-import com.freshmarket.coupon.domain.dto.CouponConsistencyCheckResponse;
+import com.freshmarket.coupon.domain.dto.AdminCouponConsistencyCheckResponse;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.repository.CouponConsistencyRepository;
@@ -95,31 +95,32 @@ public class CouponConsistencyService {
      * @throws com.freshmarket.coupon.domain.exception.CouponException 그 쿠폰이 없으면
      */
     @Transactional(readOnly = true)
-    public CouponConsistencyCheckResponse verify(long couponId) {
+    public AdminCouponConsistencyCheckResponse verify(long couponId) {
         CouponIssueCount counts = couponConsistencyRepository.findIssueCount(couponId)
                 .orElseThrow(() -> new CouponException(CouponErrorCode.COUPON_NOT_FOUND));
-        List<Integer> seqGaps = findSeqGaps(couponId);
+        List<Integer> seqGaps = findSeqGaps(couponId, counts.actual());
         long duplicatedMembers = couponConsistencyRepository.countDuplicateMembers(couponId);
         boolean consistent = !counts.counterMismatched() && duplicatedMembers == 0 && seqGaps.isEmpty();
-        return new CouponConsistencyCheckResponse(
+        return new AdminCouponConsistencyCheckResponse(
                 counts.issuedQuantity(), counts.actual(), duplicatedMembers, seqGaps, consistent);
     }
 
-    // 나간 순번들 사이에서 비어 있는 번호를 찾는다. 한정 수량만큼만 훑으므로 전체 배치와 비용이 다르다
-    private List<Integer> findSeqGaps(long couponId) {
+    /*
+     * 나간 순번들 사이에서 비어 있는 번호를 찾는다.
+     *
+     * MAX(issue_seq) 하나만 먼저 가볍게 읽고, 그 값이 실제 발급 행 수와 같으면(구멍이 없다는
+     * 뜻이다 — issue_seq 는 쿠폰마다 유일하므로 개수와 최댓값이 같으면 1..maxSeq 가 빈틈없이
+     * 다 있다) 순번 전체를 읽지 않고 곧장 끝낸다. totalQuantity 에 상한이 없어 한정 수량이 아주
+     * 큰 쿠폰도 만들 수 있으므로, 정상적인(구멍 없는) 대부분의 호출에서 전체 목록을 애플리케이션
+     * 메모리로 끌어오는 것 자체를 피하는 것이 중요하다. 실제로 개수가 안 맞을 때만 findIssueSeqs
+     * 로 전체 목록을 가져와 어느 번호가 비었는지 계산한다.
+     */
+    private List<Integer> findSeqGaps(long couponId, long actualIssueCount) {
+        Integer maxSeq = couponConsistencyRepository.findMaxIssueSeq(couponId).orElse(null);
+        if (maxSeq == null || actualIssueCount == maxSeq) {
+            return List.of();
+        }
         List<Integer> seqs = couponConsistencyRepository.findIssueSeqs(couponId);
-        if (seqs.isEmpty()) {
-            return List.of();
-        }
-        int maxSeq = seqs.get(seqs.size() - 1);
-        /*
-         * issue_seq 는 쿠폰마다 유일하다(uk_mc_coupon_seq). 그래서 개수가 maxSeq 와 같다는 것은
-         * 1..maxSeq 가 빈틈없이 다 있다는 뜻이고, 그 반대(구멍이 있으면 개수가 모자란다)도 성립한다.
-         * 이 등식으로 대부분인 "구멍 없음" 케이스가 O(maxSeq) 순회 없이 곧장 끝난다.
-         */
-        if (seqs.size() == maxSeq) {
-            return List.of();
-        }
         Set<Integer> present = new HashSet<>(seqs);
         List<Integer> gaps = new ArrayList<>();
         for (int seq = 1; seq <= maxSeq; seq++) {
