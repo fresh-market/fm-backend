@@ -3,10 +3,20 @@ package com.freshmarket.coupon.domain;
 import com.freshmarket.coupon.domain.exception.DataAccessFailures;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.springframework.dao.DataAccessException;
 
 /**
  * 이 클래스가 회로 둘을 같은 규칙으로 만든다. 무엇을 실패로 세느냐만 다르고 나머지 모양은 같다.
+ *
+ * <p>둘 다 {@link CircuitBreakerRegistry} 에 등록해서 만든다. {@code CircuitBreaker.of} 로
+ * 따로 만들면 Micrometer 의 resilience4j 바인더가 그 회로를 못 본다. 바인더는 레지스트리에
+ * 등록된 것만 지표로 낸다.
+ *
+ * <p>등록하지 않았을 때 실제로 문제가 됐다. 부하 시험에서 순번 확보 회로가 열려 요청
+ * 5,134건을 거절했는데, 그 회로의 상태와 느린 호출 비율을 볼 수단이 없어 <b>왜 열렸는지
+ * 끝내 알아내지 못했다</b> (2026-08-30). Redis 는 평균 0.8밀리초로 빨랐고 CPU 도 37%
+ * 였는데 회로만 느리다고 판정했다.
  */
 public final class CouponCircuits {
 
@@ -20,8 +30,9 @@ public final class CouponCircuits {
      * 어긋난 경우는 {@code IllegalStateException} 인데, 그것은 회로가 열려서 가려질 것이 아니라
      * 배포 전에 잡혀야 한다.
      */
-    public static CircuitBreaker forRedis(CouponCircuitProperties.Settings settings) {
-        return CircuitBreaker.of("couponSeq", baseConfig(settings).build());
+    public static CircuitBreaker forRedis(CircuitBreakerRegistry registry,
+                                          CouponCircuitProperties.Settings settings) {
+        return registry.circuitBreaker("couponSeq", baseConfig(settings).build());
     }
 
     /**
@@ -36,8 +47,9 @@ public final class CouponCircuits {
      * <p>중복 키를 세면 <b>이벤트가 정상일 때 회로가 열린다.</b> 재시도와 매핑 유실로 중복이
      * 꾸준히 나오는 것이 이 설계의 정상 동작이기 때문이다.
      */
-    public static CircuitBreaker forDatabaseWrite(CouponCircuitProperties.Settings settings) {
-        return CircuitBreaker.of("couponWrite", baseConfig(settings)
+    public static CircuitBreaker forDatabaseWrite(CircuitBreakerRegistry registry,
+                                                  CouponCircuitProperties.Settings settings) {
+        return registry.circuitBreaker("couponWrite", baseConfig(settings)
                 .recordException(CouponCircuits::countsAsOutage)
                 .build());
     }
