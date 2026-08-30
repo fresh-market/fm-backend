@@ -5,6 +5,7 @@ import java.util.concurrent.Callable;
 import com.freshmarket.coupon.domain.CouponCircuitProperties;
 import com.freshmarket.coupon.domain.CouponCircuits;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
 
 /**
@@ -28,8 +29,9 @@ public class CouponWriteCircuit {
 
     private final CircuitBreaker circuitBreaker;
 
-    public CouponWriteCircuit(CouponCircuitProperties properties) {
-        this.circuitBreaker = CouponCircuits.forDatabaseWrite(properties.write());
+    public CouponWriteCircuit(CouponCircuitProperties properties,
+                              MeterRegistry meterRegistry) {
+        this.circuitBreaker = CouponCircuits.forDatabaseWrite(meterRegistry, properties.write());
     }
 
     /**

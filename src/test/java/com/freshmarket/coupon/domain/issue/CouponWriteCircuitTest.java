@@ -34,7 +34,8 @@ class CouponWriteCircuitTest {
     void setUp() {
         CouponCircuitProperties.Settings settings = new CouponCircuitProperties.Settings(
                 50f, 10, MINIMUM_CALLS, WAIT_IN_OPEN, 2, Duration.ofSeconds(5));
-        sut = new CouponWriteCircuit(new CouponCircuitProperties(settings, settings));
+        sut = new CouponWriteCircuit(new CouponCircuitProperties(settings, settings),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 
     @Test
