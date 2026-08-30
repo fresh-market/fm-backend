@@ -11,7 +11,7 @@ import com.freshmarket.coupon.domain.CouponCircuits;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
-import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
@@ -56,11 +56,11 @@ public class CouponSeqAllocator {
     public CouponSeqAllocator(StringRedisTemplate redisTemplate,
                               CouponIssueProperties properties,
                               CouponCircuitProperties circuitProperties,
-                              CircuitBreakerRegistry circuitBreakerRegistry) {
+                              MeterRegistry meterRegistry) {
         this.redisTemplate = redisTemplate;
         this.reclaimAfter = properties.reclaimAfter();
         this.allocateScript = loadAllocateScript();
-        this.circuitBreaker = CouponCircuits.forRedis(circuitBreakerRegistry, circuitProperties.seq());
+        this.circuitBreaker = CouponCircuits.forRedis(meterRegistry, circuitProperties.seq());
     }
 
     /**

@@ -9,7 +9,6 @@ import java.util.concurrent.Callable;
 
 import com.freshmarket.coupon.domain.CouponCircuitProperties;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
-import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
@@ -36,7 +35,7 @@ class CouponWriteCircuitTest {
         CouponCircuitProperties.Settings settings = new CouponCircuitProperties.Settings(
                 50f, 10, MINIMUM_CALLS, WAIT_IN_OPEN, 2, Duration.ofSeconds(5));
         sut = new CouponWriteCircuit(new CouponCircuitProperties(settings, settings),
-                CircuitBreakerRegistry.ofDefaults());
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 
     @Test
