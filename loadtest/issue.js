@@ -10,18 +10,35 @@
 
 import http from 'k6/http';
 import exec from 'k6/execution';
-import { sleep } from 'k6';
 import { Counter } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
 const COUPON_ID = __ENV.COUPON_ID || '900001';
 
-// 요구사항이 정한 값이다. 기계가 2만 VU 를 못 버티면 줄여서 먼저 모양을 본다
-const VUS = parseInt(__ENV.VUS || '20000', 10);
+/*
+ * 요구사항이 정한 것은 "재고 1만에 2만 명이 ramp-up 60초로 몰린다" 이다.
+ * 그래서 정하는 값은 동시 사용자 수가 아니라 도착률이다.
+ *
+ *   20,000 명 / 60 초 = 333 건/초
+ *
+ * 램프 끝의 목표 도착률을 그 두 배로 둔다. 0 에서 선형으로 올라가므로 60초 동안의
+ * 넓이가 곧 총 건수이고, 삼각형이라 목표가 667 이어야 20,000 이 된다.
+ */
+const TARGET_RATE = parseInt(__ENV.RATE || '667', 10);
 const RAMP = __ENV.RAMP || '60s';
 // 램프가 끝난 뒤 밀린 큐가 빠지는 것까지 본다
 const HOLD = __ENV.HOLD || '30s';
+
+/*
+ * k6 가 도착률을 맞추려고 빌려 쓰는 VU 다. 부하 수준이 아니라 여유분이다.
+ *
+ * 응답이 느려지면 한 건이 VU 를 오래 쥐므로 같은 도착률에 더 많은 VU 가 필요하다.
+ * 모자라면 k6 가 dropped_iterations 를 올리고 도착률이 무너진다. 그때 나온 수치는
+ * 앱이 아니라 생성기의 한계를 잰 것이라 못 쓴다.
+ */
+const PRE_VUS = parseInt(__ENV.PRE_VUS || '2000', 10);
+const MAX_VUS = parseInt(__ENV.MAX_VUS || '20000', 10);
 
 /*
  * 토큰을 SharedArray 로 읽는다.
@@ -43,13 +60,6 @@ const tokens = new SharedArray('tokens', function () {
   return parsed;
 });
 
-/*
- * 한 번 쏜 VU 가 다음 사람을 집기까지 쉬는 시간이다.
- * VU 를 2만까지 못 올리는 기계에서는 이 값이 곧 시도가 도착하는 속도를 정한다.
- * 짧게 자고 다시 도는 것은 시험이 끝날 때 k6 가 VU 를 거둘 수 있게 하려는 것이기도 하다.
- */
-const IDLE_SECONDS = parseInt(__ENV.IDLE || '1', 10);
-
 const issued = new Counter('coupon_issued');
 const soldOut = new Counter('coupon_sold_out');
 const congested = new Counter('coupon_congested');
@@ -63,14 +73,28 @@ const connectFailed = new Counter('coupon_connect_failed');
 
 export const options = {
   scenarios: {
+    /*
+     * ramping-vus 가 아니라 도착률 실행기를 쓴다.
+     *
+     * 앞의 것은 동시 사용자 수만 정하고 도착률은 응답 속도가 정한다. VU 가 응답을 기다리는
+     * 동안 다음 요청을 못 보내기 때문이다. 그래서 앱이 느려지면 부하가 저절로 약해지고,
+     * 빠르면 세진다. 시험이 스스로 봐주고 잘하면 벌을 주는 셈이다.
+     *
+     * 실제로 같은 VUS=20000 으로 돌린 두 회차가 364 건/초와 2,000 건/초로 갈렸다
+     * (2026-08-30). 5 배 차이라 회차 간 비교가 성립하지 않았다.
+     *
+     * 도착률 실행기는 초당 몇 건을 보낼지 k6 가 지켜 준다. 앱이 느려도 부하가 안 줄어든다.
+     */
     rush: {
-      executor: 'ramping-vus',
-      startVUs: 0,
+      executor: 'ramping-arrival-rate',
+      startRate: 0,
+      timeUnit: '1s',
       stages: [
-        { duration: RAMP, target: VUS },
-        { duration: HOLD, target: VUS },
+        { duration: RAMP, target: TARGET_RATE },
+        { duration: HOLD, target: TARGET_RATE },
       ],
-      gracefulRampDown: '30s',
+      preAllocatedVUs: PRE_VUS,
+      maxVUs: MAX_VUS,
     },
   },
   thresholds: {
@@ -86,6 +110,11 @@ export const options = {
     // 소진과 혼잡은 정상 응답이라 실패로 안 센다. 여기 걸리는 것은 진짜 오류다
     http_req_failed: ['rate<0.01'],
     coupon_unexpected: ['count==0'],
+    /*
+     * 도착률을 못 맞춘 회차는 결과를 못 쓴다. VU 가 모자라 k6 가 발사를 건너뛴 것이라
+     * 앱이 아니라 생성기를 잰 셈이 된다. 그래서 임계로 걸어 자동으로 걸리게 한다.
+     */
+    dropped_iterations: ['count==0'],
   },
 };
 
@@ -106,8 +135,7 @@ export default function () {
    */
   const index = exec.scenario.iterationInTest;
   if (index >= tokens.length) {
-    // 다 쏘고 남은 VU 다. 접속만 유지한다
-    sleep(IDLE_SECONDS);
+    // 2만 명을 다 쏘았다. 남은 반복은 아무 일도 하지 않는다
     return;
   }
 
@@ -131,6 +159,4 @@ export default function () {
     unexpected.add(1);
     console.error(`예상 밖 응답 status=${res.status} body=${res.body}`);
   }
-
-  sleep(IDLE_SECONDS);
 }
