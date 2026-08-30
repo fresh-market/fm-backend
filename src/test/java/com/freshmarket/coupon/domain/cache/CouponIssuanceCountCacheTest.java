@@ -9,19 +9,14 @@ import static org.mockito.Mockito.when;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import com.freshmarket.coupon.domain.entity.Coupon;
-import com.freshmarket.coupon.domain.entity.CouponScope;
-import com.freshmarket.coupon.domain.entity.DiscountType;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
-import com.freshmarket.coupon.domain.repository.CouponRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -39,9 +34,6 @@ class CouponIssuanceCountCacheTest {
     @Mock
     private CouponSeqAllocator seqAllocator;
 
-    @Mock
-    private CouponRepository couponRepository;
-
     private MovableClock clock;
     private ExecutorService loader;
     private CouponIssuanceCountCache sut;
@@ -51,7 +43,12 @@ class CouponIssuanceCountCacheTest {
         clock = new MovableClock(Instant.parse("2026-06-01T12:00:00Z"));
         // CouponCacheTest 와 같은 이유로 단일 스레드로 준다: 쓰기 시각이 찍히는 순서를 시험이 잡을 수 있게
         loader = Executors.newSingleThreadExecutor();
-        sut = new CouponIssuanceCountCache(seqAllocator, couponRepository, clock, loader);
+        sut = new CouponIssuanceCountCache(seqAllocator, clock, loader);
+    }
+
+    @AfterEach
+    void tearDown() {
+        loader.shutdownNow();
     }
 
     @Test
@@ -60,10 +57,10 @@ class CouponIssuanceCountCacheTest {
         when(seqAllocator.currentIssuedCount(COUPON_ID)).thenReturn(Optional.of(8231));
 
         // when
-        int found = sut.find(COUPON_ID);
+        Optional<Integer> found = sut.find(COUPON_ID);
 
         // then
-        assertThat(found).isEqualTo(8231);
+        assertThat(found).contains(8231);
         verify(seqAllocator).currentIssuedCount(COUPON_ID);
     }
 
@@ -97,36 +94,34 @@ class CouponIssuanceCountCacheTest {
         verify(seqAllocator, times(2)).currentIssuedCount(COUPON_ID);
     }
 
-    // 이벤트가 열린 적 없거나 이미 닫혀 카운터가 없으면 DB의 issued_quantity로 대신한다
+    // 카운터가 없다(이벤트 미오픈/종료 후). 이 값을 DB로 메워도 되는지는 이 클래스가 모르므로 빈 값만 준다
     @Test
-    void 레디스_카운터가_없으면_DB_값으로_대신한다() {
+    void 카운터가_없으면_빈_값이다() {
         // given
         when(seqAllocator.currentIssuedCount(COUPON_ID)).thenReturn(Optional.empty());
-        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponWithIssuedQuantity(10000)));
 
         // when
-        int found = sut.find(COUPON_ID);
+        Optional<Integer> found = sut.find(COUPON_ID);
 
         // then
-        assertThat(found).isEqualTo(10000);
+        assertThat(found).isEmpty();
     }
 
-    // Redis 가 죽었어도 발급 경로는 멀쩡하므로 이 조회는 실패로 답하지 않고 DB 값으로 대신한다
+    // Redis 가 일시적으로 실패해도 이 클래스는 실패로 답하지 않고 빈 값으로 흡수한다
     @Test
-    void 레디스가_일시적으로_실패해도_DB_값으로_대신한다() {
+    void 레디스가_일시적으로_실패하면_빈_값이다() {
         // given
         when(seqAllocator.currentIssuedCount(COUPON_ID))
                 .thenThrow(new QueryTimeoutException("Redis 가 응답하지 않는다"));
-        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponWithIssuedQuantity(8231)));
 
         // when
-        int found = sut.find(COUPON_ID);
+        Optional<Integer> found = sut.find(COUPON_ID);
 
         // then
-        assertThat(found).isEqualTo(8231);
+        assertThat(found).isEmpty();
     }
 
-    // 일시적이지 않은 실패(코드가 잘못 부른 경우 등)까지 덮으면 진짜 버그가 캐시에 묻힌다
+    // 일시적이지 않은 실패(코드가 잘못 부른 경우 등)까지 빈 값으로 덮으면 진짜 버그가 캐시에 묻힌다
     @Test
     void 레디스_실패가_일시적이지_않으면_그대로_던진다() {
         // given
@@ -136,25 +131,6 @@ class CouponIssuanceCountCacheTest {
         // when, then
         assertThatThrownBy(() -> sut.find(COUPON_ID))
                 .isInstanceOf(InvalidDataAccessApiUsageException.class);
-    }
-
-    private static Coupon couponWithIssuedQuantity(int issuedQuantity) {
-        Coupon coupon = Coupon.draftLimited("선착순 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
-                LocalDate.now(), LocalDate.now().plusDays(3),
-                issuedQuantity, LocalDateTime.now().minusDays(1), LocalDateTime.now().minusHours(1));
-        setField(coupon, "issuedQuantity", issuedQuantity);
-        return coupon;
-    }
-
-    // CouponCacheTest 등과 같은 이유다: 팩터리가 안 받는 필드(내부가 결정하는 값)를 시험용으로만 강제로 채운다
-    private static void setField(Object target, String name, Object value) {
-        try {
-            java.lang.reflect.Field field = target.getClass().getDeclaredField(name);
-            field.setAccessible(true);
-            field.set(target, value);
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException(e);
-        }
     }
 
     /*

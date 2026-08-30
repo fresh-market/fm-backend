@@ -44,7 +44,13 @@ public enum CouponErrorCode implements ErrorCode {
      * 상태는 쓸 수 있는데 쿠폰의 사용 유효기간 밖이다.
      * 만료 배치가 아직 표시를 못 옮겼어도 이 쿠폰은 쓸 수 없다.
      */
-    NOT_USABLE_PERIOD(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-011", "지금은 사용할 수 있는 기간이 아닙니다.");
+    NOT_USABLE_PERIOD(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-011", "지금은 사용할 수 있는 기간이 아닙니다."),
+    /*
+     * 이벤트가 진행 중인데 실시간 발급 수를 못 구했다.
+     * DB 의 issued_quantity 는 이벤트를 닫을 때만 맞춰지므로, 진행 중에 그 값을 대신 보여주면
+     * "이벤트 시작 전" 값을 "지금" 값인 것처럼 보여주게 된다. 그래서 대신 채우지 않고 실패로 답한다.
+     */
+    ISSUANCE_STATUS_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "COUPON-012", "지금은 발급 현황을 확인할 수 없습니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus httpStatus;
     private final String code;
