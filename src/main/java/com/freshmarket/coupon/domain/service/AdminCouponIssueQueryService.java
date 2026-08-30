@@ -8,7 +8,7 @@ import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.coupon.domain.dto.AdminMemberCouponListItem;
 import com.freshmarket.coupon.domain.dto.AdminMemberCouponListRow;
 import com.freshmarket.coupon.domain.dto.AdminMemberCouponSearchCondition;
-import com.freshmarket.coupon.domain.dto.MemberCouponHistoryResponse;
+import com.freshmarket.coupon.domain.dto.AdminMemberCouponHistoryResponse;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.repository.CouponQueryRepository;
@@ -76,10 +76,11 @@ public class AdminCouponIssueQueryService {
      * @throws CouponException 그 발급분이 없으면
      */
     @Transactional(readOnly = true)
-    public MemberCouponHistoryResponse findHistory(long memberCouponId) {
+    public AdminMemberCouponHistoryResponse findHistory(long memberCouponId) {
         if (!memberCouponRepository.existsById(memberCouponId)) {
             throw new CouponException(CouponErrorCode.MEMBER_COUPON_NOT_FOUND);
         }
-        return new MemberCouponHistoryResponse(memberCouponHistoryRepository.findByMemberCouponId(memberCouponId));
+        return new AdminMemberCouponHistoryResponse(
+                memberCouponHistoryRepository.findByMemberCouponId(memberCouponId));
     }
 }

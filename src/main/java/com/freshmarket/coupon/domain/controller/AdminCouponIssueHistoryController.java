@@ -6,7 +6,7 @@ import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.common.response.ResponseEnvelope;
 import com.freshmarket.coupon.domain.dto.AdminMemberCouponListItem;
 import com.freshmarket.coupon.domain.dto.AdminMemberCouponSearchCondition;
-import com.freshmarket.coupon.domain.dto.MemberCouponHistoryResponse;
+import com.freshmarket.coupon.domain.dto.AdminMemberCouponHistoryResponse;
 import com.freshmarket.coupon.domain.entity.MemberCouponStatus;
 import com.freshmarket.coupon.domain.service.AdminCouponIssueQueryService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -64,7 +64,7 @@ class AdminCouponIssueHistoryController {
 
     @Operation(summary = "발급분 상태 이력", description = "이 발급분이 지금까지 거친 상태 전이를 순서대로 준다.")
     @GetMapping("/v1/admin/member-coupons/{memberCouponId}/history")
-    public ResponseEntity<ResponseEnvelope<MemberCouponHistoryResponse>> findHistory(
+    public ResponseEntity<ResponseEnvelope<AdminMemberCouponHistoryResponse>> findHistory(
             @PathVariable @Positive Long memberCouponId) {
         return ResponseEntity.ok(ResponseEnvelope.success(adminCouponIssueQueryService.findHistory(memberCouponId)));
     }

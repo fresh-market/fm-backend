@@ -4,7 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.LocalDateTime;
 
 // 발급분 상태 전이 이력 한 줄
-public record MemberCouponHistoryEntry(
+public record AdminMemberCouponHistoryEntry(
         @Schema(description = "이전 상태. 최초 발급이면 null") String fromStatus,
         @Schema(description = "변경된 상태") String toStatus,
         @Schema(description = "사유. 만료와 어뷰징 취소를 가른다") String reason,

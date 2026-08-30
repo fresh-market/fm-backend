@@ -12,8 +12,8 @@ import com.freshmarket.common.response.CursorPageResponse;
 import com.freshmarket.coupon.domain.dto.AdminMemberCouponListItem;
 import com.freshmarket.coupon.domain.dto.AdminMemberCouponListRow;
 import com.freshmarket.coupon.domain.dto.AdminMemberCouponSearchCondition;
-import com.freshmarket.coupon.domain.dto.MemberCouponHistoryEntry;
-import com.freshmarket.coupon.domain.dto.MemberCouponHistoryResponse;
+import com.freshmarket.coupon.domain.dto.AdminMemberCouponHistoryEntry;
+import com.freshmarket.coupon.domain.dto.AdminMemberCouponHistoryResponse;
 import com.freshmarket.coupon.domain.entity.MemberCouponStatus;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
 import com.freshmarket.coupon.domain.exception.CouponException;
@@ -114,13 +114,13 @@ class AdminCouponIssueQueryServiceTest {
     void 발급분_상태_이력을_리포지토리가_준_순서_그대로_돌려준다() {
         // given
         when(memberCouponRepository.existsById(1L)).thenReturn(true);
-        List<MemberCouponHistoryEntry> history = List.of(
-                new MemberCouponHistoryEntry(null, "ISSUED", null, null, LocalDateTime.now()),
-                new MemberCouponHistoryEntry("ISSUED", "USED", null, null, LocalDateTime.now()));
+        List<AdminMemberCouponHistoryEntry> history = List.of(
+                new AdminMemberCouponHistoryEntry(null, "ISSUED", null, null, LocalDateTime.now()),
+                new AdminMemberCouponHistoryEntry("ISSUED", "USED", null, null, LocalDateTime.now()));
         when(memberCouponHistoryRepository.findByMemberCouponId(1L)).thenReturn(history);
 
         // when
-        MemberCouponHistoryResponse response = sut.findHistory(1L);
+        AdminMemberCouponHistoryResponse response = sut.findHistory(1L);
 
         // then
         assertThat(response.history()).isEqualTo(history);

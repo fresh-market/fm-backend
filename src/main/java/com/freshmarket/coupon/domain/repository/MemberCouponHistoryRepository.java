@@ -2,7 +2,7 @@ package com.freshmarket.coupon.domain.repository;
 
 import java.util.List;
 
-import com.freshmarket.coupon.domain.dto.MemberCouponHistoryEntry;
+import com.freshmarket.coupon.domain.dto.AdminMemberCouponHistoryEntry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -28,8 +28,8 @@ public class MemberCouponHistoryRepository {
     private final JdbcTemplate jdbcTemplate;
 
     /** 이 발급분이 지금까지 거친 전이를 일어난 순서대로 읽는다. */
-    public List<MemberCouponHistoryEntry> findByMemberCouponId(long memberCouponId) {
-        return jdbcTemplate.query(FIND_BY_MEMBER_COUPON_ID_SQL, (rs, rowNum) -> new MemberCouponHistoryEntry(
+    public List<AdminMemberCouponHistoryEntry> findByMemberCouponId(long memberCouponId) {
+        return jdbcTemplate.query(FIND_BY_MEMBER_COUPON_ID_SQL, (rs, rowNum) -> new AdminMemberCouponHistoryEntry(
                         rs.getString("from_status"),
                         rs.getString("to_status"),
                         rs.getString("reason"),
