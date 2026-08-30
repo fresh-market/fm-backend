@@ -74,8 +74,15 @@ export const options = {
     },
   },
   thresholds: {
-    // 7장의 요청 예산이다. 이걸 넘기면 사용자가 기다려 준 시간 밖에서 답한 것이다
-    'http_req_duration{expected_response:true}': ['p(95)<2000'],
+    /*
+     * coupon.md 8장의 합격 기준을 그대로 옮긴 것이다.
+     * "요구 부하를 걸었을 때 처리된 발급 응답의 p99 가 1초 이하다."
+     *
+     * 전에는 p(95)<2000 이었다. 분위수도 임계도 SLO 보다 느슨해서, 이 임계를 통과해도
+     * 합격인지 알 수 없었다. 실제로 5,000 VU 회차가 이 임계는 통과하고 SLO 는 미달이었다
+     * (2026-08-30, p99 1.127초). 사람이 Prometheus 를 따로 뒤져야 드러났다.
+     */
+    'http_req_duration{expected_response:true}': ['p(99)<1000'],
     // 소진과 혼잡은 정상 응답이라 실패로 안 센다. 여기 걸리는 것은 진짜 오류다
     http_req_failed: ['rate<0.01'],
     coupon_unexpected: ['count==0'],
