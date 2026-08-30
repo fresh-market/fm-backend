@@ -9,6 +9,7 @@
 // 시험이 끝나면 loadtest/README.md 의 확인 쿼리를 돌려야 한다.
 
 import http from 'k6/http';
+import { sleep } from 'k6';
 import exec from 'k6/execution';
 import { Counter } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
@@ -17,28 +18,17 @@ const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
 const COUPON_ID = __ENV.COUPON_ID || '900001';
 
 /*
- * 요구사항이 정한 것은 "재고 1만에 2만 명이 ramp-up 60초로 몰린다" 이다.
- * 그래서 정하는 값은 동시 사용자 수가 아니라 도착률이다.
+ * 요구사항이 정한 값이다. 사람 한 명이 VU 하나다.
  *
- *   20,000 명 / 60 초 = 333 건/초
+ *   재고 10,000장에 20,000명이 요청, ramp-up 60초
  *
- * 램프 끝의 목표 도착률을 그 두 배로 둔다. 0 에서 선형으로 올라가므로 60초 동안의
- * 넓이가 곧 총 건수이고, 삼각형이라 목표가 667 이어야 20,000 이 된다.
+ * ramp-up 은 전체 사용자 수에 도달하기까지의 시간이다(JMeter 의 정의와 같다).
+ * 그래서 60초 뒤에 VU 가 20,000 이어야 하고, 그때까지 초당 333명씩 들어온다.
  */
-const TARGET_RATE = parseInt(__ENV.RATE || '667', 10);
+const VUS = parseInt(__ENV.VUS || '20000', 10);
 const RAMP = __ENV.RAMP || '60s';
 // 램프가 끝난 뒤 밀린 큐가 빠지는 것까지 본다
 const HOLD = __ENV.HOLD || '30s';
-
-/*
- * k6 가 도착률을 맞추려고 빌려 쓰는 VU 다. 부하 수준이 아니라 여유분이다.
- *
- * 응답이 느려지면 한 건이 VU 를 오래 쥐므로 같은 도착률에 더 많은 VU 가 필요하다.
- * 모자라면 k6 가 dropped_iterations 를 올리고 도착률이 무너진다. 그때 나온 수치는
- * 앱이 아니라 생성기의 한계를 잰 것이라 못 쓴다.
- */
-const PRE_VUS = parseInt(__ENV.PRE_VUS || '2000', 10);
-const MAX_VUS = parseInt(__ENV.MAX_VUS || '20000', 10);
 
 /*
  * 토큰을 SharedArray 로 읽는다.
@@ -74,27 +64,19 @@ const connectFailed = new Counter('coupon_connect_failed');
 export const options = {
   scenarios: {
     /*
-     * ramping-vus 가 아니라 도착률 실행기를 쓴다.
+     * VU 하나가 사람 하나다. 60초에 걸쳐 20,000명까지 올린다.
      *
-     * 앞의 것은 동시 사용자 수만 정하고 도착률은 응답 속도가 정한다. VU 가 응답을 기다리는
-     * 동안 다음 요청을 못 보내기 때문이다. 그래서 앱이 느려지면 부하가 저절로 약해지고,
-     * 빠르면 세진다. 시험이 스스로 봐주고 잘하면 벌을 주는 셈이다.
-     *
-     * 실제로 같은 VUS=20000 으로 돌린 두 회차가 364 건/초와 2,000 건/초로 갈렸다
-     * (2026-08-30). 5 배 차이라 회차 간 비교가 성립하지 않았다.
-     *
-     * 도착률 실행기는 초당 몇 건을 보낼지 k6 가 지켜 준다. 앱이 느려도 부하가 안 줄어든다.
+     * 도착률은 VU 가 생기는 속도가 정한다. 아래 default 함수가 VU 당 한 번만 쏘므로
+     * 초당 333명이 생기는 것이 곧 초당 333건이 도착하는 것이다.
      */
     rush: {
-      executor: 'ramping-arrival-rate',
-      startRate: 0,
-      timeUnit: '1s',
+      executor: 'ramping-vus',
+      startVUs: 0,
       stages: [
-        { duration: RAMP, target: TARGET_RATE },
-        { duration: HOLD, target: TARGET_RATE },
+        { duration: RAMP, target: VUS },
+        { duration: HOLD, target: VUS },
       ],
-      preAllocatedVUs: PRE_VUS,
-      maxVUs: MAX_VUS,
+      gracefulRampDown: '30s',
     },
   },
   thresholds: {
@@ -110,11 +92,6 @@ export const options = {
     // 소진과 혼잡은 정상 응답이라 실패로 안 센다. 여기 걸리는 것은 진짜 오류다
     http_req_failed: ['rate<0.01'],
     coupon_unexpected: ['count==0'],
-    /*
-     * 도착률을 못 맞춘 회차는 결과를 못 쓴다. VU 가 모자라 k6 가 발사를 건너뛴 것이라
-     * 앱이 아니라 생성기를 잰 셈이 된다. 그래서 임계로 걸어 자동으로 걸리게 한다.
-     */
-    dropped_iterations: ['count==0'],
   },
 };
 
@@ -126,16 +103,28 @@ http.setResponseCallback(http.expectedStatuses(200, 409, 422, 503));
 
 export default function () {
   /*
-   * 토큰을 VU 번호가 아니라 반복 번호로 고른다.
-   * VU 번호로 묶으면 VU 를 줄일 때 시도하는 사람 수도 같이 줄어, 재고 1만에 2만이 몰리는
-   * 조건 자체가 사라진다. 반복 번호로 고르면 VU 수는 동시성만 정하고 시도는 언제나 2만이다.
+   * 토큰을 VU 번호로 고른다. VU 하나가 사람 하나이므로 한 사람이 정확히 한 번만 쏜다.
    *
-   * 한 사람이 두 번 쏘지 않는다. uk_mc_coupon_member 가 두 장을 막아 재요청은 같은 순번을
-   * 그대로 돌려받는데, 그 응답이 섞이면 "몇 장이 나갔나" 를 응답만 보고는 못 읽는다.
+   * 반복 번호로 고르면 안 된다. VU 는 한 번 쏜 뒤에도 살아 있어 다시 도는데, 그때 반복
+   * 번호가 올라가 뒤에 올 사람 몫의 토큰을 먼저 가져간다. 그러면 램프가 끝나기 전에
+   * 2만 건이 소진되어 ramp-up 60초가 성립하지 않는다.
+   * 실제로 그렇게 돌렸을 때 10초에서 25초 사이에 끝났다 (2026-08-30).
+   *
+   * 한 사람이 두 번 쏘면 안 되는 이유는 따로 있다. uk_mc_coupon_member 가 두 장을 막아
+   * 재요청은 같은 순번을 그대로 돌려받는데, 그 응답이 섞이면 "몇 장이 나갔나" 를
+   * 응답만 보고는 못 읽는다.
+   *
+   * VU 를 20,000 보다 줄여 예비 시험을 하면 시도하는 사람 수도 함께 준다.
+   * 요구 조건을 재는 회차에서는 VUS 를 덮어쓰지 않는다.
    */
-  const index = exec.scenario.iterationInTest;
+  const index = exec.vu.idInTest - 1;
   if (index >= tokens.length) {
-    // 2만 명을 다 쏘았다. 남은 반복은 아무 일도 하지 않는다
+    return;
+  }
+
+  // 이 VU 는 이미 쏘았다. 남은 시간 동안 접속만 유지한다
+  if (exec.vu.iterationInInstance > 0) {
+    sleep(1);
     return;
   }
 
