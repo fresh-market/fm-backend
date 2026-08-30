@@ -8,11 +8,13 @@ import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.ProductOptionInfo;
 import com.freshmarket.stock.domain.dto.ExpiringSoonResponse;
 import com.freshmarket.stock.domain.entity.CampaignTargetLot;
+import com.freshmarket.stock.domain.repository.CampaignTargetLotCacheRepository;
 import com.freshmarket.stock.domain.repository.CampaignTargetLotRepository;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -44,13 +46,33 @@ public class ExpiringSoonService {
 
     private final CampaignTargetLotRepository campaignTargetLotRepository;
     private final CampaignTargetLotProductInfoService campaignTargetLotProductInfoService;
+    private final CampaignTargetLotCacheRepository campaignTargetLotCacheRepository;
     private final Clock clock;
 
+    /*
+     * 확정본이라 하루 종일 값이 같아 캐시를 앞에 둔다. 캐시에 없으면 그대로 DB 에서 구하고
+     * 그 결과를 채워둔다 — 캐시는 없어도 동작에 지장이 없는 층이다.
+     */
     public CursorPageResponse<ExpiringSoonResponse> getExpiringSoonProducts(
             Long categoryId, String pageToken, int pageSize) {
 
         int effectivePageSize = pageSize > 0 ? pageSize : DEFAULT_PAGE_SIZE;
         LocalDate today = LocalDate.now(clock);
+
+        Optional<CursorPageResponse<ExpiringSoonResponse>> cached =
+                campaignTargetLotCacheRepository.find(today, categoryId, pageToken, effectivePageSize);
+        if (cached.isPresent()) {
+            return cached.get();
+        }
+
+        CursorPageResponse<ExpiringSoonResponse> response =
+                loadFromDatabase(today, categoryId, pageToken, effectivePageSize);
+        campaignTargetLotCacheRepository.put(today, categoryId, pageToken, effectivePageSize, response);
+        return response;
+    }
+
+    private CursorPageResponse<ExpiringSoonResponse> loadFromDatabase(
+            LocalDate today, Long categoryId, String pageToken, int effectivePageSize) {
 
         PageCursor cursor = PageTokens.decode(pageToken);
         int afterRank = cursor != null ? cursor.id().intValue() : 0;

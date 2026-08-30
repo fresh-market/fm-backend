@@ -12,10 +12,12 @@ import com.freshmarket.product.domain.repository.ProductRepository;
 import com.freshmarket.stock.domain.dto.ExpiringSoonResponse;
 import com.freshmarket.stock.domain.entity.CampaignTargetLot;
 import com.freshmarket.stock.domain.entity.StockLot;
+import com.freshmarket.stock.domain.repository.CampaignTargetLotCacheRepository;
 import com.freshmarket.stock.domain.repository.CampaignTargetLotRepository;
 import com.freshmarket.stock.domain.repository.StockLotRepository;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -61,8 +63,20 @@ class ExpiringSoonServiceIntegrationTest {
     @Autowired
     private CategoryRepository categoryRepository;
 
+    @Autowired
+    private CampaignTargetLotCacheRepository campaignTargetLotCacheRepository;
+
     private static final Long SUPPLIER_ID = 999999L;
     private static final LocalDate TODAY = LocalDate.now();
+
+    /*
+     * 캐시는 로컬(JVM) 이라 스프링 컨텍스트와 수명을 같이한다 — 테스트마다 롤백되는 DB 와 달리
+     * 앞 테스트가 담아둔 것이 그대로 남는다. 각 테스트가 자기 데이터만 보도록 비우고 시작한다.
+     */
+    @BeforeEach
+    void clearCache() {
+        campaignTargetLotCacheRepository.clear();
+    }
 
     private Long fruitCategoryId() {
         return categoryRepository.findAll().stream()
