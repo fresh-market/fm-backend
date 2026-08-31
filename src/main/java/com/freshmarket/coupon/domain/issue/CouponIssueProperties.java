@@ -21,6 +21,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param commitWait 요청 스레드가 자기 발급의 확정을 기다리는 시간. 넘으면 혼잡으로 끊는다.
  *                   재는 구간은 큐에 넣은 뒤부터 DB 커밋과 Redis 확정 표시가 끝날 때까지다.
  *                   순번 확보와 응답 직렬화는 이 안에 없다
+ * @param rebuildContributeWait Redis 재건을 주도하는 인스턴스가 남들이 자기 큐를 올리기를
+ *                              기다리는 시간. 살아 있으면 밀리초에 끝나고, 죽었으면 이만큼 기다린 뒤
+ *                              그 큐를 없는 것으로 친다
  * @param couponCacheTtl 마감이 없는 쿠폰의 스냅샷을 이 JVM 이 들고 있는 시간.
  *                       마감이 있으면 이 값을 안 쓰고 Redis 키와 같은 시각에 버린다
  */
@@ -32,6 +35,7 @@ public record CouponIssueProperties(
         @DefaultValue("1") int flushThreads,
         @DefaultValue("2147483647") int queueCapacity,
         @DefaultValue("2s") Duration commitWait,
+        @DefaultValue("3s") Duration rebuildContributeWait,
         @DefaultValue("5s") Duration couponCacheTtl) {
 
     public CouponIssueProperties {
@@ -40,6 +44,7 @@ public record CouponIssueProperties(
         require(queueCapacity >= 1, "queueCapacity 는 1 이상이어야 한다");
         require(!batchWindow.isNegative(), "batchWindow 는 음수일 수 없다");
         require(!couponCacheTtl.isNegative(), "couponCacheTtl 은 음수일 수 없다");
+        require(rebuildContributeWait.isPositive(), "rebuildContributeWait 는 양수여야 한다");
 
         /*
          * 회수 기준이 확정 대기보다 짧으면 회수가 아직 살아 있는 요청의 번호를 뺏는다.
