@@ -40,11 +40,11 @@
 
 | 트리거 | 규칙 | 활성 | 1단계 | 2단계 | backend | common | infra |
 |---|---|---:|---:|---:|---:|---:|---:|
-| `**/domain/controller/*.java`, `**/domain/dto/*.java` | controller | 236 | 175 | 61 | 175 | 48 | 13 |
-| `**/domain/service/*.java` | service | 196 | 83 | 113 | 83 | 87 | 26 |
-| `**/domain/entity/*.java` | entity | 215 | 180 | 35 | 180 | 32 | 3 |
-| `**/domain/repository/*.java` | repository | 133 | 98 | 35 | 98 | 35 | 0 |
-| `**/domain/client/**/*.java` | external-client | 134 | 83 | 51 | 83 | 44 | 7 |
+| `**/internal/controller/*.java`, `**/internal/dto/*.java` | controller | 236 | 175 | 61 | 175 | 48 | 13 |
+| `**/internal/service/*.java` | service | 196 | 83 | 113 | 83 | 87 | 26 |
+| `**/internal/entity/*.java` | entity | 215 | 180 | 35 | 180 | 32 | 3 |
+| `**/internal/repository/*.java` | repository | 133 | 98 | 35 | 98 | 35 | 0 |
+| `**/internal/client/**/*.java` | external-client | 134 | 83 | 51 | 83 | 44 | 7 |
 | `**/*Api.java`, `**/*ApiImpl.java` | api-contract | 194 | 175 | 19 | 175 | 15 | 4 |
 | `src/main/resources/db/migration/*.sql` | migration | 103 | 51 | 52 | 51 | 48 | 4 |
 | `src/main/resources/application*.yml`, `src/main/resources/logback*.xml` | app-config | 115 | 0 | 115 | 0 | 91 | 24 |

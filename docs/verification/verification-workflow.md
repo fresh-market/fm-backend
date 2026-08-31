@@ -81,7 +81,7 @@ G-BUILD와 G-RELEASE는 결정론적이라 오탐이 없고, LLM 게이트는 �
 
 | 카테고리 | 기준 | 판정 주체 |
 |---|---|---|
-| 커버리지 | `*.domain.service.*` 메서드 **100%** | Gradle JaCoCo |
+| 커버리지 | `*.internal.service.*` 메서드 **100%** | Gradle JaCoCo |
 | 정적 분석 | 신규 **Blocker 0건** | SonarQube |
 
 `Blocker`는 프로덕션에서 애플리케이션을 망가뜨릴 높은 확률의 버그를 뜻한다. 병합을 막을 근거가 되는 것은 이 등급뿐이다.
@@ -156,11 +156,11 @@ fresh-market/fm-infra    docs/infra-review/        100건   인프라 결정이 
 변경 파일이 규칙을 트리거하고, 규칙이 어떤 항목을 켤지 정한다.
 
 ```
-**/domain/service/*.java   ->  DI PERF REL DPB EJ FUN MNT FLX TRD INF(1,2,8장) SEC(1,2,4,6장)
-**/domain/repository/*.java ->  PERF DI JPA SEC(1,2장)
-**/domain/entity/*.java    ->  BE EC JPA DI CMP IDS INF(8장)
-**/domain/controller/*.java ->  SEC CMP API DPB EJ FUN IDS
-**/domain/client/**/*.java ->  REL DPB OBS INF(3장)
+**/internal/service/*.java   ->  DI PERF REL DPB EJ FUN MNT FLX TRD INF(1,2,8장) SEC(1,2,4,6장)
+**/internal/repository/*.java ->  PERF DI JPA SEC(1,2장)
+**/internal/entity/*.java    ->  BE EC JPA DI CMP IDS INF(8장)
+**/internal/controller/*.java ->  SEC CMP API DPB EJ FUN IDS
+**/internal/client/**/*.java ->  REL DPB OBS INF(3장)
 application*.yml           ->  REL PERF OBS FLX SEC INF(3,4,5,7,9장)
 db/migration/*.sql         ->  DI CMP FLX BE IDS INF(6장)
 src/test/**/*Test.java     ->  UT MNT

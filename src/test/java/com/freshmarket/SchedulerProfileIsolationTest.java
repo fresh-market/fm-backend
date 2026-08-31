@@ -4,12 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
  
 import com.freshmarket.config.SchedulingConfig;
-import com.freshmarket.member.domain.KakaoUnlinkRetryScheduler;
-import com.freshmarket.member.domain.service.KakaoUnlinkRetryService;
-import com.freshmarket.product.domain.batch.OptionAvailabilitySyncRetryService;
-import com.freshmarket.product.domain.batch.OptionAvailabilitySyncScheduler;
-import com.freshmarket.stock.domain.AdminLotExpireScheduler;
-import com.freshmarket.stock.domain.service.AdminLotService;
+import com.freshmarket.member.internal.batch.KakaoUnlinkRetryScheduler;
+import com.freshmarket.member.internal.service.KakaoUnlinkRetryService;
+import com.freshmarket.product.internal.batch.OptionAvailabilitySyncRetryService;
+import com.freshmarket.product.internal.batch.OptionAvailabilitySyncScheduler;
+import com.freshmarket.stock.internal.batch.AdminLotExpireScheduler;
+import com.freshmarket.stock.internal.service.AdminLotService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;

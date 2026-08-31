@@ -67,7 +67,7 @@ API가 없는 도메인에서 **빈 `api` 패키지를 만들지 말지가 애�
 통합 예외 하나와 에러 코드 enum 하나를 두고 코드로 구분하면 에러 코드가 한곳에 모여 관리하기 쉽다.
 
 **다만 다른 도메인이 특정 실패를 구분해 처리해야 한다면 별도 예외 타입으로 루트에 공개한다.**
-에러 코드로 분기하게 하면 컴파일러 도움을 못 받고, 내부 에러 코드는 `domain.exception`에 있어 다른 도메인이 참조할 수도 없다.
+에러 코드로 분기하게 하면 컴파일러 도움을 못 받고, 내부 에러 코드는 `internal.exception`에 있어 다른 도메인이 참조할 수도 없다.
 
 ### 왜 전역 예외 핸들러가 경계를 깨지 않는가
 
@@ -208,7 +208,7 @@ ArchUnit은 테스트 실행 시점에만 잡지만, package-private는 다른 �
 
 핵심은 `ignoreDependency` 두 번째 인자의 패턴에 있다.
 
-| 패턴 | `com.freshmarket.product` | `com.freshmarket.product.domain` |
+| 패턴 | `com.freshmarket.product` | `com.freshmarket.product.internal` |
 |------|------|------|
 | `com.freshmarket.*` | 매칭 O | 매칭 X |
 | `com.freshmarket.*..` | 매칭 O | 매칭 O (이러면 안 됨) |

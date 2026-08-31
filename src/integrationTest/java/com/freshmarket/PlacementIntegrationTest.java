@@ -56,9 +56,9 @@ class PlacementIntegrationTest {
                 .collect(Collectors.toList());
     }
 
-    private static boolean underDomain(JavaClass c) {
+    private static boolean underInternal(JavaClass c) {
         String p = c.getPackageName();
-        return p.contains(".domain.") || p.endsWith(".domain");
+        return p.contains(".internal.") || p.endsWith(".internal");
     }
 
     private static void fail(String rule, List<String> bad, String how) {
@@ -78,16 +78,16 @@ class PlacementIntegrationTest {
     }
 
     /*
-     * domain 밖에는 테스트를 두지 않는다.
+     * internal 밖에는 테스트를 두지 않는다.
      * 공개 창구(OrderApi)는 계약이라 동작이 없고, 그것이 지켜지는지는 구현의 테스트가 본다.
      */
     @ArchTest
-    static void 테스트는_domain_아래에만_둔다(JavaClasses classes) {
+    static void 테스트는_internal_아래에만_둔다(JavaClasses classes) {
         List<String> bad = own(classes).stream()
-                .filter(c -> !underDomain(c))
+                .filter(c -> !underInternal(c))
                 .map(c -> c.getName() + "  (패키지 " + c.getPackageName() + ")")
                 .collect(Collectors.toList());
-        fail("통합 테스트 위치", bad, "domain 밖에는 테스트를 두지 않는다. domain 아래로 옮긴다");
+        fail("통합 테스트 위치", bad, "internal 밖에는 테스트를 두지 않는다. internal 아래로 옮긴다");
     }
 
     /*
@@ -96,7 +96,7 @@ class PlacementIntegrationTest {
      * 단위 테스트와 달리 정확히 같은 패키지를 요구하지 않는다. 통합 테스트는 계층을 가로지르므로
      * 대상보다 위에 두는 것이 자연스럽다.
      *
-     *   main  order/domain/service/OrderService.java
+     *   main  order/internal/service/OrderService.java
      *   통합  order/domain/OrderIntegrationTest.java
      *
      * 도메인 목록을 여기 적지 않고 main 에 실재하는 패키지와 대조한다.
@@ -109,7 +109,7 @@ class PlacementIntegrationTest {
                 .map(JavaClass::getPackageName)
                 .collect(Collectors.toSet());
         List<String> bad = own(classes).stream()
-                .filter(PlacementIntegrationTest::underDomain)
+                .filter(PlacementIntegrationTest::underInternal)
                 .filter(c -> mainPackages.stream().noneMatch(m -> covers(c.getPackageName(), m)))
                 .map(c -> c.getName() + "  (패키지 " + c.getPackageName() + " 아래에 프로덕션 클래스가 없다)")
                 .collect(Collectors.toList());

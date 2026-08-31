@@ -13,7 +13,7 @@
 
 ## 1. 패키지 구조
 
-베이스 패키지의 **직계 하위 패키지가 곧 도메인**이다. 도메인 안의 구현은 전부 `domain` 하위로 내린다.
+베이스 패키지의 **직계 하위 패키지가 곧 도메인**이다. 도메인 안의 구현은 전부 `internal` 하위로 내린다.
 
 ```
 com.freshmarket
@@ -30,7 +30,7 @@ com.freshmarket
 │   ├── StockChange.java                  <- API에서 사용하는 DTO (record)
 │   ├── OutOfStockException.java          <- 외부에도 노출 가능한 예외
 │   │
-│   └── domain                            <- 도메인 내부 구현 (외부 도메인 접근 금지)
+│   └── internal                          <- 도메인 내부 구현 (외부 도메인 접근 금지)
 │       ├── ProductApiImpl.java           <- ProductApi 구현체 (package-private)
 │       ├── controller
 │       │   └── ProductController.java
@@ -50,7 +50,7 @@ com.freshmarket
 ├── payment                               <- 외부 시스템을 연동하는 도메인
 │   ├── PaymentApi.java
 │   ├── PaymentResult.java
-│   └── domain
+│   └── internal
 │       ├── PaymentApiImpl.java
 │       ├── controller
 │       │   └── PgWebhookController.java  <- 가상계좌 입금 등 비동기 통보 수신
@@ -70,7 +70,7 @@ com.freshmarket
 │
 └── order                                 <- 아무도 호출하지 않는 도메인
     │                                        (다른 도메인에 공개하는 API 인터페이스 없음)
-    └── domain
+    └── internal
         ├── controller
         │   └── OrderController.java
         ├── service
@@ -90,11 +90,46 @@ com.freshmarket
 점검 항목
 * `DPB-1-01` 도메인 루트에 API 인터페이스, record DTO, 공개 예외 외의 것이 없는가
   `@Entity`, Repository, Controller, 구현 클래스가 루트에 올라오면 다른 도메인이 영속 모델에 직접 의존하게 된다.
-* `DPB-1-02` 다른 도메인의 `domain` 패키지를 import하지 않는가
+* `DPB-1-02` 다른 도메인의 `internal` 패키지를 import하지 않는가
 * `DPB-1-03` API를 호출당하지 않는 도메인에도 의무적으로 만들지 않았는가
   쓰지 않는 API를 미리 만들면 유지할 계약만 늘고 아무도 소비하지 않는다.
-* `DPB-1-04` `~ApiImpl`이 계층 안이 아니라 `domain` 바로 아래에 있는가
+* `DPB-1-04` `~ApiImpl`이 계층 안이 아니라 `internal` 바로 아래에 있는가
   "이 도메인이 밖에 무엇을 제공하는지"를 한 곳에서 찾을 수 있어야 한다.
+* `DPB-1-05` 스케줄러를 `internal/batch` 아래에 두었는가
+  스케줄러는 계층이 아니라 트리거다. 계층 밖이라는 사실이 자리로 드러나야 한다.
+
+### 1.1 왜 `domain`이 아니라 `internal`인가
+
+**이름이 하던 일을 이름이 하게 한다.** 이 패키지가 뜻하는 것은 "도메인 로직"이 아니라
+**"이 도메인 밖에서는 손대지 않는 것"**이다. 도메인 밖이 쓰는 것은 도메인 루트의
+`~Api` 인터페이스와 그 DTO 뿐이고, 그 아래는 전부 안쪽이다.
+
+`domain`이라는 이름은 그 사실을 안 말한다. 오히려 `product.domain`처럼 도메인 이름 뒤에
+`domain`이 또 붙어 같은 말을 두 번 한다. `product.internal`은 한 번만 말하면서
+**접근 규칙까지 함께 말한다.**
+
+```
+product.ProductApi          다른 도메인이 쓴다
+product.ProductInfo         그 계약의 DTO
+product.internal.**         이 도메인만 쓴다.  DPB-1-02 가 막는 대상이 이것이다
+```
+
+`internal`은 다른 생태계에서도 같은 뜻으로 쓰인다. Go의 `internal/`은 컴파일러가 강제하고,
+Java의 JPMS도 공개하지 않은 패키지를 같은 이름으로 부른다. **읽는 사람이 규칙을 배우기 전에
+이름에서 먼저 안다.**
+
+#### 바꿀 때 함께 봐야 하는 것
+
+패키지 이름이 문자열로 박혀 있는 자리가 셋이다. **코드가 아니라서 컴파일이 안 잡아 준다.**
+
+| 자리 | 무엇이 걸리나 |
+|---|---|
+| `build.gradle`의 JaCoCo `includes` | 대상이 안 잡혀도 실패하지 않는다. **게이트가 조용히 아무것도 안 잰다** |
+| ArchUnit 규칙의 `..internal.service..` | 계층 규칙이 빈 집합에 적용돼 늘 통과한다 |
+| `.github/llm-verify/anchors.yml`의 트리거 경로 | 해당 항목의 검증이 안 돈다 |
+
+셋 다 **실패가 아니라 침묵으로 나타난다.** 바꾼 뒤에는 게이트가 실제로 대상을 잡는지
+확인해야 한다.
 
 ## 2. DTO, 예외, enum의 위치
 
@@ -103,13 +138,13 @@ com.freshmarket
 | 종류 | 위치 | 예시 |
 |------|------|------|
 | 공개 DTO | 도메인 루트 | `ProductInfo`, `StockChange` |
-| 내부 DTO | `domain.dto` | `OrderPlaceRequest`, 조회 조건 |
+| 내부 DTO | `internal.dto` | `OrderPlaceRequest`, 조회 조건 |
 | 공개 예외 | 도메인 루트 | `OutOfStockException` (다른 도메인이 catch 해야 함) |
-| 내부 예외 | `domain.exception` | `ProductException` + `ProductErrorCode` |
+| 내부 예외 | `internal.exception` | `ProductException` + `ProductErrorCode` |
 
 | enum 성격 | 위치 | 예시 |
 |------|------|------|
-| 엔티티에 묶이는 상태 | `domain.entity` | `OrderStatus`, `ProductStatus` |
+| 엔티티에 묶이는 상태 | `internal.entity` | `OrderStatus`, `ProductStatus` |
 | 공개 DTO가 노출하는 값 | 도메인 루트 | `OrderSummary`가 상태를 담는다면 |
 | 여러 도메인이 공유 | `common` | `Currency` |
 
@@ -130,7 +165,7 @@ PG, 외부 REST API, 메시지 발송처럼 외부 시스템을 호출하는 코
 
 ```
 payment
-└── domain
+└── internal
     └── client
         ├── PgClient.java          <- 인터페이스. payment 가 소유한다
         ├── TossPgClient.java      <- 구현체
@@ -159,7 +194,7 @@ payment
 
 | 상황 | 배치 |
 |------|------|
-| 한 도메인만 쓴다 (PG, 배송사 API) | 그 도메인의 `domain.client` |
+| 한 도메인만 쓴다 (PG, 배송사 API) | 그 도메인의 `internal.client` |
 | 여러 도메인이 쓴다 (SMS, 이메일, 파일 저장소) | 별도 도메인으로 승격 후 공개 API 제공 |
 | 도메인 지식이 없는 기술 설정 (HTTP 타임아웃, 재시도 정책) | `config` |
 
@@ -168,7 +203,7 @@ payment
 ### 4.1 공개 창구
 
 공개 창구는 도메인명 + `Api`(`ProductApi`, `MemberApi`)로 통일한다.
-구현체는 `~ApiImpl`로 이름 짓고 `domain` 바로 아래에 package-private로 둔다.
+구현체는 `~ApiImpl`로 이름 짓고 `internal` 바로 아래에 package-private로 둔다.
 
 점검 항목
 * `DPB-4-01` 공개 창구 이름이 도메인명 + `Api` 형태인가
@@ -186,9 +221,9 @@ payment
 
 | 패키지 | 접미사 |
 |---|---|
-| `domain/controller` | `~Controller` |
-| `domain/service` | `~Service` |
-| `domain/repository` | `~Repository` |
+| `internal/controller` | `~Controller` |
+| `internal/service` | `~Service` |
+| `internal/repository` | `~Repository` |
 
 **커버리지 게이트가 `service` 패키지 전체를 100%로 요구한다**(`BLD-1-01`). 그 패키지에 정책 객체나
 계산 헬퍼를 함께 두면 그것들에도 100%가 요구된다. 이름을 강제하면 "여기 있는 것은 전부 서비스다"가
@@ -299,10 +334,10 @@ class ArchitectureTest {
     @ArchTest
     static final ArchRule layerDirection = layeredArchitecture()
             .consideringOnlyDependenciesInLayers()
-            .layer("Controller").definedBy("..domain.controller..")
-            .layer("Service").definedBy("..domain.service..")
-            .layer("Repository").definedBy("..domain.repository..")
-            .layer("Client").definedBy("..domain.client..")
+            .layer("Controller").definedBy("..internal.controller..")
+            .layer("Service").definedBy("..internal.service..")
+            .layer("Repository").definedBy("..internal.repository..")
+            .layer("Client").definedBy("..internal.client..")
             .whereLayer("Controller").mayNotBeAccessedByAnyLayer()
             .whereLayer("Service").mayOnlyBeAccessedByLayers("Controller")
             .whereLayer("Repository").mayOnlyBeAccessedByLayers("Service")
@@ -322,7 +357,7 @@ class ArchitectureTest {
     // 외부 연동 클래스에 트랜잭션 금지
     @ArchTest
     static final ArchRule clientHasNoTransaction = noClasses()
-            .that().resideInAPackage("..domain.client..")
+            .that().resideInAPackage("..internal.client..")
             .should().beAnnotatedWith(Transactional.class);
 
     // 순환 의존 금지
@@ -417,7 +452,7 @@ public long place(OrderPlaceRequest request) {
 | 공개 DTO에 엔티티 담기 | 필드를 값으로 풀어 담는다 |
 | 자기 도메인 컨트롤러가 API 경유 | 같은 `domain` 안이므로 내부 서비스를 직접 쓴다 |
 | 통과 위임만 하는 API 구현체 | 변환이나 노출 범위 축소가 없으면 노이즈다 |
-| 최상위에 `client` 패키지를 둠 | 사용하는 도메인의 `domain.client`에 둔다 |
+| 최상위에 `client` 패키지를 둠 | 사용하는 도메인의 `internal.client`에 둔다 |
 | 외부 스펙 DTO를 도메인 밖으로 노출 | `client.dto`에 가두고 변환해 넘긴다 |
 | `client` 클래스에 `@Transactional` | 트랜잭션 밖에서 호출한다 |
 | 공개 DTO에 내부 enum을 그대로 노출 | 필요하면 `String`으로 변환한다 |

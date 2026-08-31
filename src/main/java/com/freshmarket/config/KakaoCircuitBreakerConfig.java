@@ -18,7 +18,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
  *
  * 이 판단 로직을 member.domain 쪽으로 빼서 단위 테스트하려던 시도는 하지 않는다 —
  * ArchitectureTest.도메인_내부는_다른_도메인에_닫혀_있다가 config 슬라이스에서 member 슬라이스
- * 내부(domain.client)로의 의존을 막는다(공통/config로 나가는 의존만 예외). 그래서 이 predicate는
+ * 내부(internal.client)로의 의존을 막는다(공통/config로 나가는 의존만 예외). 그래서 이 predicate는
  * 여기 그대로 두고, 실제 CircuitBreakerConfig 빌더에 적용된 뒤의 동작은
  * KakaoCircuitBreakerIntegrationTest(src/integrationTest)가 CircuitBreakerRegistry에서 실제
  * predicate를 꺼내 검증한다 — WebClient를 목킹할 필요도 없다.
