@@ -110,20 +110,54 @@ class CouponProfileBindingTest {
     }
 
     /*
-     * 느려진 쓰기를 소켓이 끊기 전에 회로가 먼저 잡아야 한다.
-     * 순서가 뒤집히면 회로는 실패만 세게 되어 느려지는 구간에서 안 열린다.
+     * 느림 기준은 그 호출의 타임아웃보다 뒤여야 한다. 앞에 두면 대상이 느린 것이 아니라
+     * 이 앱이 느린 것을 회로가 장애로 읽는다.
+     *
+     * 회로가 재는 것은 대상 왕복이 아니라 executeCallable 이 도는 시간 전체이고, 거기에는
+     * 가상 스레드가 CPU 를 얻기까지 기다린 시간이 들어간다. 대상 왕복은 이미 타임아웃으로
+     * 묶여 있으므로, 타임아웃을 넘는 측정값은 정의상 대상이 아니라 이 앱의 지연이다.
+     *
+     * 이 순서를 뒤집어 두었다가 실제로 무너졌다 (2026-08-30 부하 시험). 느림 기준 50ms 가
+     * Redis 타임아웃 100ms 아래에 있어서, 차가운 JVM 의 정상 회차에서 느린 호출 비율이
+     * 69% 로 잡혔다. 실패 비율은 0% 였고 그 회차는 10,000건을 다 발급했다. 성공한 호출의
+     * 최대가 792ms 였는데, Redis 가 그만큼 썼다면 타임아웃에 걸려 실패했어야 한다.
      */
     @Test
-    void 회로_느림_기준이_소켓_타임아웃보다_앞이다() {
+    void 회로_느림_기준이_대상_타임아웃보다_뒤다() {
         runner.run(context -> {
             Environment env = context.getEnvironment();
 
             long 응답대기 = Long.parseLong(
                     env.getProperty("spring.datasource.hikari.data-source-properties.socketTimeout"));
-            long redis = Long.parseLong(env.getProperty("spring.data.redis.timeout").replace("ms", ""));
 
-            assertThat(느림기준밀리초(env, "couponWrite")).isLessThan(응답대기);
-            assertThat(느림기준밀리초(env, "couponSeq")).isLessThan(redis);
+            assertThat(느림기준밀리초(env, "couponWrite"))
+                    .as("쓰기 회로의 느림 기준은 socketTimeout 뒤에 있어야 한다")
+                    .isGreaterThan(응답대기);
+        });
+    }
+
+    /*
+     * 순번 확보 회로는 느림으로 열지 않는다. 100 은 "모든 호출이 느려야 연다" 라 사실상 끈 것이다.
+     *
+     * 측정값이 Redis 왕복이 아니라 이 앱의 스케줄 대기까지 포함하는데, Redis 왕복은 이미
+     * timeout 으로 묶여 있어 느림 판정이 더해 주는 것이 없다. Redis 가 진짜 죽으면 타임아웃에서
+     * 실패로 확정되어 failureRateThreshold 가 잡는다.
+     *
+     * 느림 기준 자체는 남겨 둔다. 회로를 열지는 않지만 slow_call_rate 지표가 계속 나와
+     * 인스턴스가 데워졌는지 보는 데 쓴다 (데워지면 0%, 차가우면 69%).
+     */
+    @Test
+    void 순번_확보_회로는_느림으로_열지_않는다() {
+        runner.run(context -> {
+            Environment env = context.getEnvironment();
+
+            assertThat(env.getProperty(
+                    "resilience4j.circuitbreaker.instances.couponSeq.slowCallRateThreshold"))
+                    .as("느림 비율 임계 100 이면 느림만으로는 안 열린다")
+                    .isEqualTo("100");
+            assertThat(느림기준밀리초(env, "couponSeq"))
+                    .as("지표용으로 문턱은 남겨 둔다")
+                    .isPositive();
         });
     }
 
