@@ -8,7 +8,9 @@ import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.freshmarket.coupon.domain.exception.DataAccessFailures;
@@ -16,6 +18,7 @@ import com.freshmarket.coupon.domain.redis.CouponSeqCommitter;
 import com.freshmarket.coupon.domain.repository.MemberCouponBulkRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
@@ -40,13 +43,36 @@ public class CouponIssueFlusher implements SmartLifecycle {
 
     private static final long SHUTDOWN_WAIT_SECONDS = 10;
 
+    // 멈춘 동안 루프가 다시 보는 간격이다. 배치 윈도우보다 짧아야 재개가 늦지 않는다
+    private static final long PAUSE_POLL_MILLIS = 5;
+
     private final CouponIssueQueue queue;
     private final MemberCouponBulkRepository bulkRepository;
     private final CouponSeqCommitter committer;
     private final CouponIssueProperties properties;
     private final CouponWriteCircuit writeCircuit;
+    /*
+     * 늦게 푸는 참조다. 이 클래스를 쓰는 쪽(재건)이 이 클래스를 다시 쓰기 때문에 빈 사이에 고리가 생긴다.
+     *
+     *   Flusher -> 재건 신호 -> 재건기 -> 큐를 올리는 쪽 -> Flusher
+     *
+     * 고리를 끊을 자리는 여기다. 나머지 셋은 서로를 진짜로 필요로 하는데, 이 참조만 "일이 생기면
+     * 알려 준다" 는 바깥 방향이라 기동 시점에 있을 이유가 없다.
+     */
+    private final ObjectProvider<CouponSeqRebuildSignal> rebuildSignal;
 
     private volatile boolean running;
+
+    /*
+     * 재건이 큐를 훑는 동안 켜진다.
+     * 이것이 없으면 훑는 사이에 플러시가 같은 티켓을 DB 로 내려, 재건이 확정된 매핑을 미확정으로
+     * 덮는다. 그러면 회수가 그 번호를 남에게 넘겨 같은 번호가 두 번 나간다 (coupon.md 10장).
+     */
+    private volatile boolean paused;
+
+    // 지금 배치를 쓰고 있는 스레드 수다. 멈춤은 이 값이 0 이 되어야 완료된다
+    private final AtomicInteger inFlight = new AtomicInteger();
+
     private ExecutorService executor;
 
     @Override
@@ -107,6 +133,40 @@ public class CouponIssueFlusher implements SmartLifecycle {
         }
     }
 
+    /**
+     * 큐를 얼린다. 돌고 있던 배치가 끝날 때까지 기다리고 돌아온다.
+     *
+     * <p>재건이 큐를 훑기 직전에 부른다. 표시만 켜고 돌아오면 아직 쓰고 있는 배치가 남아 있어,
+     * 훑는 도중에 그 티켓들이 DB 로 내려간다.
+     *
+     * @return 정말로 멈췄으면 true. 시한 안에 배치가 안 끝나면 false 이고, 그때는 부른 쪽이
+     *         훑기를 포기해야 한다
+     */
+    public boolean pause(Duration timeout) {
+        paused = true;
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (inFlight.get() > 0) {
+            if (System.nanoTime() > deadline) {
+                log.warn("event=COUPON_FLUSHER_PAUSE_TIMEOUT inFlight={}", inFlight.get());
+                paused = false;
+                return false;
+            }
+            try {
+                Thread.sleep(PAUSE_POLL_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                paused = false;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 얼린 큐를 다시 흐르게 한다. {@link #pause} 가 true 를 줬으면 반드시 짝을 지어 부른다. */
+    public void resume() {
+        paused = false;
+    }
+
     private void loop() {
         long windowNanos = properties.batchWindow().toNanos();
         int batchSize = properties.batchSize();
@@ -114,6 +174,11 @@ public class CouponIssueFlusher implements SmartLifecycle {
 
         while (running) {
             try {
+                if (paused) {
+                    // 재건이 큐를 훑는 중이다. 이 창은 밀리초 단위라 짧게 자고 다시 본다
+                    Thread.sleep(PAUSE_POLL_MILLIS);
+                    continue;
+                }
                 IssueTicket first = queue.poll(windowNanos);
                 if (first == null) {
                     continue;
@@ -122,7 +187,18 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 queue.drainTo(batch, batchSize - 1);
                 fillWithinWindow(batch, batchSize, windowNanos);
 
-                flush(batch);
+                long couponId = batch.get(0).couponId();
+                inFlight.incrementAndGet();
+                try {
+                    flush(batch);
+                } finally {
+                    inFlight.decrementAndGet();
+                }
+                /*
+                 * 재건이 도는지 배치마다 한 번 본다. 요청당이 아니라 배치당이라 값이 싸다.
+                 * 이 확인이 없으면 요청을 못 받는 인스턴스가 자기 큐를 영영 안 올린다 (coupon.md 10장).
+                 */
+                rebuildSignal.getObject().checkAfterFlush(couponId);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 failAll(batch, IssueResult.ABORTED);

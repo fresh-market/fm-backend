@@ -4,7 +4,6 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
 
-import com.freshmarket.coupon.domain.CouponEventOpenedEvent;
 import com.freshmarket.coupon.domain.cache.CouponCache;
 import com.freshmarket.coupon.domain.entity.Coupon;
 import com.freshmarket.coupon.domain.exception.CouponErrorCode;
@@ -13,7 +12,6 @@ import com.freshmarket.coupon.domain.redis.CouponSeqInitializer;
 import com.freshmarket.coupon.domain.repository.CouponRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,7 +37,6 @@ public class CouponEventService {
 
     private final CouponRepository couponRepository;
     private final CouponSeqInitializer seqInitializer;
-    private final ApplicationEventPublisher eventPublisher;
     private final CouponCache couponCache;
     private final Clock clock;
 
@@ -57,9 +54,9 @@ public class CouponEventService {
      * 이 메서드가 잠금을 먼저 잡아도 남이 스위치를 보는 시점에는 카운터가 이미 서 있다.
      * 리포지터리 쪽 트랜잭션에 맡기면 갱신이 그 자리에서 커밋되어 순서가 도로 뒤집힌다.
      *
-     * <p>그래서 이 트랜잭션 안에 남는 Redis 왕복은 카운터를 세우는 것 하나뿐이다. 순서 요구가
-     * 없는 스크립트 미리 올리기는 커밋 뒤로 뺐다. 관리자가 가끔 부르는 동작이라 남은 하나는
-     * 치르는 값이고, 요청 스레드가 도는 발급 경로에서는 같은 이유로 트랜잭션을 아예 안 연다.
+     * <p>그래서 이 트랜잭션 안의 Redis 왕복은 카운터를 세우는 것 하나뿐이다. 관리자가 가끔
+     * 부르는 동작이라 그 하나는 치르는 값이고, 요청 스레드가 도는 발급 경로에서는 같은 이유로
+     * 트랜잭션을 아예 안 연다.
      */
     @Transactional
     public void open(long couponId) {
@@ -70,13 +67,6 @@ public class CouponEventService {
             return;
         }
         seqInitializer.prepare(couponId, coupon.getIssueEndAt());
-        /*
-         * 순번 확보 스크립트를 미리 올리는 일은 커밋 뒤로 넘긴다.
-         * 안 올려 두면 이벤트의 첫 요청이 EVALSHA 로 튕긴 뒤 EVAL 로 다시 보내, 발급이 가장
-         * 몰리는 순간에 왕복 하나와 예외 하나를 더 문다. 그 왕복은 순서 요구가 없어 이
-         * 트랜잭션이 coupon 행을 잠근 채 기다릴 이유가 없다. 받는 쪽은 CouponEventOpenedListener 다.
-         */
-        eventPublisher.publishEvent(new CouponEventOpenedEvent(couponId));
         couponCache.evict(couponId);
         log.info("event=COUPON_EVENT_OPENED couponId={} issueEndAt={}", couponId, coupon.getIssueEndAt());
     }

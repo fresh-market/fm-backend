@@ -50,7 +50,7 @@ class CouponSeqAllocatorCircuitTest {
     void setUp() {
         CouponIssueProperties issueProperties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofSeconds(2), Duration.ofSeconds(5));
+                Duration.ofSeconds(2), Duration.ofSeconds(3), Duration.ofSeconds(5));
         /*
          * 운영 값은 application.yml 이 갖는다. 여기서는 시험이 짧게 끝나도록 작게 잡은
          * 설정으로 레지스트리를 만들어 넣는다. 이름이 couponSeq 여야 코드가 그것을 집는다.
@@ -87,7 +87,7 @@ class CouponSeqAllocatorCircuitTest {
         CircuitBreakerRegistry registry = CircuitBreakerRegistry.of(CircuitBreakerConfig.ofDefaults());
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofSeconds(2), Duration.ofSeconds(5));
+                Duration.ofSeconds(2), Duration.ofSeconds(3), Duration.ofSeconds(5));
 
         new CouponSeqAllocator(redisTemplate, properties, registry);
 

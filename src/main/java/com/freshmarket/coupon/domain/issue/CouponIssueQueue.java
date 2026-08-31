@@ -1,6 +1,7 @@
 package com.freshmarket.coupon.domain.issue;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -63,5 +64,17 @@ public class CouponIssueQueue {
     /** 지표가 읽는 현재 길이다. 8장이 요구한 "큐 최대 길이" 는 대시보드가 이 값에서 뽑는다. */
     public int size() {
         return queue.size();
+    }
+
+    /**
+     * 큐에 있는 것을 꺼내지 않고 훑는다. Redis 재건이 이 인스턴스가 쥔 순번을 알아내려고 부른다
+     * ({@code docs/coupon/coupon.md} 10장).
+     *
+     * <p><b>부르는 쪽이 플러시를 먼저 멈춰야 한다.</b> {@code LinkedBlockingQueue} 의 순회는
+     * 약한 일관성이라 도는 동안 빠져나간 항목이 보일 수도 안 보일 수도 있다. 재건은 그 결과로
+     * 순번의 주인을 정하므로 흔들리는 목록을 쓸 수 없다.
+     */
+    public List<IssueTicket> snapshot() {
+        return List.copyOf(queue);
     }
 }

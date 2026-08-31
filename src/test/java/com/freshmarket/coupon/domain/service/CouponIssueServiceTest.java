@@ -32,6 +32,7 @@ import com.freshmarket.coupon.domain.issue.IssueOutcome;
 import com.freshmarket.coupon.domain.issue.IssueResult;
 import com.freshmarket.coupon.domain.issue.IssueTicket;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
+import com.freshmarket.coupon.domain.redis.CouponSeqRebuildTrigger;
 import com.freshmarket.coupon.domain.redis.CouponSeqUnavailableException;
 import com.freshmarket.coupon.domain.redis.SeqOutcome;
 import com.freshmarket.member.MemberApi;
@@ -43,6 +44,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.dao.QueryTimeoutException;
+import org.springframework.http.HttpStatus;
 
 @ExtendWith(MockitoExtension.class)
 class CouponIssueServiceTest {
@@ -65,6 +67,9 @@ class CouponIssueServiceTest {
     private CouponSeqAllocator allocator;
 
     @Mock
+    private CouponSeqRebuildTrigger rebuildTrigger;
+
+    @Mock
     private CouponIssueQueue queue;
 
     @Mock
@@ -79,9 +84,10 @@ class CouponIssueServiceTest {
     void setUp() {
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofMillis(100), Duration.ofSeconds(5));
+                Duration.ofMillis(100), Duration.ofSeconds(3), Duration.ofSeconds(5));
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
-        sut = new CouponIssueService(couponCache, memberApi, allocator, queue, writeCircuit, properties, metrics, fixed);
+        sut = new CouponIssueService(couponCache, memberApi, allocator, rebuildTrigger, queue, writeCircuit,
+                properties, metrics, fixed);
     }
 
     @Test
@@ -206,15 +212,49 @@ class CouponIssueServiceTest {
         verify(queue, never()).submit(any());
     }
 
+    /*
+     * 줄 번호는 없지만 미확정 순번을 쥔 사람이 있다.
+     * 기준 시간이 지나면 그 번호가 다시 나오므로 재시도할 값이 있고, 409 가 그 뜻이다.
+     */
     @Test
-    void 소진이면_최종_실패로_답한다() {
+    void 회수_여지가_있는_소진은_409_로_답한다() {
         // given
         givenAllocated(new SeqOutcome.SoldOut());
 
         // when, then
         assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
                 .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.SOLD_OUT);
+        assertThat(CouponErrorCode.SOLD_OUT.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT);
         verify(queue, never()).submit(any());
+    }
+
+    /*
+     * 쥔 사람도 없어 다시 나올 번호가 없다.
+     * 410 으로 끊지 않으면 소진 응답을 받은 만 명이 가장 힘든 순간에 다시 몰린다.
+     */
+    @Test
+    void 최종_소진은_410_으로_끊는다() {
+        // given
+        givenAllocated(new SeqOutcome.SoldOutFinal());
+
+        // when, then
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.SOLD_OUT_FINAL);
+        assertThat(CouponErrorCode.SOLD_OUT_FINAL.getHttpStatus()).isEqualTo(HttpStatus.GONE);
+        verify(queue, never()).submit(any());
+    }
+
+    // 둘의 비율이 곧 "회수가 얼마나 남았나" 라, 한 갈래로 뭉쳐 세면 그것을 못 본다
+    @Test
+    void 두_소진을_따로_센다() {
+        givenAllocated(new SeqOutcome.SoldOut());
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID)).isInstanceOf(CouponException.class);
+
+        givenAllocated(new SeqOutcome.SoldOutFinal());
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID)).isInstanceOf(CouponException.class);
+
+        verify(metrics).record(IssueResult.SOLD_OUT);
+        verify(metrics).record(IssueResult.SOLD_OUT_FINAL);
     }
 
     // 카운터가 없다. 재고는 남아 있을 수 있으므로 소진이 아니라 혼잡이다
@@ -227,6 +267,37 @@ class CouponIssueServiceTest {
         assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
                 .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
         verify(queue, never()).submit(any());
+    }
+
+    /*
+     * 카운터가 없으면 재건 후보로 넘긴다.
+     * 이 신호가 없으면 Redis 가 키를 잃었을 때 아무도 그것을 모르고 발급이 멈춘 채로 남는다.
+     * 손실인지 아직 안 연 이벤트인지는 여기서 안 가른다. 그것은 재건기가 DB 를 보고 한다.
+     */
+    @Test
+    void 준비되지_않았으면_재건_후보로_넘긴다() {
+        // given
+        givenAllocated(new SeqOutcome.NotPrepared());
+
+        // when
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
+
+        // then
+        verify(rebuildTrigger).suspect(COUPON_ID);
+    }
+
+    // 순번을 받은 요청은 재건을 안 띄운다. 정상 경로에 이 신호가 새면 재건이 쉬지 않고 돈다
+    @Test
+    void 순번을_받으면_재건을_안_띄운다() {
+        // given
+        givenAllocated(new SeqOutcome.AlreadyIssued(6));
+
+        // when
+        sut.issue(COUPON_ID, MEMBER_ID);
+
+        // then
+        verifyNoInteractions(rebuildTrigger);
     }
 
     // 확정 표시가 붙어 있으면 그 자리에서 끝난다. 큐도 DB 도 안 거친다

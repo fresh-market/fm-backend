@@ -56,7 +56,7 @@ class CouponCacheTest {
         clock = new MovableClock(Instant.parse("2026-06-01T12:00:00Z"));
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofSeconds(2), FALLBACK_TTL);
+                Duration.ofSeconds(2), Duration.ofSeconds(3), FALLBACK_TTL);
         /*
          * 실행기를 단일 스레드로 준다.
          * AsyncCache 는 future 가 완료될 때 쓰기 시각을 찍는데 그 콜백이 이 실행기에서 돈다.
@@ -304,7 +304,8 @@ class CouponCacheTest {
     private static Coupon coupon(boolean active) {
         Coupon coupon = Coupon.draftLimited("선착순 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
                 LocalDate.of(2026, 1, 1), LocalDate.of(2030, 1, 1),
-                100, LocalDateTime.of(2026, 5, 1, 0, 0), ISSUE_END_AT);
+                100, LocalDateTime.of(2026, 5, 1, 0, 0), ISSUE_END_AT,
+                null, null, null);
         setField(coupon, "id", COUPON_ID);
         setField(coupon, "active", active);
         return coupon;
@@ -312,7 +313,8 @@ class CouponCacheTest {
 
     private static Coupon 마감_없는_쿠폰() {
         Coupon coupon = Coupon.draftUnlimited("상시 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
-                LocalDate.of(2026, 1, 1), LocalDate.of(2030, 1, 1));
+                LocalDate.of(2026, 1, 1), LocalDate.of(2030, 1, 1),
+                null, null, null);
         setField(coupon, "id", COUPON_ID);
         setField(coupon, "active", true);
         return coupon;

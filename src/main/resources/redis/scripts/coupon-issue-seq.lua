@@ -2,7 +2,7 @@
 -- KEYS[1]=seq(해시)  KEYS[2]=free(정렬집합)  KEYS[3]=counter(문자열)  KEYS[4]=pending(정렬집합)
 -- ARGV[1]=memberId  ARGV[2]=issueLimit  ARGV[3]=회수 기준(ms)
 -- 만드는 키에는 counter 의 만료 시각을 그대로 물려준다. 넷의 수명이 같아야 한다
--- 반환 "6" 번호를 받았다 / "6:1" 이미 발급됐다 / "-1" 소진 / "-2" 준비되지 않았다
+-- 반환 "6" 번호를 받았다 / "6:1" 이미 발급됐다 / "-1" 소진(회수 여지 있음) / "-2" 준비되지 않았다 / "-3" 소진(최종)
 
 -- 카운터가 없으면 이 스크립트는 순번을 안 내준다. 키가 사라진 뒤에 INCR 이 1 을 다시 주는 것을 막는 가드다
 if redis.call('EXISTS', KEYS[3]) == 0 then
@@ -64,6 +64,12 @@ if stale[1] then
     redis.call('HDEL', KEYS[1], stale[1])
     return give(seq)
   end
+end
+
+-- 소진이 늘 최종은 아니다. 미확정 순번을 쥔 사람이 있으면 기준 시간이 지날 때 그 번호가 다시 나온다
+-- 아무도 안 쥐고 있으면 다시 나올 번호가 없다. 회수도 반납도 진행 중인 티켓을 전제하기 때문이다
+if redis.call('ZCARD', KEYS[4]) == 0 then
+  return '-3'
 end
 
 return '-1'

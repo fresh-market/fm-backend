@@ -21,6 +21,7 @@ import com.freshmarket.coupon.domain.issue.IssueOutcome;
 import com.freshmarket.coupon.domain.issue.IssueResult;
 import com.freshmarket.coupon.domain.issue.IssueTicket;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
+import com.freshmarket.coupon.domain.redis.CouponSeqRebuildTrigger;
 import com.freshmarket.coupon.domain.redis.CouponSeqUnavailableException;
 import com.freshmarket.coupon.domain.redis.SeqOutcome;
 import com.freshmarket.member.MemberApi;
@@ -49,6 +50,7 @@ public class CouponIssueService {
     private final CouponCache couponCache;
     private final MemberApi memberApi;
     private final CouponSeqAllocator allocator;
+    private final CouponSeqRebuildTrigger rebuildTrigger;
     private final CouponIssueQueue queue;
     private final CouponWriteCircuit writeCircuit;
     private final CouponIssueProperties properties;
@@ -86,15 +88,34 @@ public class CouponIssueService {
         return switch (allocateSeq(couponId, memberId, coupon.totalQuantity())) {
             case SeqOutcome.Allocated allocated -> record(coupon, memberId, allocated.seq());
             case SeqOutcome.AlreadyIssued issued -> alreadyIssued(issued.seq());
+            /*
+             * 줄 번호는 없지만 미확정 순번을 쥔 사람이 있다.
+             * 기준 시간이 지나면 그 번호가 다시 나오므로 재시도할 값이 있다.
+             */
             case SeqOutcome.SoldOut ignored -> {
                 metrics.record(IssueResult.SOLD_OUT);
                 throw new CouponException(CouponErrorCode.SOLD_OUT);
             }
             /*
-             * Redis 에 카운터가 없다. 관리자가 아직 이벤트를 안 열었거나 앱이 키를 재건하는 중이다.
-             * 재고는 남아 있을 수 있으므로 소진이 아니고, 사용자가 다시 시도할 값이 있다.
+             * 쥔 사람도 없어 다시 나올 번호가 없다. 410 으로 끊어 재시도를 막는다.
+             * 소진 응답이 만 건 단위로 나오는 자리라, 그들이 전부 재시도하면 가장 힘든 순간에
+             * 부하가 두 배가 된다 (docs/coupon/coupon.md 3장).
              */
-            case SeqOutcome.NotPrepared ignored -> throw congested(IssueResult.NOT_PREPARED);
+            case SeqOutcome.SoldOutFinal ignored -> {
+                metrics.record(IssueResult.SOLD_OUT_FINAL);
+                throw new CouponException(CouponErrorCode.SOLD_OUT_FINAL);
+            }
+            /*
+             * Redis 에 카운터가 없다. 관리자가 아직 이벤트를 안 열었거나 Redis 가 키를 잃었다.
+             * 재고는 남아 있을 수 있으므로 소진이 아니고, 사용자가 다시 시도할 값이 있다.
+             *
+             * 그 둘을 여기서 가르지 않는다. 가르려면 DB 를 봐야 하는데 이 자리는 이벤트가 열리는
+             * 순간 수만 개가 동시에 지나는 곳이다. 후보만 넘기고 판정은 뒤 스레드가 한다.
+             */
+            case SeqOutcome.NotPrepared ignored -> {
+                rebuildTrigger.suspect(couponId);
+                throw congested(IssueResult.NOT_PREPARED);
+            }
         };
     }
 

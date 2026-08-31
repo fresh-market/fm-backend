@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
@@ -13,7 +14,6 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
-import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
@@ -45,6 +45,7 @@ public class CouponSeqAllocator {
     private static final String COMMITTED_DELIMITER = ":";
     private static final String SOLD_OUT = "-1";
     private static final String NOT_PREPARED = "-2";
+    private static final String SOLD_OUT_FINAL = "-3";
 
     private final StringRedisTemplate redisTemplate;
     private final RedisScript<String> allocateScript;
@@ -84,31 +85,6 @@ public class CouponSeqAllocator {
          * 예외 목록으로 세고 느림 기준도 150밀리초라 정지에 덜 휘둘린다.
          */
         this.circuitBreaker.transitionToMetricsOnlyState();
-    }
-
-    /**
-     * 순번 확보 스크립트를 Redis 서버에 미리 올려 둔다. 관리자가 이벤트를 열 때 부른다.
-     *
-     * <p>앱은 스크립트 <b>본문</b>을 자기 힙에 들고 있을 뿐 서버에 올려 두지는 않는다. 스프링은
-     * 실행할 때 {@code EVALSHA} 를 먼저 시도하고, 서버가 그 sha 를 모르면 {@code NOSCRIPT}
-     * 예외를 받은 뒤 {@code EVAL} 로 다시 보낸다. <b>그 대가를 이벤트의 첫 요청이 문다.</b>
-     *
-     * <p>발급이 가장 몰리는 순간이 그 첫 요청이라, 미리 올려 두면 그 왕복 하나와 예외 하나가
-     * 사라진다. Redis 를 재시작했거나 {@code SCRIPT FLUSH} 가 돌면 다시 없어지므로, 이벤트를
-     * 열 때마다 부르는 것이 맞다.
-     *
-     * <p>실패해도 던지지 않는다. 안 올려 둬도 첫 요청이 {@code EVAL} 로 스스로 올리므로
-     * 발급이 막히지 않는다. 이것 하나 때문에 이벤트 열기가 되돌아가면 잃는 것이 더 크다.
-     */
-    public void preloadScript() {
-        try {
-            String sha = redisTemplate.execute(
-                    (RedisCallback<String>) connection -> connection.scriptingCommands()
-                            .scriptLoad(allocateScript.getScriptAsString().getBytes(StandardCharsets.UTF_8)));
-            log.info("event=COUPON_SEQ_SCRIPT_PRELOADED sha={}", sha);
-        } catch (DataAccessException e) {
-            log.warn("event=COUPON_SEQ_SCRIPT_PRELOAD_FAILED", e);
-        }
     }
 
     /*
@@ -160,12 +136,28 @@ public class CouponSeqAllocator {
         }
     }
 
+    /**
+     * 지금까지 나간 순번 수를 읽는다. 발급 현황 조회가 부른다.
+     *
+     * <p>단순 {@code GET} 이라 순번 확보 스크립트와 자원을 다투지 않는다. 회로도 안 씌운다 —
+     * 이 값을 못 읽어도 발급 자체는 막히지 않으므로, 실패하면 호출부가 DB 값으로 대체하면 된다.
+     *
+     * @return 카운터 키가 없으면(이벤트가 열린 적 없거나 이미 닫혀 키가 지워졌다) 빈 값
+     */
+    public Optional<Integer> currentIssuedCount(long couponId) {
+        String raw = redisTemplate.opsForValue().get(CouponSeqKeys.counter(couponId));
+        return raw != null ? Optional.of(Integer.parseInt(raw)) : Optional.empty();
+    }
+
     private SeqOutcome parse(String raw) {
         if (NOT_PREPARED.equals(raw)) {
             return new SeqOutcome.NotPrepared();
         }
         if (SOLD_OUT.equals(raw)) {
             return new SeqOutcome.SoldOut();
+        }
+        if (SOLD_OUT_FINAL.equals(raw)) {
+            return new SeqOutcome.SoldOutFinal();
         }
 
         /*

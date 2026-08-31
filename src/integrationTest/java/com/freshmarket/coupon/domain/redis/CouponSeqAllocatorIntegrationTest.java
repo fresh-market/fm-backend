@@ -93,14 +93,16 @@ class CouponSeqAllocatorIntegrationTest extends IntegrationTestSupport {
 
     /*
      * 앱은 스크립트 본문을 자기 힙에 들고 있을 뿐 서버에 올려 두지는 않는다.
-     * 스프링이 EVALSHA 를 먼저 시도하고 서버가 그 sha 를 모르면 NOSCRIPT 로 튕긴 뒤 EVAL 로
-     * 다시 보내는데, 그 대가를 이벤트의 첫 요청이 문다. 발급이 가장 몰리는 순간이다.
      *
-     * 이 시험은 preloadScript 하나만 본다. 이벤트를 여는 경로가 그것을 실제로 부르는지는
-     * CouponEventOpenedListenerIntegrationTest 가 따로 본다.
+     * 스프링이 EVALSHA 를 먼저 시도하고 서버가 그 sha 를 모르면 NOSCRIPT 로 튕긴 뒤 EVAL 로
+     * 다시 보낸다. 그 EVAL 이 서버 캐시를 채우므로, 미리 올려 두는 장치가 없어도 첫 실행 하나가
+     * 그 일을 대신한다. 손해를 보는 것은 그 창에 들어간 몇 건뿐이다.
+     *
+     * 이 시험이 그 되돌아오는 경로를 못 박는다. 이것이 깨지면 매 요청이 본문을 통째로 실어 보낸다.
      */
     @Test
-    void 스크립트를_미리_올리면_서버가_그것을_안다() throws Exception {
+    void 캐시가_비어_있어도_첫_실행이_서버에_올린다() throws Exception {
+        이벤트를_연다();
         String sha = 스크립트_sha();
         redisTemplate.execute((RedisCallback<Object>) connection -> {
             connection.scriptingCommands().scriptFlush();
@@ -108,7 +110,7 @@ class CouponSeqAllocatorIntegrationTest extends IntegrationTestSupport {
         });
         assertThat(서버가_아는가(sha)).isFalse();
 
-        allocator.preloadScript();
+        assertThat(allocator.allocate(COUPON_ID, 1L, ISSUE_LIMIT)).isEqualTo(new SeqOutcome.Allocated(1));
 
         assertThat(서버가_아는가(sha)).isTrue();
     }
@@ -209,6 +211,34 @@ class CouponSeqAllocatorIntegrationTest extends IntegrationTestSupport {
         assertThat(allocator.allocate(COUPON_ID, 9L, ISSUE_LIMIT)).isInstanceOf(SeqOutcome.SoldOut.class);
         assertThat(redisTemplate.opsForHash().get(SEQ, "2")).isEqualTo("2:1");
         assertThat(redisTemplate.opsForZSet().score(PENDING, "2")).isNull();
+    }
+
+    /*
+     * 소진이 최종인지 아닌지를 가르는 것은 pending 이 비었는가 하나다.
+     * 셋 다 확정되면 쥔 사람이 없어 다시 나올 번호가 없다. 회수도 반납도 진행 중인 티켓을 전제한다.
+     */
+    @Test
+    void 쥔_사람이_없으면_최종_소진이다() {
+        이벤트를_연다();
+        모두_소진시킨다();
+        플러시가_확정_표시를_붙인다(1L, 1);
+        플러시가_확정_표시를_붙인다(2L, 2);
+        플러시가_확정_표시를_붙인다(3L, 3);
+
+        assertThat(allocator.allocate(COUPON_ID, 9L, ISSUE_LIMIT))
+                .isInstanceOf(SeqOutcome.SoldOutFinal.class);
+    }
+
+    // 하나라도 남아 있으면 기준 시간 뒤에 그 번호가 나오므로 최종이 아니다
+    @Test
+    void 한_명이라도_쥐고_있으면_최종이_아니다() {
+        이벤트를_연다();
+        모두_소진시킨다();
+        플러시가_확정_표시를_붙인다(1L, 1);
+        플러시가_확정_표시를_붙인다(2L, 2);
+
+        assertThat(allocator.allocate(COUPON_ID, 9L, ISSUE_LIMIT))
+                .isInstanceOf(SeqOutcome.SoldOut.class);
     }
 
     private void 모두_소진시킨다() {
