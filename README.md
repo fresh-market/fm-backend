@@ -102,8 +102,8 @@ app ASG      min 1  /  desired 1  /  max 3      2 AZ 서브넷에 걸쳐 있다
 
 ```
 ALB 리스너 규칙 (priority 15)
-  경로가 발급 API 이면   ->  coupon 대상 그룹  ->  전용 ASG (prod,coupon 프로필)
-  그 밖                  ->  app 대상 그룹     ->  평상시 ASG
+  POST /v1/coupons/*/issues  ->  coupon 대상 그룹  ->  전용 ASG (prod,coupon 프로필)
+  그 밖의 모든 경로           ->  app 대상 그룹     ->  평상시 ASG
 ```
 
 ### 왜 선착순만 ASG 를 따로 두었나
@@ -117,6 +117,9 @@ ALB 리스너 규칙 (priority 15)
 **③ 설정이 정반대다.** 평상시 앱은 풀을 넉넉히 쓰고 헬스체크를 촘촘히 보지만, 전용 인스턴스는 **풀을 2로 조이고 헬스체크를 느슨하게** 해야 한다. 한 그룹에 두면 어느 한쪽 기준으로 맞출 수밖에 없다.
 
 **④ 되돌리기와 비교가 쉬워진다.** `coupon_dedicated_enabled` 를 끄면 ALB 규칙만 사라지고 발급 요청은 평상시 앱으로 흐른다. 경로가 막히지 않으므로 언제든 되돌릴 수 있고, 버전(v1~v4) 비교도 다른 트래픽에 오염되지 않는다.
+
+
+**그리고 이것이 가장 크다 — 이 그룹은 쿠폰 부하만 받는다.** 평상시 앱과 인스턴스가 겹치지 않으므로 **다른 기능의 성능에 영향이 없고**, 잰 수치가 오직 발급 경로의 것이 된다. 그래서 운영에 올리기 전에 개발 서버에서 **같은 모양의 예측 가능한 환경**으로 미리 대비할 수 있다. 대수와 프로필과 경로가 같으면 개발에서 본 것이 운영에서도 그대로 나온다 — 6장의 회차별 비교가 성립하는 것도 이 조건 덕분이다.
 
 | 전용 경로에만 다른 것 | 값 | 왜 |
 |---|---|---|
@@ -288,6 +291,28 @@ UPDATE stock_lot SET available_qty = available_qty - ?
 **R1 이 가장 비싸다.** 나머지는 사후에 정정할 수 있지만 이미 나간 쿠폰은 회수하기 어렵다. 그래서 R1~R4 를 앱이 아니라 **스키마에 맡겼다.**
 
 ### 5.2 DB 가 앱과 무관하게 막는다
+
+![쿠폰 스키마](./docs/images/coupon-schema.png)
+
+`coupon` 이 정책을 갖고 `member_coupon` 이 발급 한 건이다. 상태 변화는 `member_coupon_status_history` 가 전이(`from_status -> to_status`)로 남기고, 대상 상품은 `coupon_product_option` 이 잇는다.
+
+**발급된 쿠폰은 그 자리에서 주문에 쓸 수 있다.** `member_coupon` 에 행이 들어가는 순간 주문 쪽이 참조할 대상이 생기기 때문이다. 발급과 사용 사이에 다른 적재나 동기화 단계가 없다.
+
+```
+발급   member_coupon 에 INSERT (status = ISSUED)
+사용   orders.member_coupon_id       장바구니 쿠폰 — 주문 전체에 하나
+       order_item.member_coupon_id   상품 쿠폰 — 라인마다 하나
+```
+
+`scope` 가 그 둘을 가른다. 장바구니 쿠폰은 주문 하나에 한 장, 상품 쿠폰은 상품 하나에 한 장이다. **같은 쿠폰이 두 번 쓰이는 것은 DB 가 막는다.**
+
+```sql
+active_coupon_key BIGINT GENERATED ALWAYS AS (
+  CASE WHEN status NOT IN ('CANCELED','RETURNED') THEN member_coupon_id ELSE NULL END)
+UNIQUE KEY uk_order_active_coupon (active_coupon_key)
+```
+
+**살아 있는 주문 한정으로 쿠폰당 1건**이다. 취소나 반품이면 계산 컬럼이 `NULL` 이 되어 그 쿠폰을 다시 쓸 수 있고, 교환은 상품이 유지되므로 쿠폰도 유지된다. `order_item` 에도 같은 컬럼과 제약이 있다. R1~R4 를 순번과 UNIQUE 로 지킨 것과 **같은 방식**이다 — 앱이 세지 않고 DB 가 행 하나로 판정한다.
 
 ```sql
 UNIQUE KEY uk_mc_coupon_member (coupon_id, member_id)   -- R2 1인 1매, R4 재시도
