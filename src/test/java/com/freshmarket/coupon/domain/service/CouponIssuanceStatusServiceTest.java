@@ -98,7 +98,8 @@ class CouponIssuanceStatusServiceTest {
         when(issuanceCountCache.find(COUPON_ID)).thenReturn(Optional.empty());
         Coupon coupon = Coupon.draftLimited("선착순 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
                 LocalDate.now(), LocalDate.now().plusDays(3),
-                10000, NOW.minusDays(2), NOW.minusDays(1));
+                10000, NOW.minusDays(2), NOW.minusDays(1),
+                null, null, null);
         setField(coupon, "issuedQuantity", 10000);
         when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
 
