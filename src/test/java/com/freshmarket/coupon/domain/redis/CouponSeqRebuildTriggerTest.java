@@ -1,12 +1,16 @@
 package com.freshmarket.coupon.domain.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -15,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 /*
@@ -93,6 +98,45 @@ class CouponSeqRebuildTriggerTest {
 
         // 몇 번인지는 정하지 않는다. 이 시험이 지키려는 것은 "한 번 실패하면 끝" 이 아니라는 것뿐이다
         verify(rebuilder, timeout(5_000).atLeast(2)).rebuildIfLost(COUPON_ID);
+    }
+
+    /*
+     * 플러시 뒤 확인이 Redis 실패를 삼키는지 본다.
+     *
+     * 안 삼키면 플러시 루프의 바깥 catch 가 방금 성공한 배치를 실패로 처리한다. Redis 가 죽어도
+     * 큐에 든 발급은 끝까지 간다는 성질(coupon.md 9장)이 이 한 줄에 걸려 있다.
+     */
+    @Test
+    void 플러시_뒤_확인은_Redis_실패를_삼킨다() {
+        when(redisTemplate.hasKey(anyString()))
+                .thenThrow(new RedisConnectionFailureException("Redis 가 답하지 않는다"));
+        CouponSeqRebuildTrigger sut = new CouponSeqRebuildTrigger(rebuilder, redisTemplate);
+
+        assertThatCode(() -> sut.checkAfterFlush(COUPON_ID)).doesNotThrowAnyException();
+
+        verifyNoInteractions(rebuilder);
+    }
+
+    // 재건 중이면 이 인스턴스도 자기 큐를 올려야 한다
+    @Test
+    void 재건_표시가_있으면_후보로_넘긴다() {
+        when(redisTemplate.hasKey("coupon:9001:rebuild")).thenReturn(true);
+        CouponSeqRebuildTrigger sut = new CouponSeqRebuildTrigger(rebuilder, redisTemplate);
+
+        sut.checkAfterFlush(COUPON_ID);
+
+        verify(rebuilder, timeout(5_000)).rebuildIfLost(COUPON_ID);
+    }
+
+    // 평상시에는 아무 일도 안 한다. 배치마다 도는 자리라 여기서 새면 재건이 쉬지 않고 돈다
+    @Test
+    void 재건_표시가_없으면_아무것도_안_한다() {
+        when(redisTemplate.hasKey("coupon:9001:rebuild")).thenReturn(false);
+        CouponSeqRebuildTrigger sut = new CouponSeqRebuildTrigger(rebuilder, redisTemplate);
+
+        sut.checkAfterFlush(COUPON_ID);
+
+        verifyNoInteractions(rebuilder);
     }
 
     // 쿠폰이 다르면 서로를 막지 않는다. 집합의 키가 쿠폰이라는 뜻이다
