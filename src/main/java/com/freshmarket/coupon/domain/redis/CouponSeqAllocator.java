@@ -45,6 +45,7 @@ public class CouponSeqAllocator {
     private static final String COMMITTED_DELIMITER = ":";
     private static final String SOLD_OUT = "-1";
     private static final String NOT_PREPARED = "-2";
+    private static final String SOLD_OUT_FINAL = "-3";
 
     private final StringRedisTemplate redisTemplate;
     private final RedisScript<String> allocateScript;
@@ -166,6 +167,9 @@ public class CouponSeqAllocator {
         }
         if (SOLD_OUT.equals(raw)) {
             return new SeqOutcome.SoldOut();
+        }
+        if (SOLD_OUT_FINAL.equals(raw)) {
+            return new SeqOutcome.SoldOutFinal();
         }
 
         /*

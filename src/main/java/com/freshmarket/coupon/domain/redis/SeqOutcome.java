@@ -17,8 +17,18 @@ public sealed interface SeqOutcome {
     record AlreadyIssued(int seq) implements SeqOutcome {
     }
 
-    /** 재고가 없고 회수할 묶인 순번도 없다. 최종이라 4xx 로 끊는다. */
+    /**
+     * 줄 번호가 없다. 다만 미확정 순번을 쥔 사람이 있어 <b>기준 시간이 지나면 그 번호가 다시
+     * 나온다.</b> 그래서 최종이 아니고 409 로 답한다.
+     */
     record SoldOut() implements SeqOutcome {
+    }
+
+    /**
+     * 줄 번호가 없고 <b>미확정 순번을 쥔 사람도 없다.</b> 회수도 반납도 진행 중인 티켓을
+     * 전제하므로 다시 나올 번호가 없다. 최종이라 410 으로 끊어 재시도를 막는다.
+     */
+    record SoldOutFinal() implements SeqOutcome {
     }
 
     /** 이벤트 준비 전이거나 카운터 재건 중이다. 재고는 있을 수 있으므로 503 과 Retry-After 로 답한다. */

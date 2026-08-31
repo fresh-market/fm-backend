@@ -211,6 +211,34 @@ class CouponSeqAllocatorIntegrationTest extends IntegrationTestSupport {
         assertThat(redisTemplate.opsForZSet().score(PENDING, "2")).isNull();
     }
 
+    /*
+     * 소진이 최종인지 아닌지를 가르는 것은 pending 이 비었는가 하나다.
+     * 셋 다 확정되면 쥔 사람이 없어 다시 나올 번호가 없다. 회수도 반납도 진행 중인 티켓을 전제한다.
+     */
+    @Test
+    void 쥔_사람이_없으면_최종_소진이다() {
+        이벤트를_연다();
+        모두_소진시킨다();
+        플러시가_확정_표시를_붙인다(1L, 1);
+        플러시가_확정_표시를_붙인다(2L, 2);
+        플러시가_확정_표시를_붙인다(3L, 3);
+
+        assertThat(allocator.allocate(COUPON_ID, 9L, ISSUE_LIMIT))
+                .isInstanceOf(SeqOutcome.SoldOutFinal.class);
+    }
+
+    // 하나라도 남아 있으면 기준 시간 뒤에 그 번호가 나오므로 최종이 아니다
+    @Test
+    void 한_명이라도_쥐고_있으면_최종이_아니다() {
+        이벤트를_연다();
+        모두_소진시킨다();
+        플러시가_확정_표시를_붙인다(1L, 1);
+        플러시가_확정_표시를_붙인다(2L, 2);
+
+        assertThat(allocator.allocate(COUPON_ID, 9L, ISSUE_LIMIT))
+                .isInstanceOf(SeqOutcome.SoldOut.class);
+    }
+
     private void 모두_소진시킨다() {
         allocator.allocate(COUPON_ID, 1L, ISSUE_LIMIT);
         allocator.allocate(COUPON_ID, 2L, ISSUE_LIMIT);

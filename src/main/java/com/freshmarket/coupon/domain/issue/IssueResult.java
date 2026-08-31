@@ -17,6 +17,12 @@ public enum IssueResult {
     ALREADY_ISSUED("already-issued"),
     /** 재고가 없다. 최종이라 다시 시도해도 같다. */
     SOLD_OUT("sold-out"),
+    /*
+     * 소진이면서 회수할 것도 없다.
+     * 둘을 나눠 세면 그 비율이 곧 "회수가 얼마나 남았나" 라, 이벤트가 실제로 끝났는지를
+     * 대시보드에서 볼 수 있다.
+     */
+    SOLD_OUT_FINAL("sold-out-final"),
     /** 기간이 아니거나 스위치가 꺼졌거나 대상 등급이 아니다. */
     NOT_ISSUABLE("not-issuable"),
 

@@ -88,9 +88,22 @@ public class CouponIssueService {
         return switch (allocateSeq(couponId, memberId, coupon.totalQuantity())) {
             case SeqOutcome.Allocated allocated -> record(coupon, memberId, allocated.seq());
             case SeqOutcome.AlreadyIssued issued -> alreadyIssued(issued.seq());
+            /*
+             * 줄 번호는 없지만 미확정 순번을 쥔 사람이 있다.
+             * 기준 시간이 지나면 그 번호가 다시 나오므로 재시도할 값이 있다.
+             */
             case SeqOutcome.SoldOut ignored -> {
                 metrics.record(IssueResult.SOLD_OUT);
                 throw new CouponException(CouponErrorCode.SOLD_OUT);
+            }
+            /*
+             * 쥔 사람도 없어 다시 나올 번호가 없다. 410 으로 끊어 재시도를 막는다.
+             * 소진 응답이 만 건 단위로 나오는 자리라, 그들이 전부 재시도하면 가장 힘든 순간에
+             * 부하가 두 배가 된다 (docs/coupon/coupon.md 3장).
+             */
+            case SeqOutcome.SoldOutFinal ignored -> {
+                metrics.record(IssueResult.SOLD_OUT_FINAL);
+                throw new CouponException(CouponErrorCode.SOLD_OUT_FINAL);
             }
             /*
              * Redis 에 카운터가 없다. 관리자가 아직 이벤트를 안 열었거나 Redis 가 키를 잃었다.
