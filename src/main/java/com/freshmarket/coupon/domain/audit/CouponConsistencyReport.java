@@ -7,7 +7,7 @@ import java.util.List;
  *
  * <p><b>재는 것만 담고 고치지 않는다.</b> 요구사항이 같은 데이터로 재실행하면 같은 결과를
  * 요구하는데, 검증이 고치면 두 번째 실행의 결과가 첫 번째와 달라진다
- * ({@code docs/coupon/coupon.md} 10장).
+ * ({@code docs/coupon/coupon.md} 11장).
  *
  * @param stock                   재고 세 값이 어긋난 쿠폰
  * @param seqGaps                 순번에 구멍이 있는 쿠폰
