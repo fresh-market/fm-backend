@@ -19,8 +19,12 @@ import org.springframework.stereotype.Repository;
  * <p>JPA 를 안 쓴다. 집계뿐이라 엔티티로 만들 것이 없고, 300만 행을 영속성 컨텍스트에
  * 올릴 이유는 더더욱 없다.
  *
- * <p><b>상관 서브쿼리를 쓰지 않는다.</b> 발급분마다 이력을 따로 찾으면 300만 번 도는 형태가 되어
- * 끝나지 않는다. 마지막 전이는 한 번에 모아 조인한다.
+ * <p><b>마지막 전이는 상관 서브쿼리로 한 건씩 집어 온다.</b> 예전에는 파생 테이블로 한 번에
+ * 모아 조인했는데, 그러면 발급분 수만큼의 중간 행을 임시 표로 만드는 비용이 먼저 든다.
+ * V32 의 커버링 인덱스가 생긴 뒤로는 한 건씩 집는 쪽이 인덱스만 읽고 끝나 더 싸다.
+ *
+ * <p><b>단 이것은 버퍼풀이 작업 세트보다 작을 때의 이야기다.</b> 버퍼풀이 충분해지면 흩어진
+ * 조회를 반복하는 비용이 드러나 파생 테이블 쪽이 다시 빨라진다. 근거와 실측은 V32 주석에 있다.
  */
 @Repository
 @RequiredArgsConstructor
@@ -61,18 +65,23 @@ public class CouponConsistencyRepository {
              LIMIT %d
             """.formatted(100);
 
+    /*
+     * 발급분마다 마지막 전이의 to_status 를 집어 현재 상태와 견준다.
+     * ORDER BY ... DESC LIMIT 1 이 idx_mcsh_last_status 의 끝을 바로 짚어, 행 본문까지
+     * 가지 않고 인덱스만 읽고 끝난다 (V32).
+     *
+     * 이력이 한 줄도 없는 발급분은 서브쿼리가 NULL 을 주고 NULL 비교는 참이 아니라 빠진다.
+     * 파생 테이블을 INNER JOIN 하던 예전 문장이 같은 행을 빼던 것과 결과가 같다.
+     */
     private static final String STATUS_HISTORY_MISMATCH_SQL = """
             SELECT COUNT(*)
               FROM member_coupon mc
-              JOIN (SELECT member_coupon_id, MAX(member_coupon_status_history_id) AS last_id
-                      FROM member_coupon_status_history
-                     GROUP BY member_coupon_id) last_of
-                ON last_of.member_coupon_id = mc.member_coupon_id
-              JOIN member_coupon_status_history h
-                ON h.member_coupon_status_history_id = last_of.last_id
-             WHERE mc.status <> h.to_status
+             WHERE mc.status <> (SELECT h.to_status
+                                   FROM member_coupon_status_history h
+                                  WHERE h.member_coupon_id = mc.member_coupon_id
+                                  ORDER BY h.member_coupon_status_history_id DESC
+                                  LIMIT 1)
             """;
-
     // 이력이 한 줄도 없는 발급분이다. 어긋남으로 세지는 않고 값만 낸다
     private static final String WITHOUT_HISTORY_SQL = """
             SELECT COUNT(*)
