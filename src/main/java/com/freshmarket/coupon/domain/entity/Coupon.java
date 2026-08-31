@@ -10,6 +10,7 @@ import jakarta.persistence.Table;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -81,6 +82,14 @@ public class Coupon extends BaseMutableTimeEntity {
     @Column(name = "is_active", nullable = false)
     private boolean active;
 
+    /*
+     * 선택 필드가 셋(할인 상한, 최소 주문 금액, 대상 등급)이라 오버로딩 대신 빌더를 쓴다
+     * (entity-creation-guideline.md R5, 선택 필드 3개 이상). 생성자에 붙이므로 id 는 빌더에
+     * 안 들어가고(R3), access = PRIVATE 라 Lombok 이 만든 무인자 builder() 를 밖에서 못 부른다.
+     * 밖에서 보이는 것은 아래 builderUnlimited/builderLimited 뿐이고, 그 둘이 필수를 파라미터로
+     * 받아 컴파일 시점에 강제한다.
+     */
+    @Builder(access = AccessLevel.PRIVATE)
     private Coupon(String name, CouponScope scope, DiscountType discountType, int discountValue,
                    LocalDate validFrom, LocalDate validTo,
                    Integer maxDiscountAmount, Integer minOrderAmount, Integer totalQuantity,
@@ -112,12 +121,26 @@ public class Coupon extends BaseMutableTimeEntity {
     /*
      * 수량 제한이 없는 일반 쿠폰을 초안으로 만든다. total_quantity 가 비어 있어 순번을 다투지 않는다.
      * 두 팩터리 모두 초안(is_active = FALSE)으로 만들고, 켜는 것은 관리자가 따로 한다.
-     * 선택 필드(할인 상한, 최소 주문 금액, 대상 등급)는 그것을 쓰는 기능이 생길 때 오버로딩으로 더한다.
+     * 선택 필드(할인 상한, 최소 주문 금액, 대상 등급)는 안 쓰면 null 을 넘긴다.
+     *
+     * 빌더는 여기서만 부르고 밖으로 돌려주지 않는다. access = PRIVATE 는 생성자뿐 아니라 생성되는
+     * CouponBuilder 자체도 비공개로 만들어 밖에서 .build() 를 호출할 수 없기 때문이다(Order.java 와
+     * 같은 이유).
      */
     public static Coupon draftUnlimited(String name, CouponScope scope, DiscountType discountType,
-                                        int discountValue, LocalDate validFrom, LocalDate validTo) {
-        return new Coupon(name, scope, discountType, discountValue, validFrom, validTo,
-                null, null, null, null, null, null);
+                                        int discountValue, LocalDate validFrom, LocalDate validTo,
+                                        Integer maxDiscountAmount, Integer minOrderAmount, Long targetGradeId) {
+        return Coupon.builder()
+                .name(name)
+                .scope(scope)
+                .discountType(discountType)
+                .discountValue(discountValue)
+                .validFrom(validFrom)
+                .validTo(validTo)
+                .maxDiscountAmount(maxDiscountAmount)
+                .minOrderAmount(minOrderAmount)
+                .targetGradeId(targetGradeId)
+                .build();
     }
 
     /*
@@ -127,9 +150,22 @@ public class Coupon extends BaseMutableTimeEntity {
     public static Coupon draftLimited(String name, CouponScope scope, DiscountType discountType,
                                       int discountValue, LocalDate validFrom, LocalDate validTo,
                                       int totalQuantity,
-                                      LocalDateTime issueStartAt, LocalDateTime issueEndAt) {
-        return new Coupon(name, scope, discountType, discountValue, validFrom, validTo,
-                null, null, totalQuantity, issueStartAt, issueEndAt, null);
+                                      LocalDateTime issueStartAt, LocalDateTime issueEndAt,
+                                      Integer maxDiscountAmount, Integer minOrderAmount, Long targetGradeId) {
+        return Coupon.builder()
+                .name(name)
+                .scope(scope)
+                .discountType(discountType)
+                .discountValue(discountValue)
+                .validFrom(validFrom)
+                .validTo(validTo)
+                .totalQuantity(totalQuantity)
+                .issueStartAt(issueStartAt)
+                .issueEndAt(issueEndAt)
+                .maxDiscountAmount(maxDiscountAmount)
+                .minOrderAmount(minOrderAmount)
+                .targetGradeId(targetGradeId)
+                .build();
     }
 
     /*

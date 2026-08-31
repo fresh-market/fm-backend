@@ -1,11 +1,17 @@
 package com.freshmarket.coupon.domain.service;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import com.freshmarket.coupon.domain.audit.CouponConsistencyReport;
 import com.freshmarket.coupon.domain.audit.CouponIssueCount;
 import com.freshmarket.coupon.domain.audit.CouponSeqSpan;
 import com.freshmarket.coupon.domain.audit.DuplicateIssue;
+import com.freshmarket.coupon.domain.dto.AdminCouponConsistencyCheckResponse;
+import com.freshmarket.coupon.domain.exception.CouponErrorCode;
+import com.freshmarket.coupon.domain.exception.CouponException;
 import com.freshmarket.coupon.domain.repository.CouponConsistencyRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -73,6 +79,56 @@ public class CouponConsistencyService {
                 couponConsistencyRepository.countIssuesWithoutHistory());
         report(report);
         return report;
+    }
+
+    /**
+     * 쿠폰 한 장만 관리자 요청에 맞춰 즉시 확인한다.
+     *
+     * <p>{@link #verify()} 의 새벽 배치와 서비스 메서드를 공유하지 않는다. 그 배치는 300만 건
+     * 전체를 훑어야 하지만, 여기는 이 쿠폰의 발급 행만 본다.
+     *
+     * <p><b>스냅숏 자체는 그 배치와 같은 이유로 여전히 필요하다.</b> 세 쿼리를 나눠 읽으면 그
+     * 사이에 들어온 발급이 앞 쿼리에는 없고 뒤 쿼리에는 있어, 이벤트가 아직 도는 중이면 아무도
+     * 안 틀렸는데 어긋남으로 잡힌다. 대상이 이 쿠폰 하나뿐이라 짧게 끝나는 것뿐이지, 스냅숏이
+     * 왜 필요한지는 {@link #verify()} 의 이유와 같다.
+     *
+     * @throws com.freshmarket.coupon.domain.exception.CouponException 그 쿠폰이 없으면
+     */
+    @Transactional(readOnly = true)
+    public AdminCouponConsistencyCheckResponse verify(long couponId) {
+        CouponIssueCount counts = couponConsistencyRepository.findIssueCount(couponId)
+                .orElseThrow(() -> new CouponException(CouponErrorCode.COUPON_NOT_FOUND));
+        List<Integer> seqGaps = findSeqGaps(couponId, counts.actual());
+        long duplicatedMembers = couponConsistencyRepository.countDuplicateMembers(couponId);
+        boolean consistent = !counts.counterMismatched() && duplicatedMembers == 0 && seqGaps.isEmpty();
+        return new AdminCouponConsistencyCheckResponse(
+                counts.issuedQuantity(), counts.actual(), duplicatedMembers, seqGaps, consistent);
+    }
+
+    /*
+     * 나간 순번들 사이에서 비어 있는 번호를 찾는다.
+     *
+     * MAX(issue_seq) 하나만 먼저 가볍게 읽고, 그 값이 실제 발급 행 수와 같으면(구멍이 없다는
+     * 뜻이다 — issue_seq 는 쿠폰마다 유일하므로 개수와 최댓값이 같으면 1..maxSeq 가 빈틈없이
+     * 다 있다) 순번 전체를 읽지 않고 곧장 끝낸다. totalQuantity 에 상한이 없어 한정 수량이 아주
+     * 큰 쿠폰도 만들 수 있으므로, 정상적인(구멍 없는) 대부분의 호출에서 전체 목록을 애플리케이션
+     * 메모리로 끌어오는 것 자체를 피하는 것이 중요하다. 실제로 개수가 안 맞을 때만 findIssueSeqs
+     * 로 전체 목록을 가져와 어느 번호가 비었는지 계산한다.
+     */
+    private List<Integer> findSeqGaps(long couponId, long actualIssueCount) {
+        Integer maxSeq = couponConsistencyRepository.findMaxIssueSeq(couponId).orElse(null);
+        if (maxSeq == null || actualIssueCount == maxSeq) {
+            return List.of();
+        }
+        List<Integer> seqs = couponConsistencyRepository.findIssueSeqs(couponId);
+        Set<Integer> present = new HashSet<>(seqs);
+        List<Integer> gaps = new ArrayList<>();
+        for (int seq = 1; seq <= maxSeq; seq++) {
+            if (!present.contains(seq)) {
+                gaps.add(seq);
+            }
+        }
+        return gaps;
     }
 
     /*

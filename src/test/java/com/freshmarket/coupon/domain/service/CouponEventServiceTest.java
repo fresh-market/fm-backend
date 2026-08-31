@@ -301,7 +301,8 @@ class CouponEventServiceTest {
 
     private static Coupon unlimitedCoupon() {
         Coupon coupon = Coupon.draftUnlimited("일반 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
-                LocalDate.of(2026, 1, 1), LocalDate.of(2030, 1, 1));
+                LocalDate.of(2026, 1, 1), LocalDate.of(2030, 1, 1),
+                null, null, null);
         setField(coupon, "id", COUPON_ID);
         return coupon;
     }
@@ -310,7 +311,8 @@ class CouponEventServiceTest {
     private static Coupon limitedCoupon(boolean active, LocalDateTime issueEndAt) {
         Coupon coupon = Coupon.draftLimited("선착순 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
                 LocalDate.of(2026, 1, 1), LocalDate.of(2030, 1, 1),
-                TOTAL_QUANTITY, NOW.minusDays(1), issueEndAt);
+                TOTAL_QUANTITY, NOW.minusDays(1), issueEndAt,
+                null, null, null);
         setField(coupon, "id", COUPON_ID);
         setField(coupon, "active", active);
         return coupon;
