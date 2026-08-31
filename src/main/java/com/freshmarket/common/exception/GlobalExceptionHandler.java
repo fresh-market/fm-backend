@@ -40,7 +40,19 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ResponseEnvelope<Void>> handleBusiness(BusinessException e) {
         ErrorCode errorCode = e.getErrorCode();
-        log.warn("business exception. code={}", errorCode.getCode(), e);
+        /*
+         * 스택 트레이스를 찍지 않는다. 정책 위반은 코드가 어디서 났는지가 아니라 무엇이
+         * 걸렸는지가 정보이고, 그 코드는 이미 이 한 줄에 있다.
+         *
+         * 찍으면 몰리는 경로에서 그것 자체가 장애가 된다. 2026-08-30 부하 시험에서 혼잡
+         * 24,000건이 저마다 스택 트레이스를 들고 로그 큐(1024)를 채웠고, 큐가 차자 요청
+         * 스레드가 거기서 막혀 새 연결을 못 받았다. ALB 가 연결 오류 11,590건과 504
+         * 13,374건을 냈다. 혼잡 5,134건이던 회차는 연결 오류가 0 이었다.
+         *
+         * 원인을 좇을 때 쓰는 것은 이 로그가 아니라 coupon_issue_results_total 의 태그다.
+         * 그쪽이 어느 갈래로 몇 건인지를 정확히 센다.
+         */
+        log.warn("business exception. code={}", errorCode.getCode());
         return toResponse(errorCode);
     }
 

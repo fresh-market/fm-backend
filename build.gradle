@@ -270,8 +270,19 @@ tasks.named('jar') {
     enabled = false
 }
 
+/*
+ * 시험 JVM 을 UTC 로 고정한다.
+ *
+ * 운영은 EC2 호스트도 앱 컨테이너도 TZ 를 안 주어 UTC 로 돌고, RDS 의 time_zone 도 엔진 기본값인
+ * UTC 다. 개발자 기계만 KST 라, 고정하지 않으면 시험이 운영과 다른 환경에서 도는 셈이 된다.
+ *
+ * 그 차이는 실제로 시험을 깨뜨렸다. 드라이버는 LocalDateTime 을 존 없는 벽시계로 그대로 보내고
+ * Timestamp 만 connectionTimeZone 으로 변환하는데, KST 기계에서는 그 변환이 9시간이라 심는 쪽과
+ * 재는 쪽이 다른 경로를 쓰면 값이 갈렸다. UTC 로 맞추면 변환이 항등이 되어 두 경로가 같아진다.
+ */
 tasks.named('test') {
     useJUnitPlatform()
+    systemProperty 'user.timezone', 'UTC'
 }
 
 tasks.register('integrationTest', Test) {
@@ -287,6 +298,9 @@ tasks.register('integrationTest', Test) {
      * IDE 에서 테스트 클래스를 직접 실행하면 이 설정이 안 걸리므로 클래스에도 @ActiveProfiles 를 붙여 둔다.
      */
     systemProperty 'spring.profiles.active', 'integrationTest'
+
+    // 단위 시험과 같은 이유로 UTC 로 고정한다. 근거는 test 태스크 위의 주석에 있다
+    systemProperty 'user.timezone', 'UTC'
 }
 
 jacoco {

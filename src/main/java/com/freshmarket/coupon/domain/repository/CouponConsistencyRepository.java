@@ -14,7 +14,7 @@ import org.springframework.stereotype.Repository;
  * 정합성 검증이 읽는 쿼리 모음이다. <b>여기에는 쓰기가 하나도 없다.</b>
  *
  * <p>검증은 재는 것이고 고치는 것은 회수 배치가 한다
- * ({@code docs/coupon/coupon.md} 10장). 섞으면 재실행 결과가 달라져 요구를 위반한다.
+ * ({@code docs/coupon/coupon.md} 11장). 섞으면 재실행 결과가 달라져 요구를 위반한다.
  *
  * <p>JPA 를 안 쓴다. 집계뿐이라 엔티티로 만들 것이 없고, 300만 행을 영속성 컨텍스트에
  * 올릴 이유는 더더욱 없다.

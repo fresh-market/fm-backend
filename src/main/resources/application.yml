@@ -290,3 +290,81 @@ resilience4j:
         base-config: kakao-low-traffic
       kakaoUnlink:
         base-config: kakao-low-traffic
+
+      # 선착순 발급이 쓰는 회로 둘이다. 값의 근거는 docs/coupon/coupon.md 9장에 있다.
+      #
+      # 창을 시간 기준으로 두는 것이 이 설정의 요점이다. 건수 기준이면 유입이 빠를수록 판정
+      # 근거의 시간 폭이 좁아진다. 초당 2천이면 100건이 50밀리초 어치라, GC 정지 하나가 창을
+      # 통째로 덮어 회로가 열린다. 실제로 그렇게 무너졌다 (2026-08-30 부하 시험, 최대 정지
+      # 330밀리초, 느린 호출 비율 100%, 발급 7,281건에서 295건으로). 10초 창이면 3% 라 묻힌다.
+      couponSeq:
+        slidingWindowType: TIME_BASED
+        slidingWindowSize: 10
+        # 시간 창이라 표본이 많다. 이벤트가 없을 때 소수 호출로 열리는 것을 막는다
+        minimumNumberOfCalls: 100
+        failureRateThreshold: 50
+        # 느림으로는 열지 않는다. 100 은 "모든 호출이 느려야 연다" 라 사실상 끈 것이다.
+        #
+        # 이 회로가 재는 것은 Redis 왕복이 아니라 executeCallable 이 도는 시간 전체다.
+        # 거기에는 가상 스레드가 CPU 를 얻기까지 기다린 시간이 들어간다. 그런데 Redis 왕복은
+        # 이미 timeout 100ms 로 묶여 있으므로, 100ms 를 넘는 측정값은 정의상 Redis 가 아니라
+        # 이 앱의 지연이다.
+        #
+        # 그래서 느림 문턱을 타임아웃 아래에 두면 Redis 상태가 아니라 자기 CPU 여유를 보게 된다.
+        # 실측이 그랬다 (2026-08-30). 차가운 JVM 의 정상 회차에서 느린 호출 비율이 69% 였고
+        # 실패 비율은 0% 였다. 임계가 50% 였으니 열렸을 텐데, 그 회차는 10,000건을 다 발급하고
+        # 실패가 0건이었다. 성공한 호출의 최대가 792ms 였던 것이 근거다. Redis 가 792ms 를
+        # 썼다면 타임아웃에 걸려 실패했어야 한다.
+        #
+        # Redis 가 진짜 죽으면 타임아웃에서 실패로 확정되어 위 failureRateThreshold 가 잡는다.
+        slowCallRateThreshold: 100
+        # 문턱은 50ms 로 남겨 둔다. 이 값으로는 회로가 안 열리지만, slow_call_rate 지표가
+        # 계속 나와 "지금 이 인스턴스가 데워졌나" 를 보는 데 쓸 수 있다. 데워지면 0%,
+        # 차가우면 69% 였다.
+        slowCallDurationThreshold: 50ms
+        # 90초짜리 이벤트에서 10초를 닫아 두면 그것만으로 11% 를 잃는다. 여는 것을 막는 값이
+        # 아니라 회복을 얼마나 빨리 알아채느냐를 정하는 값이다
+        waitDurationInOpenState: 3s
+        # 회복 판정에 쓰는 표본이다. 5 면 초당 2천에서 2.5밀리초 어치라 그 다섯의 운에 걸린다
+        permittedNumberOfCallsInHalfOpenState: 30
+        # 발급이 몰리는 구간이라 다음 요청이 올 때까지 전환을 미루지 않는다
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        # 캐시 장애로 health 가 DOWN 되면 ALB 가 인스턴스를 빼 상황이 악화된다 (INF-4-01)
+        registerHealthIndicator: false
+        eventConsumerBufferSize: 100
+
+      # DB 쓰기 회로다. DB 가 죽어도 Redis 는 멀쩡해 위 회로가 안 열리기 때문에 따로 둔다.
+      couponWrite:
+        slidingWindowType: TIME_BASED
+        slidingWindowSize: 10
+        # 플러시 스레드가 하나라 쓰기가 한 번에 하나씩 돈다. 초당 50번 남짓이라 100 은 못 채운다
+        minimumNumberOfCalls: 20
+        failureRateThreshold: 50
+        slowCallRateThreshold: 50
+        # socketTimeout 250ms 보다 뒤에 둔다. 그보다 짧게 잡으면 DB 가 아니라 이 앱의 지연을
+        # DB 장애로 읽는다 (위 couponSeq 주석과 같은 이유).
+        #
+        # 150ms 였을 때 차가운 JVM 의 정상 회차에서 느린 호출 비율이 0.9% 였다. 아직 임계
+        # 50% 와는 멀지만 성공한 호출의 최대가 733ms 라, 부하가 세지면 비율이 오른다.
+        #
+        # socketTimeout 이 300ms 이므로 이 값은 그보다 커야 한다. 같으면 DB 가 실패로 확정되는
+        # 것과 느림으로 잡히는 것이 동시에 일어나 구분이 없어진다.
+        slowCallDurationThreshold: 400ms
+        waitDurationInOpenState: 3s
+        permittedNumberOfCallsInHalfOpenState: 30
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        registerHealthIndicator: false
+        eventConsumerBufferSize: 100
+        # 무엇을 실패로 세느냐가 이 회로의 요점이다. 여기 적힌 것만 센다.
+        #
+        # DuplicateKeyException 을 세면 이벤트가 정상일 때 회로가 열린다. 재시도와 매핑 유실로
+        # 중복이 꾸준히 나오는 것이 이 설계의 정상 동작이기 때문이다. BadSqlGrammarException 도
+        # 안 센다. 그것은 버그이고, 세면 회로가 열린 뒤 영영 안 닫힌다.
+        #
+        # 스프링의 TransientDataAccessException 만으로는 부족하다. 커넥션을 못 얻은 실패를
+        # 스프링은 비일시적으로 분류하는데, Multi-AZ 페일오버는 60~120초 뒤에 끝나므로 여기서는
+        # 일시적이다. 그래서 DataAccessResourceFailureException 을 함께 적는다.
+        recordExceptions:
+          - org.springframework.dao.DataAccessResourceFailureException
+          - org.springframework.dao.TransientDataAccessException
+          - org.springframework.dao.RecoverableDataAccessException
