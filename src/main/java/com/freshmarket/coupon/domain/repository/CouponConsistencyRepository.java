@@ -126,12 +126,14 @@ public class CouponConsistencyRepository {
             ) duplicated
             """;
 
+    private static final String COLUMN_COUPON_ID = "coupon_id";
+
     private final JdbcTemplate jdbcTemplate;
 
     /** 쿠폰 하나의 카운터, 한정 수량, 실제 발급 행 수를 읽는다. 행이 없으면 그 쿠폰이 없는 것이다. */
     public Optional<CouponIssueCount> findIssueCount(long couponId) {
         return jdbcTemplate.query(ISSUE_COUNT_SQL, (rs, rowNum) -> new CouponIssueCount(
-                        rs.getLong("coupon_id"),
+                        rs.getLong(COLUMN_COUPON_ID),
                         rs.getLong("issued_quantity"),
                         rs.getObject("total_quantity", Integer.class),
                         rs.getLong("actual")),
@@ -157,7 +159,7 @@ public class CouponConsistencyRepository {
     /** 쿠폰마다 카운터, 한정 수량, 실제 발급 행 수를 한 행으로 읽는다. */
     public List<CouponIssueCount> findIssueCounts() {
         return jdbcTemplate.query(ISSUE_COUNTS_SQL, (rs, rowNum) -> new CouponIssueCount(
-                rs.getLong("coupon_id"),
+                rs.getLong(COLUMN_COUPON_ID),
                 rs.getLong("issued_quantity"),
                 rs.getObject("total_quantity", Integer.class),
                 rs.getLong("actual")));
@@ -166,13 +168,13 @@ public class CouponConsistencyRepository {
     /** 한정 쿠폰마다 가장 큰 순번과 실제 발급 행 수를 읽는다. 구멍 수는 둘의 차다. */
     public List<CouponSeqSpan> findSeqSpans() {
         return jdbcTemplate.query(SEQ_SPANS_SQL, (rs, rowNum) -> new CouponSeqSpan(
-                rs.getLong("coupon_id"), rs.getInt("max_seq"), rs.getLong("issued")));
+                rs.getLong(COLUMN_COUPON_ID), rs.getInt("max_seq"), rs.getLong("issued")));
     }
 
     /** 한 회원이 같은 쿠폰을 둘 이상 받은 것을 찾는다. */
     public List<DuplicateIssue> findDuplicateIssues() {
         return jdbcTemplate.query(DUPLICATES_SQL, (rs, rowNum) -> new DuplicateIssue(
-                rs.getLong("coupon_id"), rs.getLong("member_id"), rs.getLong("cnt")));
+                rs.getLong(COLUMN_COUPON_ID), rs.getLong("member_id"), rs.getLong("cnt")));
     }
 
     /** 마지막 전이가 현재 상태와 다른 발급분을 센다. R5 의 규율이 깨졌는지를 결과로 확인하는 자리다. */
