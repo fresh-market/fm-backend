@@ -49,14 +49,14 @@ class CouponWarmupPropertiesTest {
     void 쿠폰_프로필의_값이_그대로_묶인다() {
         runner.withPropertyValues(
                         "coupon.warmup.enabled=true",
-                        "coupon.warmup.coupon-id=999999",
+                        "coupon.warmup.coupon-id=1000000",
                         "coupon.warmup.requests=3000",
                         "coupon.warmup.concurrency=20",
                         "coupon.warmup.max-duration=60s")
                 .run(context -> {
                     CouponWarmupProperties p = context.getBean(CouponWarmupProperties.class);
                     assertThat(p.enabled()).isTrue();
-                    assertThat(p.couponId()).isEqualTo(999999L);
+                    assertThat(p.couponId()).isEqualTo(1000000L);
                     assertThat(p.requests()).isEqualTo(3000);
                     assertThat(p.concurrency()).isEqualTo(20);
                     assertThat(p.maxDuration()).isEqualTo(Duration.ofSeconds(60));

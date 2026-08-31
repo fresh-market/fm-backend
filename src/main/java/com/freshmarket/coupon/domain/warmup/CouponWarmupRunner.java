@@ -18,6 +18,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.annotation.Profile;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -59,8 +60,21 @@ public class CouponWarmupRunner implements ApplicationRunner {
 
     private static final String ROLE = "ROLE_MEMBER";
 
+    /*
+     * 워밍업 쿠폰의 카운터를 이 값으로 세워 늘 소진 상태로 둔다.
+     *
+     * 카운터가 없으면 순번 확보 스크립트가 첫 줄에서 -2 를 돌려주고 끝난다. 그러면 데우려던
+     * 경로(Lua, 회로, 큐)를 하나도 안 지나고, 그 -2 가 재건까지 깨운다. 재건기는 켜져 있고
+     * 수량이 있는 쿠폰의 카운터가 없으면 손실로 보기 때문이다.
+     *
+     * 총량보다 크기만 하면 되므로 int 상한을 쓴다. V32 의 total_quantity 값에 안 묶인다.
+     * 스크립트가 INCR 로 이 값을 넘긴 뒤 DECR 로 되돌리므로 값이 자라지도 않는다.
+     */
+    private static final String EXHAUSTED = String.valueOf(Integer.MAX_VALUE);
+
     private final CouponWarmupProperties properties;
     private final JwtTokenProvider jwtTokenProvider;
+    private final StringRedisTemplate redisTemplate;
 
     /*
      * 실제로 바인딩된 포트를 웹서버에 물어본다.
@@ -75,6 +89,7 @@ public class CouponWarmupRunner implements ApplicationRunner {
         }
         long startedAt = System.nanoTime();
         try {
+            markExhausted();
             Result result = warmUp();
             log.info("event=COUPON_WARMUP_DONE sent={} ok={} elapsedMs={}",
                     result.sent(), result.ok(), elapsedMillis(startedAt));
@@ -85,6 +100,16 @@ public class CouponWarmupRunner implements ApplicationRunner {
              */
             log.warn("event=COUPON_WARMUP_FAILED elapsedMs={}", elapsedMillis(startedAt), e);
         }
+    }
+
+    /*
+     * 이 쿠폰을 소진 상태로 세운다. 워밍업 요청이 발급까지 가면 안 된다.
+     *
+     * 발급되면 member_coupon 에 행이 생기고 fk_mc_member 가 워밍업용 회원 행을 요구한다.
+     * 소진에서 멈추면 순번 확보까지는 다 지나면서 DB 에는 아무것도 안 쓴다.
+     */
+    private void markExhausted() {
+        redisTemplate.opsForValue().set("coupon:" + properties.couponId() + ":counter", EXHAUSTED);
     }
 
     private Result warmUp() throws InterruptedException {

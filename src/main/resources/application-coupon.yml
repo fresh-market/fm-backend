@@ -210,30 +210,6 @@ coupon:
     # 늘고, 그 사용자가 안 돌아오면 그 쿠폰은 아무도 안 쓴다.
     commit-wait: 800ms
 
-  # 기동 직후 발급 경로를 데운다. CouponWarmupRunner 가 읽는다.
-  #
-  # 차가운 JVM 은 요청을 처리하면서 동시에 자기를 컴파일한다. 90초짜리 이벤트에서 49.7초어치를
-  # 컴파일했고 그만큼이 요청 처리에서 빠졌다. 실측 차이가 이만큼이다
-  # (2026-08-31, VU 20,000 / 재고 10,000 / t3.small 3대).
-  #
-  #   워밍업 없음      p99 4.69초
-  #   워밍업 3,000건   p99 0.288 ~ 0.939초 (표본 5, 모두 SLO 1초 통과)
-  #
-  # 러너가 ApplicationRunner 라 ApplicationReadyEvent 앞에 돈다. 스프링 부트가 그 이벤트에서
-  # readiness 를 올리므로, 여기서 데우면 readiness 가 자연히 늦춰진다. 그래서
-  # coupon-event.sh open 의 "healthy 대기" 가 곧 "warm 대기" 가 되고 스크립트는 안 바뀐다.
-  warmup:
-    enabled: true
-    # 재고 0 인 전용 쿠폰(V32). 요청이 소진으로 끝나 member_coupon 에 아무것도 안 쓴다
-    coupon-id: 999999
-    # 3,000 에서 p99 가 1초 아래로 떨어졌다. 200 으로는 모자랐다 (최대 응답 1.72초)
-    requests: 3000
-    # 순차로 보내면 실제 이벤트의 동시성을 못 흉내 낸다
-    concurrency: 20
-    # 못 채워도 이 시간에 끝낸다. 없으면 readiness 가 영영 안 올라가고 ASG 가 교체를 반복한다.
-    # 3,000건이 약 30초였다. health_check_grace_period 300초 안에 넉넉히 들어간다
-    max-duration: 60s
-
     # Redis 재건을 주도하는 인스턴스가 남들이 자기 큐를 올리기를 기다리는 시간 (coupon.md 10장).
     #
     # 이 기다림은 free 하나 때문에 있다. seq 와 counter 와 pending 은 각자 자기 것만 알면 되는데,
@@ -256,3 +232,27 @@ coupon:
     #
     # 마감이 없는 쿠폰은 Redis 키에도 만료가 안 걸려 맞출 기준이 없다. 그래서 이 값이 남는다.
     coupon-cache-ttl: 5s
+
+  # 기동 직후 발급 경로를 데운다. CouponWarmupRunner 가 읽는다.
+  #
+  # 차가운 JVM 은 요청을 처리하면서 동시에 자기를 컴파일한다. 90초짜리 이벤트에서 49.7초어치를
+  # 컴파일했고 그만큼이 요청 처리에서 빠졌다. 실측 차이가 이만큼이다
+  # (2026-08-31, VU 20,000 / 재고 10,000 / t3.small 3대).
+  #
+  #   워밍업 없음      p99 4.69초
+  #   워밍업 3,000건   p99 0.288 ~ 0.939초 (표본 5, 모두 SLO 1초 통과)
+  #
+  # 러너가 ApplicationRunner 라 ApplicationReadyEvent 앞에 돈다. 스프링 부트가 그 이벤트에서
+  # readiness 를 올리므로, 여기서 데우면 readiness 가 자연히 늦춰진다. 그래서
+  # coupon-event.sh open 의 "healthy 대기" 가 곧 "warm 대기" 가 되고 스크립트는 안 바뀐다.
+  warmup:
+    enabled: true
+    # 전용 쿠폰(V32). 러너가 카운터를 소진 상태로 세워 두어 member_coupon 에 아무것도 안 쓴다
+    coupon-id: 1000000
+    # 3,000 에서 p99 가 1초 아래로 떨어졌다. 200 으로는 모자랐다 (최대 응답 1.72초)
+    requests: 3000
+    # 순차로 보내면 실제 이벤트의 동시성을 못 흉내 낸다
+    concurrency: 20
+    # 못 채워도 이 시간에 끝낸다. 없으면 readiness 가 영영 안 올라가고 ASG 가 교체를 반복한다.
+    # 3,000건이 약 30초였다. health_check_grace_period 300초 안에 넉넉히 들어간다
+    max-duration: 60s
