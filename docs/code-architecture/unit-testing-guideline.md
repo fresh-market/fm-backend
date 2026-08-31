@@ -105,10 +105,10 @@ assertThat(order.getMemberId()).isEqualTo(1L);
 ```
 src/main/java/com/freshmarket/order/OrderApi.java                             테스트 없음
 src/main/java/com/freshmarket/order/domain/OrderApiImpl.java
-src/main/java/com/freshmarket/order/domain/service/OrderService.java
+src/main/java/com/freshmarket/order/internal/service/OrderService.java
 
 src/test/java/com/freshmarket/order/domain/OrderApiImplTest.java              같은 패키지
-src/test/java/com/freshmarket/order/domain/service/OrderServiceTest.java      같은 패키지
+src/test/java/com/freshmarket/order/internal/service/OrderServiceTest.java      같은 패키지
 
 src/integrationTest/java/com/freshmarket/order/domain/OrderApiImplIntegrationTest.java
 src/integrationTest/java/com/freshmarket/order/domain/OrderIntegrationTest.java

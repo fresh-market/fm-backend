@@ -7,13 +7,13 @@
 
 | 게이트 | 판정 주체 | 조건 | 동작 |
 |--------|-----------|------|------|
-| 커버리지 | Gradle `jacocoTestCoverageVerification` | `*.domain.service.*` 메서드 100% | **병합 차단** |
+| 커버리지 | Gradle `jacocoTestCoverageVerification` | `*.internal.service.*` 메서드 100% | **병합 차단** |
 | 정적 분석 | SonarQube Quality Gate | **신규 Blocker 이슈 0건** | **병합 차단** |
 
 ## 1. 커버리지
 
 점검 항목
-* `BLD-1-01` JaCoCo 대상이 `*.domain.service.*`로 좁혀져 있는가
+* `BLD-1-01` JaCoCo 대상이 `*.internal.service.*`로 좁혀져 있는가
   `includes`로 좁히므로 exclude 목록이 필요 없다. config, dto, entity, Q클래스가 자동으로 빠진다. 패키지 전체가 대상이며, 그 안에 `~Service`만 두도록 `DPB-4-10`이 막으므로 대상에서 빠지는 클래스가 생기지 않는다.
 * `BLD-1-02` 판정 단위가 클래스별(`element = 'CLASS'`), 카운터가 메서드(`counter = 'METHOD'`)인가
 * `BLD-1-03` 기준이 `minimum = 1.00`인가
@@ -63,7 +63,7 @@ jacocoTestCoverageVerification {
     violationRules {
         rule {
             element = 'CLASS'
-            includes = ['*.domain.service.*']
+            includes = ['*.internal.service.*']
             limit {
                 counter = 'METHOD'
                 value = 'COVEREDRATIO'

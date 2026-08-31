@@ -103,13 +103,13 @@ com.freshmarket
 | 종류 | 위치 | 예시 |
 |------|------|------|
 | 공개 DTO | 도메인 루트 | `ProductInfo`, `StockChange` |
-| 내부 DTO | `domain.dto` | `OrderPlaceRequest`, 조회 조건 |
+| 내부 DTO | `internal.dto` | `OrderPlaceRequest`, 조회 조건 |
 | 공개 예외 | 도메인 루트 | `OutOfStockException` (다른 도메인이 catch 해야 함) |
-| 내부 예외 | `domain.exception` | `ProductException` + `ProductErrorCode` |
+| 내부 예외 | `internal.exception` | `ProductException` + `ProductErrorCode` |
 
 | enum 성격 | 위치 | 예시 |
 |------|------|------|
-| 엔티티에 묶이는 상태 | `domain.entity` | `OrderStatus`, `ProductStatus` |
+| 엔티티에 묶이는 상태 | `internal.entity` | `OrderStatus`, `ProductStatus` |
 | 공개 DTO가 노출하는 값 | 도메인 루트 | `OrderSummary`가 상태를 담는다면 |
 | 여러 도메인이 공유 | `common` | `Currency` |
 
@@ -159,7 +159,7 @@ payment
 
 | 상황 | 배치 |
 |------|------|
-| 한 도메인만 쓴다 (PG, 배송사 API) | 그 도메인의 `domain.client` |
+| 한 도메인만 쓴다 (PG, 배송사 API) | 그 도메인의 `internal.client` |
 | 여러 도메인이 쓴다 (SMS, 이메일, 파일 저장소) | 별도 도메인으로 승격 후 공개 API 제공 |
 | 도메인 지식이 없는 기술 설정 (HTTP 타임아웃, 재시도 정책) | `config` |
 
@@ -186,9 +186,9 @@ payment
 
 | 패키지 | 접미사 |
 |---|---|
-| `domain/controller` | `~Controller` |
-| `domain/service` | `~Service` |
-| `domain/repository` | `~Repository` |
+| `internal/controller` | `~Controller` |
+| `internal/service` | `~Service` |
+| `internal/repository` | `~Repository` |
 
 **커버리지 게이트가 `service` 패키지 전체를 100%로 요구한다**(`BLD-1-01`). 그 패키지에 정책 객체나
 계산 헬퍼를 함께 두면 그것들에도 100%가 요구된다. 이름을 강제하면 "여기 있는 것은 전부 서비스다"가
@@ -299,10 +299,10 @@ class ArchitectureTest {
     @ArchTest
     static final ArchRule layerDirection = layeredArchitecture()
             .consideringOnlyDependenciesInLayers()
-            .layer("Controller").definedBy("..domain.controller..")
-            .layer("Service").definedBy("..domain.service..")
-            .layer("Repository").definedBy("..domain.repository..")
-            .layer("Client").definedBy("..domain.client..")
+            .layer("Controller").definedBy("..internal.controller..")
+            .layer("Service").definedBy("..internal.service..")
+            .layer("Repository").definedBy("..internal.repository..")
+            .layer("Client").definedBy("..internal.client..")
             .whereLayer("Controller").mayNotBeAccessedByAnyLayer()
             .whereLayer("Service").mayOnlyBeAccessedByLayers("Controller")
             .whereLayer("Repository").mayOnlyBeAccessedByLayers("Service")
@@ -322,7 +322,7 @@ class ArchitectureTest {
     // 외부 연동 클래스에 트랜잭션 금지
     @ArchTest
     static final ArchRule clientHasNoTransaction = noClasses()
-            .that().resideInAPackage("..domain.client..")
+            .that().resideInAPackage("..internal.client..")
             .should().beAnnotatedWith(Transactional.class);
 
     // 순환 의존 금지
@@ -417,7 +417,7 @@ public long place(OrderPlaceRequest request) {
 | 공개 DTO에 엔티티 담기 | 필드를 값으로 풀어 담는다 |
 | 자기 도메인 컨트롤러가 API 경유 | 같은 `domain` 안이므로 내부 서비스를 직접 쓴다 |
 | 통과 위임만 하는 API 구현체 | 변환이나 노출 범위 축소가 없으면 노이즈다 |
-| 최상위에 `client` 패키지를 둠 | 사용하는 도메인의 `domain.client`에 둔다 |
+| 최상위에 `client` 패키지를 둠 | 사용하는 도메인의 `internal.client`에 둔다 |
 | 외부 스펙 DTO를 도메인 밖으로 노출 | `client.dto`에 가두고 변환해 넘긴다 |
 | `client` 클래스에 `@Transactional` | 트랜잭션 밖에서 호출한다 |
 | 공개 DTO에 내부 enum을 그대로 노출 | 필요하면 `String`으로 변환한다 |

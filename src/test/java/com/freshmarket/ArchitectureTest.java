@@ -68,10 +68,10 @@ class ArchitectureTest {
     static final ArchRule 계층은_아래로만_흐른다 = layeredArchitecture()
             .consideringOnlyDependenciesInLayers()
             .withOptionalLayers(true)
-            .layer("Controller").definedBy("..domain.controller..")
-            .layer("Service").definedBy("..domain.service..")
-            .layer("Repository").definedBy("..domain.repository..")
-            .layer("Client").definedBy("..domain.client..")
+            .layer("Controller").definedBy("..internal.controller..")
+            .layer("Service").definedBy("..internal.service..")
+            .layer("Repository").definedBy("..internal.repository..")
+            .layer("Client").definedBy("..internal.client..")
             .whereLayer("Controller").mayNotBeAccessedByAnyLayer()
             .whereLayer("Service").mayOnlyBeAccessedByLayers("Controller")
             .whereLayer("Repository").mayOnlyBeAccessedByLayers("Service")
@@ -131,7 +131,7 @@ class ArchitectureTest {
      * 이름을 강제하면 "여기 있는 것은 전부 서비스다" 가 성립한다.
      *
      * 접미사를 붙일 수 없는 클래스는 그 계층에 속하지 않는다. 정책 객체나 계산 헬퍼는
-     * service 패키지가 아니라 domain 바로 아래나 도메인 루트에 둔다.
+     * service 패키지가 아니라 internal 바로 아래나 도메인 루트에 둔다.
      */
     @ArchTest
     static final ArchRule 컨트롤러_이름 = layerSuffix("controller", "Controller");
@@ -144,7 +144,7 @@ class ArchitectureTest {
 
     private static ArchRule layerSuffix(String layer, String suffix) {
         return classes()
-                .that().resideInAPackage("..domain." + layer + "..")
+                .that().resideInAPackage("..internal." + layer + "..")
                 .and().areTopLevelClasses()
                 .should().haveSimpleNameEndingWith(suffix)
                 .allowEmptyShould(true);
@@ -175,7 +175,7 @@ class ArchitectureTest {
 
     @ArchTest
     static final ArchRule client_에_트랜잭션이_없다 = noClasses()
-            .that().resideInAPackage("..domain.client..")
+            .that().resideInAPackage("..internal.client..")
             .should().beAnnotatedWith(Transactional.class)
             .allowEmptyShould(true);
 
@@ -186,7 +186,7 @@ class ArchitectureTest {
     @ArchTest
     static final ArchRule 엔티티는_도메인_안에만_있다 = classes()
             .that().areAnnotatedWith(Entity.class)
-            .should().resideInAPackage("..domain.entity..")
+            .should().resideInAPackage("..internal.entity..")
             .allowEmptyShould(true);
 
     /*

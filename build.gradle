@@ -341,7 +341,7 @@ tasks.named('jacocoTestCoverageVerification') {
              * 막으므로(DPB-4-10) 대상에서 빠지는 클래스가 생기지 않는다.
              */
             element = 'CLASS'
-            includes = ['*.domain.service.*']
+            includes = ['*.internal.service.*']
             limit {
                 counter = 'METHOD'
                 value = 'COVEREDRATIO'
@@ -363,7 +363,7 @@ tasks.register('coverageDataCheck') {
     dependsOn tasks.named('test')
 
     def targets = fileTree(layout.buildDirectory.dir('classes/java/main')) {
-        include '**/domain/service/*.class'
+        include '**/internal/service/*.class'
     }
     // 게이트가 읽는 것과 같은 파일을 본다
     def execFiles = fileTree(layout.buildDirectory.dir('jacoco')) {
@@ -373,7 +373,7 @@ tasks.register('coverageDataCheck') {
     inputs.files(targets, execFiles)
     doLast {
         if (targets.isEmpty()) {
-            logger.lifecycle('커버리지 검증 대상 없음. *.domain.service.* 클래스가 아직 없다')
+            logger.lifecycle('커버리지 검증 대상 없음. *.internal.service.* 클래스가 아직 없다')
             return
         }
         if (execFiles.filter { it.exists() }.isEmpty()) {
