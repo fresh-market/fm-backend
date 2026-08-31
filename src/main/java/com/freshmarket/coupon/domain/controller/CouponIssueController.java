@@ -29,7 +29,9 @@ class CouponIssueController {
 
     @Operation(summary = "선착순 쿠폰 발급",
             description = "순번을 받아 발급한다. 이미 받은 회원은 같은 순번을 그대로 돌려받는다. "
-                    + "소진이면 409, 몰려서 처리하지 못했으면 503 과 Retry-After 로 답한다.")
+                    + "소진은 둘로 갈린다. 미확정 순번을 쥔 사람이 있어 회수 여지가 있으면 409, "
+                    + "쥔 사람도 없어 다시 나올 번호가 없으면 410 이다. "
+                    + "몰려서 처리하지 못했으면 503 과 Retry-After 로 답한다.")
     @PostMapping("/v1/coupons/{couponId}/issues")
     public ResponseEntity<ResponseEnvelope<CouponIssueResponse>> issue(
             @PathVariable Long couponId,

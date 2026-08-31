@@ -19,8 +19,17 @@ public enum CouponErrorCode implements ErrorCode {
     NOT_ISSUABLE(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-002", "지금은 발급할 수 없는 쿠폰입니다."),
     NOT_TARGET_GRADE(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-003", "발급 대상 등급이 아닙니다."),
     NOT_LIMITED(HttpStatus.UNPROCESSABLE_CONTENT, "COUPON-004", "선착순 발급 대상 쿠폰이 아닙니다."),
-    // 재고가 없다. 최종이라 다시 시도해도 달라지지 않는다
-    SOLD_OUT(HttpStatus.CONFLICT, "COUPON-005", "쿠폰이 모두 소진되었습니다."),
+    /*
+     * 줄 번호가 없지만 미확정 순번을 쥔 사람이 있다. 기준 시간이 지나면 그 번호가 다시 나온다.
+     * 그래서 재시도할 값이 있고, 409 가 "지금 상태와 충돌한다" 라는 뜻을 그대로 준다.
+     */
+    SOLD_OUT(HttpStatus.CONFLICT, "COUPON-005", "쿠폰이 모두 소진되었습니다. 잠시 후 다시 시도해주세요."),
+    /*
+     * 줄 번호가 없고 쥔 사람도 없다. 다시 나올 번호가 없으므로 재시도할 값이 없다.
+     * 410 으로 끊는 것은 동접 2만에 재고 1만이면 소진 응답이 만 건이라, 그들이 전부 재시도하면
+     * 가장 힘든 순간에 부하가 두 배가 되기 때문이다 (docs/coupon/coupon.md 3장).
+     */
+    SOLD_OUT_FINAL(HttpStatus.GONE, "COUPON-012", "쿠폰 발급이 마감되었습니다."),
     // 재고는 있는데 지금 처리하지 못했다. 다시 시도할 값이 있다
     CONGESTED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON-006", "요청이 몰려 처리하지 못했습니다. 잠시 후 다시 시도해주세요."),
     /*

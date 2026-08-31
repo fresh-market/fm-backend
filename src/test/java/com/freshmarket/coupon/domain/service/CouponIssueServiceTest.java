@@ -44,6 +44,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.dao.QueryTimeoutException;
+import org.springframework.http.HttpStatus;
 
 @ExtendWith(MockitoExtension.class)
 class CouponIssueServiceTest {
@@ -211,15 +212,49 @@ class CouponIssueServiceTest {
         verify(queue, never()).submit(any());
     }
 
+    /*
+     * 줄 번호는 없지만 미확정 순번을 쥔 사람이 있다.
+     * 기준 시간이 지나면 그 번호가 다시 나오므로 재시도할 값이 있고, 409 가 그 뜻이다.
+     */
     @Test
-    void 소진이면_최종_실패로_답한다() {
+    void 회수_여지가_있는_소진은_409_로_답한다() {
         // given
         givenAllocated(new SeqOutcome.SoldOut());
 
         // when, then
         assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
                 .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.SOLD_OUT);
+        assertThat(CouponErrorCode.SOLD_OUT.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT);
         verify(queue, never()).submit(any());
+    }
+
+    /*
+     * 쥔 사람도 없어 다시 나올 번호가 없다.
+     * 410 으로 끊지 않으면 소진 응답을 받은 만 명이 가장 힘든 순간에 다시 몰린다.
+     */
+    @Test
+    void 최종_소진은_410_으로_끊는다() {
+        // given
+        givenAllocated(new SeqOutcome.SoldOutFinal());
+
+        // when, then
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.SOLD_OUT_FINAL);
+        assertThat(CouponErrorCode.SOLD_OUT_FINAL.getHttpStatus()).isEqualTo(HttpStatus.GONE);
+        verify(queue, never()).submit(any());
+    }
+
+    // 둘의 비율이 곧 "회수가 얼마나 남았나" 라, 한 갈래로 뭉쳐 세면 그것을 못 본다
+    @Test
+    void 두_소진을_따로_센다() {
+        givenAllocated(new SeqOutcome.SoldOut());
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID)).isInstanceOf(CouponException.class);
+
+        givenAllocated(new SeqOutcome.SoldOutFinal());
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID)).isInstanceOf(CouponException.class);
+
+        verify(metrics).record(IssueResult.SOLD_OUT);
+        verify(metrics).record(IssueResult.SOLD_OUT_FINAL);
     }
 
     // 카운터가 없다. 재고는 남아 있을 수 있으므로 소진이 아니라 혼잡이다
