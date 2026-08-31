@@ -18,7 +18,7 @@ public class KakaoUnlinkRetryScheduler {
     private final KakaoUnlinkRetryService kakaoUnlinkRetryService;
 
     /** 단일 batch 인스턴스에서만 실행한다. */
-    @Scheduled(cron = "0 0 3 * * *")
+    @Scheduled(cron = "0 0 3 * * *", zone = "Asia/Seoul")
     public void retryPendingUnlinks() {
         kakaoUnlinkRetryService.retryAllPending();
     }
