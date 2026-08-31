@@ -202,7 +202,7 @@ public class CouponIssueService {
     private CouponIssueResponse waitFor(IssueTicket ticket) {
         try {
             IssueOutcome outcome = ticket.future()
-                    .get(properties.requestBudget().toMillis(), TimeUnit.MILLISECONDS);
+                    .get(properties.commitWait().toMillis(), TimeUnit.MILLISECONDS);
             return switch (outcome) {
                 case IssueOutcome.Issued issued -> {
                     metrics.record(IssueResult.ISSUED);

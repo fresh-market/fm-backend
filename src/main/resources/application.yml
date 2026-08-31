@@ -346,7 +346,10 @@ resilience4j:
         #
         # 150ms 였을 때 차가운 JVM 의 정상 회차에서 느린 호출 비율이 0.9% 였다. 아직 임계
         # 50% 와는 멀지만 성공한 호출의 최대가 733ms 라, 부하가 세지면 비율이 오른다.
-        slowCallDurationThreshold: 300ms
+        #
+        # socketTimeout 이 300ms 이므로 이 값은 그보다 커야 한다. 같으면 DB 가 실패로 확정되는
+        # 것과 느림으로 잡히는 것이 동시에 일어나 구분이 없어진다.
+        slowCallDurationThreshold: 400ms
         waitDurationInOpenState: 3s
         permittedNumberOfCallsInHalfOpenState: 30
         automaticTransitionFromOpenToHalfOpenEnabled: true
