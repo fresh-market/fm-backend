@@ -32,6 +32,7 @@ import com.freshmarket.coupon.domain.issue.IssueOutcome;
 import com.freshmarket.coupon.domain.issue.IssueResult;
 import com.freshmarket.coupon.domain.issue.IssueTicket;
 import com.freshmarket.coupon.domain.redis.CouponSeqAllocator;
+import com.freshmarket.coupon.domain.redis.CouponSeqRebuildTrigger;
 import com.freshmarket.coupon.domain.redis.CouponSeqUnavailableException;
 import com.freshmarket.coupon.domain.redis.SeqOutcome;
 import com.freshmarket.member.MemberApi;
@@ -65,6 +66,9 @@ class CouponIssueServiceTest {
     private CouponSeqAllocator allocator;
 
     @Mock
+    private CouponSeqRebuildTrigger rebuildTrigger;
+
+    @Mock
     private CouponIssueQueue queue;
 
     @Mock
@@ -81,7 +85,8 @@ class CouponIssueServiceTest {
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
                 Duration.ofMillis(100), Duration.ofSeconds(5));
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
-        sut = new CouponIssueService(couponCache, memberApi, allocator, queue, writeCircuit, properties, metrics, fixed);
+        sut = new CouponIssueService(couponCache, memberApi, allocator, rebuildTrigger, queue, writeCircuit,
+                properties, metrics, fixed);
     }
 
     @Test
@@ -227,6 +232,37 @@ class CouponIssueServiceTest {
         assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
                 .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
         verify(queue, never()).submit(any());
+    }
+
+    /*
+     * 카운터가 없으면 재건 후보로 넘긴다.
+     * 이 신호가 없으면 Redis 가 키를 잃었을 때 아무도 그것을 모르고 발급이 멈춘 채로 남는다.
+     * 손실인지 아직 안 연 이벤트인지는 여기서 안 가른다. 그것은 재건기가 DB 를 보고 한다.
+     */
+    @Test
+    void 준비되지_않았으면_재건_후보로_넘긴다() {
+        // given
+        givenAllocated(new SeqOutcome.NotPrepared());
+
+        // when
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
+
+        // then
+        verify(rebuildTrigger).suspect(COUPON_ID);
+    }
+
+    // 순번을 받은 요청은 재건을 안 띄운다. 정상 경로에 이 신호가 새면 재건이 쉬지 않고 돈다
+    @Test
+    void 순번을_받으면_재건을_안_띄운다() {
+        // given
+        givenAllocated(new SeqOutcome.AlreadyIssued(6));
+
+        // when
+        sut.issue(COUPON_ID, MEMBER_ID);
+
+        // then
+        verifyNoInteractions(rebuildTrigger);
     }
 
     // 확정 표시가 붙어 있으면 그 자리에서 끝난다. 큐도 DB 도 안 거친다

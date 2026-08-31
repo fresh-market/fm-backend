@@ -30,4 +30,12 @@ final class CouponSeqKeys {
     static String pending(long couponId) {
         return PREFIX + couponId + ":pending";
     }
+
+    /*
+     * 재건이 잡는 락이다. 넷과 함께 죽지 않으므로 위와 성격이 다르다.
+     * 재건은 넷이 없을 때 도는 일이라 그 수명을 물려받을 대상이 없고, 자기 TTL 로 산다.
+     */
+    static String rebuild(long couponId) {
+        return PREFIX + couponId + ":rebuild";
+    }
 }
