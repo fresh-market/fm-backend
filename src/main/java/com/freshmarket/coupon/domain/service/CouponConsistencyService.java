@@ -16,7 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 이력과 재고가 어긋나지 않았음을 스스로 확인한다. 요구사항이 <b>검증 수단 자체를 구현물로</b>
  * 요구한 자리다({@code docs/coupon/requirement.md} 의 "쿠폰 정합성 검증").
  *
- * <p>{@code docs/coupon/coupon.md} 10장의 다섯 항목을 그대로 잰다.
+ * <p>{@code docs/coupon/coupon.md} 11장의 다섯 항목을 그대로 잰다.
  *
  * <pre>
  * 발급 수와 issued_quantity   카운터가 실제 행 수와 다른가
