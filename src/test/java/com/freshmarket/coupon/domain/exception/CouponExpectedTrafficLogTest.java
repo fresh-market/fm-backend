@@ -84,6 +84,16 @@ class CouponExpectedTrafficLogTest {
         assertThat(filterLog.list).isEmpty();
     }
 
+    // 회수할 것도 없는 최종 소진이다. 재시도를 끊으려고 410 으로 답하는 정해진 결과다
+    @Test
+    void 최종_소진도_안_남는다() throws Exception {
+        handler.handleBusiness(new CouponException(CouponErrorCode.SOLD_OUT_FINAL), request);
+        접근_로그를_흘린다(410);
+
+        assertThat(handlerLog.list).isEmpty();
+        assertThat(filterLog.list).isEmpty();
+    }
+
     // 혼잡은 503 이라 접근 로그가 ERROR 로 찍고 있었다. 서버 결함이 아니라 우리가 만든 배압이다
     @Test
     void 혼잡은_5xx_지만_안_남는다() throws Exception {
@@ -141,11 +151,12 @@ class CouponExpectedTrafficLogTest {
      * 지금 둘뿐이라는 것을 시험이 들고 있어야, 나중에 늘 때 이 줄이 걸린다.
      */
     @Test
-    void 예상된_답은_소진과_혼잡_둘뿐이다() {
+    void 예상된_답은_소진_둘과_혼잡_셋뿐이다() {
         assertThat(Arrays.stream(CouponErrorCode.values())
                 .filter(CouponErrorCode::isExpectedTraffic)
                 .toList())
-                .containsExactlyInAnyOrder(CouponErrorCode.SOLD_OUT, CouponErrorCode.CONGESTED);
+                .containsExactlyInAnyOrder(CouponErrorCode.SOLD_OUT,
+                        CouponErrorCode.SOLD_OUT_FINAL, CouponErrorCode.CONGESTED);
     }
 
     private static ListAppender<ILoggingEvent> attach(Logger logger) {
