@@ -27,6 +27,8 @@ import org.springframework.web.util.ContentCachingResponseWrapper;
  *   애매해서), email/전화번호는 키 이름과 무관하게 본문 전체에서 패턴으로 찾아 부분 마스킹(catch-all).
  * - 정상 응답(2xx/3xx)은 상태코드+소요시간만 INFO로 남기고, 에러 응답(4xx/5xx)만 바디까지 남긴다
  *   (로그 볼륨 관리). DEBUG 레벨이면 정상 응답도 바디까지 남긴다 — logAccess() 참고.
+ * - 다만 AccessLogSignal 이 붙은 요청은 4xx/5xx 여도 DEBUG로 내린다 — 선착순의 소진/혼잡처럼
+ *   정상 운영에서 예상되는 답이라, 그 규모가 곧 로그 규모가 되는 것을 막는다.
  * - 응답은 반드시 copyBodyToResponse()로 실제 클라이언트에게 흘려보내야 한다 — 안 하면 빈 응답이 나감.
  * - 바이너리(이미지 업로드 등)나 SSE처럼 긴 스트리밍 응답은 본문 로깅 대상에서 제외.
  *
@@ -136,12 +138,23 @@ public class HttpBodyLoggingFilter extends OncePerRequestFilter {
      */
     private void logAccess(ContentCachingRequestWrapper request, ContentCachingResponseWrapper response, long durationMs) {
         int status = response.getStatus();
-        boolean needsBody = status >= 400 || log.isDebugEnabled();
+        /*
+         * 예외를 다루는 쪽이 "이건 예상된 답" 이라고 남겨 둔 요청은 상태 코드를 안 따른다.
+         *
+         * 이 필터는 상태 코드밖에 못 보는데, 선착순의 소진과 혼잡은 4xx/5xx 이면서 정상 운영에서
+         * 나오는 답이다. 그대로 두면 재고 1만짜리 이벤트 한 번이 만 줄을 남기고 그 줄마다 바디를
+         * 싣는다. 세는 일은 coupon_issue_results_total 이 더 정확히 한다.
+         */
+        boolean expected = AccessLogSignal.isExpected(request);
+        boolean needsBody = (status >= 400 && !expected) || log.isDebugEnabled();
 
         String reqBody = needsBody ? mask(extractBody(request.getContentAsByteArray())) : null;
         String resBody = needsBody ? mask(extractBody(response.getContentAsByteArray())) : null;
 
-        if (status >= 500) {
+        if (expected) {
+            log.debug("event=HTTP_ACCESS status={} durationMs={} reqBody=\"{}\" resBody=\"{}\"",
+                    status, durationMs, reqBody, resBody);
+        } else if (status >= 500) {
             log.error("event=HTTP_ACCESS status={} durationMs={} reqBody=\"{}\" resBody=\"{}\"",
                     status, durationMs, reqBody, resBody);
         } else if (status >= 400) {

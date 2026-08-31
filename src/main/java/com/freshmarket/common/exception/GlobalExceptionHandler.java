@@ -1,5 +1,6 @@
 package com.freshmarket.common.exception;
 
+import com.freshmarket.common.logging.AccessLogSignal;
 import com.freshmarket.common.response.ResponseEnvelope;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
@@ -36,23 +37,32 @@ public class GlobalExceptionHandler {
     // 재시도까지 기다릴 초. 선착순처럼 몰리는 경로에서 곧바로 되돌아오는 것을 늦춘다
     private static final int RETRY_AFTER_SECONDS = 1;
 
-    // 도메인이 스스로 정의한 실패이므로 상태와 문구를 ErrorCode 에 맡긴다
+    /**
+     * 도메인이 스스로 정의한 실패다. 상태와 문구를 {@code ErrorCode} 에 맡긴다.
+     *
+     * <p><b>스택 트레이스를 찍지 않는다.</b> 정책 위반은 코드가 어디서 났는지가 아니라 무엇이
+     * 걸렸는지가 정보이고, 그 코드는 이미 이 한 줄에 있다.
+     *
+     * <p>찍으면 몰리는 경로에서 그것 자체가 장애가 된다. 2026-08-30 부하 시험에서 혼잡
+     * 24,000건이 저마다 스택 트레이스를 들고 로그 큐(1024)를 채웠고, 큐가 차자 요청 스레드가
+     * 거기서 막혔다. ALB 가 연결 오류 11,590건과 504 13,374건을 냈다.
+     *
+     * <p><b>예상된 답은 아예 안 남긴다.</b> 선착순의 소진과 혼잡이 그렇다. 남기면 그 규모가 곧
+     * 로그 규모가 되는데, 세는 일은 {@code coupon_issue_results_total} 이 더 정확히 한다.
+     * 접근 로그도 함께 내려야 효과가 있어 {@link AccessLogSignal} 로 그 사실을 넘긴다.
+     */
     @ExceptionHandler(BusinessException.class)
-    public ResponseEntity<ResponseEnvelope<Void>> handleBusiness(BusinessException e) {
+    public ResponseEntity<ResponseEnvelope<Void>> handleBusiness(BusinessException e, HttpServletRequest request) {
         ErrorCode errorCode = e.getErrorCode();
-        /*
-         * 스택 트레이스를 찍지 않는다. 정책 위반은 코드가 어디서 났는지가 아니라 무엇이
-         * 걸렸는지가 정보이고, 그 코드는 이미 이 한 줄에 있다.
-         *
-         * 찍으면 몰리는 경로에서 그것 자체가 장애가 된다. 2026-08-30 부하 시험에서 혼잡
-         * 24,000건이 저마다 스택 트레이스를 들고 로그 큐(1024)를 채웠고, 큐가 차자 요청
-         * 스레드가 거기서 막혀 새 연결을 못 받았다. ALB 가 연결 오류 11,590건과 504
-         * 13,374건을 냈다. 혼잡 5,134건이던 회차는 연결 오류가 0 이었다.
-         *
-         * 원인을 좇을 때 쓰는 것은 이 로그가 아니라 coupon_issue_results_total 의 태그다.
-         * 그쪽이 어느 갈래로 몇 건인지를 정확히 센다.
-         */
-        log.warn("business exception. code={}", errorCode.getCode());
+        if (errorCode.isExpectedTraffic()) {
+            AccessLogSignal.markExpected(request);
+            log.debug("business exception. code={}", errorCode.getCode());
+        } else if (errorCode.getHttpStatus().is5xxServerError()) {
+            // 필터가 따르는 "4xx=WARN, 5xx=ERROR" 를 여기서도 맞춘다. 전에는 상태와 무관하게 WARN 이었다
+            log.error("business exception. code={}", errorCode.getCode());
+        } else {
+            log.warn("business exception. code={}", errorCode.getCode());
+        }
         return toResponse(errorCode);
     }
 
