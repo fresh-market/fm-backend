@@ -71,7 +71,7 @@ public class HttpBodyLoggingFilter extends OncePerRequestFilter {
     private static final Pattern SENSITIVE_JSON_FIELD = Pattern.compile(
             "(?i)(\"(password|accessToken|refreshToken|token|secret|authorization|idToken|clientSecret"
                     + "|phone|address|recipient|zipcode|roadAddress|detailAddress|name"
-                    + "|authorizationCode|state|nonce|code)\"\\s*:\\s*\")([^\"]*)(\")");
+                    + "|authorizationCode|state|nonce)\"\\s*:\\s*\")([^\"]*)(\")");
 
     // (OBS-3-04/SEC-4-02) application/x-www-form-urlencoded 바디("password=1234&token=eyJ...")는
     // 위 JSON 전용 패턴("key":"value")에 안 걸려서 그대로 새어나갔다 — 로그인 폼 등 form-urlencoded로
@@ -80,7 +80,7 @@ public class HttpBodyLoggingFilter extends OncePerRequestFilter {
     private static final Pattern SENSITIVE_FORM_FIELD = Pattern.compile(
             "(?i)((?:^|&)(?:password|accessToken|refreshToken|token|secret|authorization|idToken|clientSecret"
                     + "|phone|address|recipient|zipcode|roadAddress|detailAddress|name"
-                    + "|authorizationCode|state|nonce|code)=)([^&]*)");
+                    + "|authorizationCode|state|nonce)=)([^&]*)");
 
     // 위 키-값 패턴에 안 걸린 이메일/전화번호도 한 번 더 잡아서 부분 마스킹(키 이름이 다르거나
     // 문자열 안에 섞여 나오는 경우 대비 catch-all).
