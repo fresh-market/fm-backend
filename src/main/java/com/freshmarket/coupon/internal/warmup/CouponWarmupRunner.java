@@ -18,6 +18,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.annotation.Profile;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -72,6 +73,13 @@ public class CouponWarmupRunner implements ApplicationRunner {
      */
     private static final String EXHAUSTED = String.valueOf(Integer.MAX_VALUE);
 
+    /*
+     * 첫 커넥션을 세우는 데 쓰는 재시도다. 붙고 나면 다시 안 쓴다.
+     * 10회에 100밀리초 간격이라 최악 1초를 쓴다. maxDuration 안에 넉넉히 들어간다.
+     */
+    private static final int CONNECT_ATTEMPTS = 10;
+    private static final Duration CONNECT_BACKOFF = Duration.ofMillis(100);
+
     private final CouponWarmupProperties properties;
     private final JwtTokenProvider jwtTokenProvider;
     private final StringRedisTemplate redisTemplate;
@@ -89,6 +97,7 @@ public class CouponWarmupRunner implements ApplicationRunner {
         }
         long startedAt = System.nanoTime();
         try {
+            connectRedis();
             markExhausted();
             Result result = warmUp();
             log.info("event=COUPON_WARMUP_DONE sent={} ok={} elapsedMs={}",
@@ -108,8 +117,54 @@ public class CouponWarmupRunner implements ApplicationRunner {
      * 발급되면 member_coupon 에 행이 생기고 fk_mc_member 가 워밍업용 회원 행을 요구한다.
      * 소진에서 멈추면 순번 확보까지는 다 지나면서 DB 에는 아무것도 안 쓴다.
      */
+    /*
+     * 첫 Redis 명령을 보내기 전에 커넥션부터 세운다.
+     *
+     * 이 JVM 의 첫 명령은 DNS 조회와 TCP 핸드셰이크와 Lettuce 초기화를 함께 문다. 그 전부가
+     * 명령 타임아웃(운영 100ms) 안에 끝나야 하는데, 차가운 JVM 에서는 자주 못 끝낸다.
+     *
+     * 실제로 그렇게 죽었다 (2026-08-31 배포). 세 인스턴스 모두 markExhausted 에서
+     * "Connection initialization timed out after 100 millisecond(s)" 로 끊겨 워밍업이
+     * 요청을 한 건도 못 보냈다.
+     *
+     * 타임아웃을 올려서 풀지 않는다. 100ms 는 SLO 에서 역산한 값이고(왕복 2회 + 확정 대기
+     * 800ms = 1초), 이 문제는 정상 상태가 아니라 최초 1회다. 한 번 붙으면 DNS 가 캐시되고
+     * Lettuce 가 커넥션을 재사용하므로 다시 걸리지 않는다.
+     *
+     * 이 재시도가 워밍업만의 이야기가 아니다. 워밍업이 없으면 그 첫 실패를 실제 사용자의
+     * 첫 요청이 문다. 여기서 미리 무는 것이 이 메서드의 값어치다.
+     */
+    private void connectRedis() {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                redisTemplate.hasKey(counterKey());
+                if (attempt > 1) {
+                    log.info("event=COUPON_WARMUP_REDIS_CONNECTED attempts={}", attempt);
+                }
+                return;
+            } catch (DataAccessException e) {
+                if (attempt >= CONNECT_ATTEMPTS) {
+                    throw e;
+                }
+                sleepQuietly(CONNECT_BACKOFF);
+            }
+        }
+    }
+
     private void markExhausted() {
-        redisTemplate.opsForValue().set("coupon:" + properties.couponId() + ":counter", EXHAUSTED);
+        redisTemplate.opsForValue().set(counterKey(), EXHAUSTED);
+    }
+
+    private String counterKey() {
+        return "coupon:" + properties.couponId() + ":counter";
+    }
+
+    private static void sleepQuietly(Duration duration) {
+        try {
+            Thread.sleep(duration.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private Result warmUp() throws InterruptedException {
