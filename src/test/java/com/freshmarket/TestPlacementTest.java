@@ -51,9 +51,9 @@ class TestPlacementTest {
                 .collect(Collectors.toList());
     }
 
-    private static boolean underDomain(JavaClass c) {
+    private static boolean underInternal(JavaClass c) {
         String p = c.getPackageName();
-        return p.contains(".domain.") || p.endsWith(".domain");
+        return p.contains(".internal.") || p.endsWith(".internal");
     }
 
     private static void fail(String rule, List<String> bad, String how) {
@@ -64,17 +64,17 @@ class TestPlacementTest {
     }
 
     /*
-     * domain 밖에는 테스트를 두지 않는다.
+     * internal 밖에는 테스트를 두지 않는다.
      * 공개 창구(OrderApi)와 그 DTO 는 도메인 사이의 계약이다. 계약 자체에는 동작이 없고,
      * 그것이 지켜지는지는 구현(OrderApiImpl)의 테스트가 본다.
      */
     @ArchTest
-    static void 테스트는_domain_아래에만_둔다(JavaClasses classes) {
+    static void 테스트는_internal_아래에만_둔다(JavaClasses classes) {
         List<String> bad = own(classes).stream()
-                .filter(c -> !underDomain(c))
+                .filter(c -> !underInternal(c))
                 .map(c -> c.getName() + "  (패키지 " + c.getPackageName() + ")")
                 .collect(Collectors.toList());
-        fail("단위 테스트 위치", bad, "domain 밖에는 테스트를 두지 않는다. 구현이 있는 domain 아래로 옮긴다");
+        fail("단위 테스트 위치", bad, "internal 밖에는 테스트를 두지 않는다. 구현이 있는 internal 아래로 옮긴다");
     }
 
     /*
@@ -88,7 +88,7 @@ class TestPlacementTest {
                 .map(JavaClass::getPackageName)
                 .collect(Collectors.toSet());
         List<String> bad = own(classes).stream()
-                .filter(TestPlacementTest::underDomain)
+                .filter(TestPlacementTest::underInternal)
                 .filter(c -> !mainPackages.contains(c.getPackageName()))
                 .map(c -> c.getName() + "  (패키지 " + c.getPackageName() + " 에 프로덕션 클래스가 없다)")
                 .collect(Collectors.toList());

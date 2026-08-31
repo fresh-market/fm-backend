@@ -259,7 +259,7 @@ sequenceDiagram
 도메인마다 예외 클래스 하나와 오류 코드 enum 하나를 만든다. 실패 종류마다 예외 클래스를 만들지 않는다.
 
 ```java
-// order/domain/exception/OrderErrorCode.java
+// order/internal/exception/OrderErrorCode.java
 @Getter
 @RequiredArgsConstructor
 public enum OrderErrorCode implements ErrorCode {
@@ -275,7 +275,7 @@ public enum OrderErrorCode implements ErrorCode {
 ```
 
 ```java
-// order/domain/exception/OrderException.java
+// order/internal/exception/OrderException.java
 public class OrderException extends BusinessException {
 
     public OrderException(ErrorCode errorCode) {

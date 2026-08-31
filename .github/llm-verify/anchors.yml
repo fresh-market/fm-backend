@@ -42,14 +42,14 @@ rules:
   - id: controller
     status: unverified
     trigger:
-      - "**/domain/controller/*.java"
+      - "**/internal/controller/*.java"
       # DTO 는 컨트롤러의 계약이라 같은 항목으로 판정한다.
       # DTO 만 바뀌는 PR 이 어떤 규칙에도 안 걸리면 DPB-4-06 의 이름 규칙이 발화하지 않는다
-      - "**/domain/dto/*.java"
+      - "**/internal/dto/*.java"
     anchors:
       - "**/config/SecurityConfig.java"
-      - "**/domain/service/*.java"
-      - "**/domain/dto/*.java"
+      - "**/internal/service/*.java"
+      - "**/internal/dto/*.java"
       - "**/*Api.java"
     activate:
       prefixes: [SEC, CMP, API, DPB, EJ, FUN, IDS, INF]
@@ -60,11 +60,11 @@ rules:
   - id: service
     status: unverified
     trigger:
-      - "**/domain/service/*.java"
+      - "**/internal/service/*.java"
     anchors:
-      - "**/domain/repository/*.java"
-      - "**/domain/entity/*.java"
-      - "**/domain/client/**/*.java"
+      - "**/internal/repository/*.java"
+      - "**/internal/entity/*.java"
+      - "**/internal/client/**/*.java"
       - "**/*Api.java"
       # 권한 모델을 확인해야 소유권 검증 누락을 판정할 수 있다
       - "**/config/SecurityConfig.java"
@@ -80,9 +80,9 @@ rules:
   - id: entity
     status: unverified
     trigger:
-      - "**/domain/entity/*.java"
+      - "**/internal/entity/*.java"
     anchors:
-      - "**/domain/repository/*.java"
+      - "**/internal/repository/*.java"
       - "src/main/resources/db/migration/*.sql"
       - "**/common/entity/*.java"
     activate:
@@ -94,9 +94,9 @@ rules:
   - id: repository
     status: unverified
     trigger:
-      - "**/domain/repository/*.java"
+      - "**/internal/repository/*.java"
     anchors:
-      - "**/domain/entity/*.java"
+      - "**/internal/entity/*.java"
       - "src/main/resources/db/migration/*.sql"
     activate:
       # DPB: 레포지토리가 도메인 루트에 올라오지 않는가, Admin 접두사를 붙이지 않았는가
@@ -110,9 +110,9 @@ rules:
   - id: external-client
     status: unverified
     trigger:
-      - "**/domain/client/**/*.java"
+      - "**/internal/client/**/*.java"
     anchors:
-      - "**/domain/service/*.java"
+      - "**/internal/service/*.java"
       - "src/main/resources/application*.yml"
     activate:
       prefixes: [REL, DPB, OBS, INF, EJ]
@@ -126,8 +126,8 @@ rules:
       - "**/*Api.java"
       - "**/*ApiImpl.java"
     anchors:
-      - "**/domain/service/*.java"
-      - "**/domain/controller/*.java"
+      - "**/internal/service/*.java"
+      - "**/internal/controller/*.java"
     activate:
       prefixes: [DPB, CMP, API, IDS, INF, EJ]
       levels: [코드, 설계]
@@ -140,7 +140,7 @@ rules:
     anchors:
       # 이력 전체를 본다. 이전 마이그레이션과의 순서가 판정에 필요하다
       - "src/main/resources/db/migration/*.sql"
-      - "**/domain/entity/*.java"
+      - "**/internal/entity/*.java"
     activate:
       prefixes: [DI, CMP, FLX, BE, IDS, INF]
       # backend 항목은 층위 태깅 전이라 전부 코드다. 코드를 빼면 BE 와 IDS 가 전부 걸러진다
@@ -173,8 +173,8 @@ rules:
       - "src/integrationTest/**/*.java"
     anchors:
       # 대상 프로덕션 클래스를 함께 본다
-      - "**/domain/service/*.java"
-      - "**/domain/entity/*.java"
+      - "**/internal/service/*.java"
+      - "**/internal/entity/*.java"
     activate:
       # DPB 와 EJ 는 넣지 않는다. 프로덕션 코드를 겨냥한 항목이라
       # 테스트에 걸면 목 주입, 픽스처 빌더, 긴 메서드명이 전부 지적으로 나온다

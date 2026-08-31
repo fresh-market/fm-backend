@@ -244,7 +244,7 @@ cd backend
 check
   |- test                              단위 테스트
   |- integrationTest                   통합 테스트
-  +- jacocoTestCoverageVerification    *.domain.service.* 메서드 100% 미달이면 실패
+  +- jacocoTestCoverageVerification    *.internal.service.* 메서드 100% 미달이면 실패
 ```
 
 **병합을 막는 유일한 코드 게이트다.** LLM 판정은 차단하지 않는다.

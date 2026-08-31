@@ -107,7 +107,7 @@ effective-java-guideline.md와 domain-package-boundary-guideline.md는 변경 �
 | base-entity-guideline.md | `@MappedSuperclass`, `@Id`, `@GeneratedValue`, `@CreatedDate`, `@LastModifiedDate`, `@EnableJpaAuditing`, 엔티티 클래스 선언 |
 | entity-creation-guideline.md | `@Entity` 클래스의 생성자와 정적 팩터리, `@Builder`, `@Setter`, `@Data`, `@NoArgsConstructor`, `@Enumerated` |
 | identifier-strategy-guideline.md | `UUID`, `public_id`, `BINARY(16)`, `SecureRandom`, `@UuidGenerator`, 응답 DTO의 식별자 필드 |
-| domain-package-boundary-guideline.md | 패키지 이동, import 문 변경, 접근 제어자 변경, `~Api` 인터페이스, `~ApiImpl`, `domain.client`, ArchUnit 테스트, `Admin` 접두사와 `/admin` 경로 |
+| domain-package-boundary-guideline.md | 패키지 이동, import 문 변경, 접근 제어자 변경, `~Api` 인터페이스, `~ApiImpl`, `internal.client`, ArchUnit 테스트, `Admin` 접두사와 `/admin` 경로 |
 | unit-testing-guideline.md | `@Test`, JUnit, Mockito, AssertJ, `@DataJpaTest`, `@SpringBootTest`, 테스트 클래스(`*Test`) |
 | api-design-guideline.md | `@RestController`, `@RequestMapping`, `@GetMapping`/`@PostMapping`/`@PatchMapping`/`@DeleteMapping`, 요청과 응답 DTO, `.proto` 파일, OpenAPI 명세 |
 

@@ -1,6 +1,6 @@
 package com.freshmarket.payment;
 
-import com.freshmarket.payment.domain.entity.Payment;
+import com.freshmarket.payment.internal.entity.Payment;
 import java.time.LocalDateTime;
 
 public record PaymentResult(
