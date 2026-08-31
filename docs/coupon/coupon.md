@@ -1333,6 +1333,9 @@ issued_quantity 를 실제 발급 수로 맞춘다
 
 9장이 "복구 시 재건이 채운다" 로 미뤄 둔 절차다. **네 키를 DB 와 앱 큐로부터 다시 세운다.**
 
+이 장은 왜 그렇게 세우는지를 적는다. 운영 중에 무엇을 보고 무엇을 하는지는
+[redis-promotion-rebuild.md](redis-promotion-rebuild.md) 에 따로 있다.
+
 ### 무엇을 잃나
 
 인프라 실측이다.
