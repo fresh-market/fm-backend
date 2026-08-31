@@ -71,6 +71,6 @@ public enum CouponErrorCode implements ErrorCode {
      */
     @Override
     public boolean isExpectedTraffic() {
-        return this == SOLD_OUT || this == CONGESTED;
+        return this == SOLD_OUT || this == SOLD_OUT_FINAL || this == CONGESTED;
     }
 }
