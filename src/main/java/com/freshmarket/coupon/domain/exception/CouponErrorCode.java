@@ -58,4 +58,19 @@ public enum CouponErrorCode implements ErrorCode {
     private final HttpStatus httpStatus;
     private final String code;
     private final String message;
+
+    /**
+     * 소진과 혼잡은 선착순에서 정상 운영에 나오는 답이다. 남기지 않는다.
+     *
+     * <p>재고가 1만인데 2만 명이 오면 절반이 소진을 받는 것이 설계이고, 몰릴 때 일부를 빠르게
+     * 거절하는 것도 설계다({@code docs/coupon/coupon.md} 3장). <b>정해진 결과를 이상으로 남기면
+     * 로그가 그 규모만큼 늘어난다.</b>
+     *
+     * <p>나머지는 남긴다. 대상 등급이 아니거나 기간 밖이면 클라이언트나 설정이 잘못된 것이라,
+     * 드물게 나오고 나올 때 봐야 한다.
+     */
+    @Override
+    public boolean isExpectedTraffic() {
+        return this == SOLD_OUT || this == CONGESTED;
+    }
 }
