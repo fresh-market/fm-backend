@@ -18,9 +18,11 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param batchSize     윈도우를 다 기다리지 않고 끊는 상한이다
  * @param flushThreads  플러시 스레드 수. 1 부터 늘려가며 잰다
  * @param queueCapacity 큐 상한. 기본은 사실상 무한이고 시험에서 줄여간다
- * @param requestBudget 요청 스레드가 응답까지 기다리는 총 시간. 넘으면 혼잡으로 끊는다
- * @param couponCacheTtl 자격 확인용 쿠폰 스냅샷을 이 JVM 이 들고 있는 시간.
- *                       마감으로 스위치가 꺼진 뒤 이 앱이 요청을 더 받아 주는 시간이기도 하다
+ * @param commitWait 요청 스레드가 자기 발급의 확정을 기다리는 시간. 넘으면 혼잡으로 끊는다.
+ *                   재는 구간은 큐에 넣은 뒤부터 DB 커밋과 Redis 확정 표시가 끝날 때까지다.
+ *                   순번 확보와 응답 직렬화는 이 안에 없다
+ * @param couponCacheTtl 마감이 없는 쿠폰의 스냅샷을 이 JVM 이 들고 있는 시간.
+ *                       마감이 있으면 이 값을 안 쓰고 Redis 키와 같은 시각에 버린다
  */
 @ConfigurationProperties("coupon.issue")
 public record CouponIssueProperties(
@@ -29,7 +31,7 @@ public record CouponIssueProperties(
         @DefaultValue("500") int batchSize,
         @DefaultValue("1") int flushThreads,
         @DefaultValue("2147483647") int queueCapacity,
-        @DefaultValue("2s") Duration requestBudget,
+        @DefaultValue("2s") Duration commitWait,
         @DefaultValue("5s") Duration couponCacheTtl) {
 
     public CouponIssueProperties {
@@ -40,11 +42,11 @@ public record CouponIssueProperties(
         require(!couponCacheTtl.isNegative(), "couponCacheTtl 은 음수일 수 없다");
 
         /*
-         * 회수 기준이 요청 예산보다 짧으면 회수가 아직 살아 있는 요청의 번호를 뺏는다.
+         * 회수 기준이 확정 대기보다 짧으면 회수가 아직 살아 있는 요청의 번호를 뺏는다.
          * 그러면 그 둘이 같은 번호로 INSERT 해 uk_mc_coupon_seq 에 걸리므로, 이 검사가 기동에서 막는다.
          */
-        require(reclaimAfter.compareTo(requestBudget) > 0,
-                "reclaimAfter(" + reclaimAfter + ") 는 requestBudget(" + requestBudget + ") 보다 길어야 한다");
+        require(reclaimAfter.compareTo(commitWait) > 0,
+                "reclaimAfter(" + reclaimAfter + ") 는 commitWait(" + commitWait + ") 보다 길어야 한다");
     }
 
     private static void require(boolean condition, String message) {

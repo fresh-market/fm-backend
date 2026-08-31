@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Duration;
 
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -39,8 +38,7 @@ class CouponProfileBindingTest {
             assertThat(properties.batchWindow()).isEqualTo(Duration.ofMillis(20));
             assertThat(properties.batchSize()).isEqualTo(500);
             assertThat(properties.flushThreads()).isEqualTo(1);
-            // (2026-08-30, 로컬 진단용) 운영 값은 800ms 다. 되돌릴 때 이 줄도 함께 되돌린다
-            assertThat(properties.requestBudget()).isEqualTo(Duration.ofSeconds(30));
+            assertThat(properties.commitWait()).isEqualTo(Duration.ofMillis(800));
             assertThat(properties.couponCacheTtl()).isEqualTo(Duration.ofSeconds(5));
             assertThat(properties.reclaimAfter()).isEqualTo(Duration.ofSeconds(60));
         });
@@ -85,7 +83,7 @@ class CouponProfileBindingTest {
             long 응답대기 = Long.parseLong(
                     env.getProperty("spring.datasource.hikari.data-source-properties.socketTimeout"));
 
-            assertThat(properties.requestBudget()).isGreaterThan(Duration.ofMillis(획득 + 응답대기));
+            assertThat(properties.commitWait()).isGreaterThan(Duration.ofMillis(획득 + 응답대기));
         });
     }
 
@@ -163,27 +161,36 @@ class CouponProfileBindingTest {
 
     /*
      * 8장의 SLO 가 처리된 응답 p99 1초다.
-     * 요청 예산이 곧 성공 응답의 지연 상한이라, 예산이 그보다 길면 SLO 를 구조적으로 못 지킨다.
-     * Redis 왕복 둘이 예산 밖에서 최악 200ms 를 더 쓰므로 그만큼 남겨 둔다.
+     *
+     * 확정 대기는 그 1초의 일부일 뿐이라 단독으로 비교하면 안 된다. Redis 왕복이 확정 대기
+     * 밖에서 시간을 더 쓰고, 발급 요청 하나가 Redis 를 두 번 친다.
+     *
+     *   JwtAuthenticationFilter  -> 인증 커트라인 조회
+     *   CouponSeqAllocator       -> 순번 확보
+     *
+     * 그래서 이 시험은 둘을 더해서 본다. 한쪽만 조여도 다른 쪽이 넘기면 SLO 를 못 지킨다.
      */
-    @Disabled("2026-08-30 로컬 진단 회차 동안만 끈다. 예산 30초와 Redis 500ms 가 SLO 를 넘긴다."
-            + " 진단이 끝나 예산을 800ms 로 되돌리면 이 줄을 지운다.")
     @Test
-    void 요청_예산이_SLO_안에_들어온다() {
+    void 확정_대기와_Redis_왕복_둘의_합이_SLO_안에_들어온다() {
         runner.run(context -> {
             CouponIssueProperties properties = context.getBean(CouponIssueProperties.class);
+            Environment env = context.getEnvironment();
 
-            assertThat(properties.requestBudget()).isLessThanOrEqualTo(Duration.ofMillis(800));
+            long redis = Long.parseLong(env.getProperty("spring.data.redis.timeout").replace("ms", ""));
+
+            assertThat(properties.commitWait().plusMillis(redis * 2))
+                    .as("확정 대기 + Redis 왕복 둘")
+                    .isLessThanOrEqualTo(Duration.ofSeconds(1));
         });
     }
 
-    // 회수 기준이 요청 예산보다 짧으면 아직 살아 있는 요청의 번호를 뺏는다
+    // 회수 기준이 확정 대기보다 짧으면 아직 살아 있는 요청의 번호를 뺏는다
     @Test
     void 회수_기준이_요청_예산보다_길다() {
         runner.run(context -> {
             CouponIssueProperties properties = context.getBean(CouponIssueProperties.class);
 
-            assertThat(properties.reclaimAfter()).isGreaterThan(properties.requestBudget());
+            assertThat(properties.reclaimAfter()).isGreaterThan(properties.commitWait());
         });
     }
 

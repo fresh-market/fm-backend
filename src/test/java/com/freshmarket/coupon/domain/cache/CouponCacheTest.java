@@ -35,7 +35,14 @@ import org.springframework.dao.QueryTimeoutException;
 class CouponCacheTest {
 
     private static final long COUPON_ID = 77L;
-    private static final Duration TTL = Duration.ofSeconds(5);
+
+    // 마감 없는 쿠폰에만 쓰이는 대비값이다. 선착순 쿠폰은 마감에서 계산된 시각에 죽는다
+    private static final Duration FALLBACK_TTL = Duration.ofSeconds(5);
+
+    private static final LocalDateTime ISSUE_END_AT = LocalDateTime.of(2026, 7, 1, 0, 0);
+
+    // CouponSeqInitializer 가 Redis 키에 거는 꼬리와 같은 값이다
+    private static final Duration TTL_TAIL = Duration.ofSeconds(60);
 
     @Mock
     private CouponRepository couponRepository;
@@ -49,7 +56,7 @@ class CouponCacheTest {
         clock = new MovableClock(Instant.parse("2026-06-01T12:00:00Z"));
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofSeconds(2), TTL);
+                Duration.ofSeconds(2), FALLBACK_TTL);
         /*
          * 실행기를 단일 스레드로 준다.
          * AsyncCache 는 future 가 완료될 때 쓰기 시각을 찍는데 그 콜백이 이 실행기에서 돈다.
@@ -122,35 +129,86 @@ class CouponCacheTest {
         verify(couponRepository, times(2)).findById(COUPON_ID);
     }
 
-    // TTL 이 곧 이 앱이 마감을 넘겨 요청을 받아 주는 시간이다
+    /*
+     * 스냅샷이 Redis 키와 같은 시각에 죽는지 본다.
+     * 그 시각을 넘겨 들고 있으면 이 캐시가 이미 사라진 이벤트를 설명하게 된다.
+     */
     @Test
-    void TTL_이_지나면_다시_읽는다() throws Exception {
+    void 마감에서_60초가_지나면_다시_읽는다() throws Exception {
         // given
         when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon(true)));
         sut.find(COUPON_ID);
         기록이_끝나기를_기다린다();
 
         // when
-        clock.advance(TTL.plusMillis(1));
+        clock.advance(키가_죽기까지().plusMillis(1));
         sut.find(COUPON_ID);
 
         // then
         verify(couponRepository, times(2)).findById(COUPON_ID);
     }
 
+    // 발급 창 안에서는 값이 얼어붙으므로 그 시각 전에는 다시 읽을 이유가 없다
     @Test
-    void TTL_안에서는_다시_읽지_않는다() throws Exception {
+    void 마감에서_60초가_되기_전에는_다시_읽지_않는다() throws Exception {
         // given
         when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon(true)));
         sut.find(COUPON_ID);
         기록이_끝나기를_기다린다();
 
         // when
-        clock.advance(TTL.minusMillis(1));
+        clock.advance(키가_죽기까지().minusMillis(1));
         sut.find(COUPON_ID);
 
         // then
         verify(couponRepository, times(1)).findById(COUPON_ID);
+    }
+
+    /*
+     * 읽어도 만료 시각이 밀리지 않는지 본다.
+     * expireAfterRead 가 남은 시간 대신 새 기간을 주면 요청이 계속 오는 동안 스냅샷이 안 죽어서,
+     * 이벤트가 끝난 뒤에도 이 인스턴스가 옛 값으로 답한다.
+     */
+    @Test
+    void 중간에_읽어도_만료_시각이_밀리지_않는다() throws Exception {
+        // given
+        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon(true)));
+        sut.find(COUPON_ID);
+        기록이_끝나기를_기다린다();
+
+        // when 절반쯤에서 한 번 읽고, 원래 만료 시각을 넘긴다
+        Duration 남은_시간 = 키가_죽기까지();
+        clock.advance(남은_시간.dividedBy(2));
+        sut.find(COUPON_ID);
+        clock.advance(남은_시간.dividedBy(2).plusMillis(1));
+        sut.find(COUPON_ID);
+
+        // then
+        verify(couponRepository, times(2)).findById(COUPON_ID);
+    }
+
+    /*
+     * 마감이 없는 쿠폰은 맞출 기준이 없어 설정값으로 죽는다.
+     * 그 쿠폰은 Redis 키에도 만료가 안 걸리므로 여기서마저 기준을 잃으면 스냅샷이 안 죽는다.
+     */
+    @Test
+    void 마감이_없는_쿠폰은_설정값으로_죽는다() throws Exception {
+        // given
+        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(마감_없는_쿠폰()));
+        sut.find(COUPON_ID);
+        기록이_끝나기를_기다린다();
+
+        // when
+        clock.advance(FALLBACK_TTL.plusMillis(1));
+        sut.find(COUPON_ID);
+
+        // then
+        verify(couponRepository, times(2)).findById(COUPON_ID);
+    }
+
+    // 스냅샷이 살아 있는 시간이다. 이 시험이 이 식을 들고 있어야 캐시 쪽 식과 대조가 된다
+    private Duration 키가_죽기까지() {
+        return Duration.between(LocalDateTime.now(clock), ISSUE_END_AT.plus(TTL_TAIL));
     }
 
     // 관리자가 이벤트를 열고 닫은 뒤에 부른다. 그 인스턴스만은 곧바로 새 값을 본다
@@ -246,9 +304,17 @@ class CouponCacheTest {
     private static Coupon coupon(boolean active) {
         Coupon coupon = Coupon.draftLimited("선착순 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
                 LocalDate.of(2026, 1, 1), LocalDate.of(2030, 1, 1),
-                100, LocalDateTime.of(2026, 5, 1, 0, 0), LocalDateTime.of(2026, 7, 1, 0, 0));
+                100, LocalDateTime.of(2026, 5, 1, 0, 0), ISSUE_END_AT);
         setField(coupon, "id", COUPON_ID);
         setField(coupon, "active", active);
+        return coupon;
+    }
+
+    private static Coupon 마감_없는_쿠폰() {
+        Coupon coupon = Coupon.draftUnlimited("상시 쿠폰", CouponScope.ORDER, DiscountType.AMOUNT, 1000,
+                LocalDate.of(2026, 1, 1), LocalDate.of(2030, 1, 1));
+        setField(coupon, "id", COUPON_ID);
+        setField(coupon, "active", true);
         return coupon;
     }
 

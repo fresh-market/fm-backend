@@ -1,6 +1,8 @@
 package com.freshmarket.coupon.domain.cache;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -9,9 +11,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
+import com.freshmarket.coupon.domain.redis.CouponSeqInitializer;
 import com.freshmarket.coupon.domain.repository.CouponRepository;
 import com.github.benmanes.caffeine.cache.AsyncCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Expiry;
 import com.github.benmanes.caffeine.cache.Ticker;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -59,8 +63,8 @@ public class CouponCache {
         this.couponRepository = couponRepository;
         this.cache = Caffeine.newBuilder()
                 .maximumSize(MAX_ENTRIES)
-                .expireAfterWrite(properties.couponCacheTtl())
-                // 시험이 TTL 경계를 재려면 시간을 밀 수 있어야 한다. 그래서 캐시가 주입받은 Clock 을 따른다
+                .expireAfter(untilKeysExpire(properties.couponCacheTtl(), clock))
+                // 시험이 만료 경계를 재려면 시간을 밀 수 있어야 한다. 그래서 캐시가 주입받은 Clock 을 따른다
                 .ticker(clockTicker(clock))
                 .executor(executor)
                 .recordStats()
@@ -139,6 +143,52 @@ public class CouponCache {
             }
             throw e;
         }
+    }
+
+    /**
+     * 스냅샷을 Redis 키와 같은 시각에 버린다. 항목마다 만료가 다르므로 고정 기간을 못 쓴다.
+     *
+     * <p>기간이 아니라 <b>시각</b>이 기준인 것이 요점이다. 스냅샷이 가리키는 이벤트의 네 키가
+     * {@code issue_end_at + 60초} 에 사라지므로, 그 뒤까지 들고 있어 봐야 이미 없는 이벤트를
+     * 설명하는 값이다. 반대로 그 전에 버리면 발급 창 안에서 얼어붙은 값을 다시 읽는 것이라
+     * DB 조회만 는다.
+     *
+     * <p>읽기는 수명을 안 늘린다. {@code expireAfterRead} 가 남은 시간을 그대로 돌려주므로
+     * 요청이 몰려도 만료 시각이 밀리지 않는다.
+     *
+     * @param fallback 마감이 없는 쿠폰에 쓰는 기간. 그런 쿠폰은 Redis 키에도 만료가 안 걸리므로
+     *                 여기서마저 기준을 잃으면 스냅샷이 영원히 안 죽는다
+     */
+    private static Expiry<Long, CachedCoupon> untilKeysExpire(Duration fallback, Clock clock) {
+        return new Expiry<>() {
+
+            @Override
+            public long expireAfterCreate(Long couponId, CachedCoupon coupon, long currentTime) {
+                return remaining(coupon);
+            }
+
+            @Override
+            public long expireAfterUpdate(Long couponId, CachedCoupon coupon, long currentTime,
+                                          long currentDuration) {
+                return remaining(coupon);
+            }
+
+            @Override
+            public long expireAfterRead(Long couponId, CachedCoupon coupon, long currentTime,
+                                        long currentDuration) {
+                return currentDuration;
+            }
+
+            private long remaining(CachedCoupon coupon) {
+                if (coupon.issueEndAt() == null) {
+                    return fallback.toNanos();
+                }
+                Duration left = Duration.between(LocalDateTime.now(clock),
+                        CouponSeqInitializer.keysExpireAt(coupon.issueEndAt()));
+                // 이미 지난 마감이면 담자마자 만료다. Caffeine 은 음수를 안 받는다
+                return left.isNegative() ? 0 : left.toNanos();
+            }
+        };
     }
 
     private static Ticker clockTicker(Clock clock) {
