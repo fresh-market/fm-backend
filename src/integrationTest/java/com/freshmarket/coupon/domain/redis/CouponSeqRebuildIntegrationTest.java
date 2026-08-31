@@ -22,14 +22,14 @@ import org.springframework.test.context.jdbc.Sql;
  * 재면 목에게 시킨 것을 그대로 돌려받는 것뿐이다. 특히 정렬집합의 점수와 해시 값의 모양은 뒤에
  * 순번 확보 스크립트가 그대로 읽어 가는 값이라 실물로 봐야 한다.
  *
- * 조용해지기를 기다리는 시간을 500밀리초로 줄인다. 운영값은 60초라 그대로 두면 이 시험 하나가
- * 회차마다 1분을 먹는다. 재는 것은 기다림의 길이가 아니라 기다린 뒤에 세워지는 값이다.
+ * 남들이 큐를 올리기를 기다리는 시간을 200밀리초로 줄인다. 재는 것은 기다림의 길이가 아니라
+ * 기다린 뒤에 세워지는 값이다.
+ *
+ * 다른 인스턴스의 큐는 재건용 해시에 직접 심어 흉내 낸다. 이 JVM 의 큐에 티켓을 넣으면 플러시
+ * 스레드가 곧바로 가져가 버려서, 재건이 무엇을 봤는지가 회차마다 달라진다.
  */
 @SpringBootTest
-@TestPropertySource(properties = {
-        "coupon.issue.commit-wait=200ms",
-        "coupon.issue.reclaim-after=500ms"
-})
+@TestPropertySource(properties = "coupon.issue.rebuild-contribute-wait=200ms")
 @Sql("/sql/coupon-issue-fixture.sql")
 class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
 
@@ -40,6 +40,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
     private static final String COUNTER = "coupon:9001:counter";
     private static final String PENDING = "coupon:9001:pending";
     private static final String REBUILD_LOCK = "coupon:9001:rebuild";
+    private static final String REBUILD_QUEUED = "coupon:9001:rebuild:queued";
 
     @Autowired
     private CouponSeqRebuilder sut;
@@ -53,7 +54,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
     // 승격 직후를 흉내 낸다. 네 키가 통째로 없는 상태다
     @BeforeEach
     void 키를_모두_지운다() {
-        redisTemplate.delete(List.of(SEQ, FREE, COUNTER, PENDING, REBUILD_LOCK));
+        redisTemplate.delete(List.of(SEQ, FREE, COUNTER, PENDING, REBUILD_LOCK, REBUILD_QUEUED));
     }
 
     /*
@@ -83,8 +84,63 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
         assertThat(redisTemplate.opsForZSet().range(FREE, 0, -1)).containsExactly("3");
         assertThat(redisTemplate.opsForZSet().score(FREE, "3")).isEqualTo(3.0);
 
-        // pending 은 세우지 않는다. DB 에 행이 없는 회원들이라 복원할 근거가 없다
+        // 큐가 비었으면 pending 도 비어 있다. 커밋된 회원은 미확정이 아니다
         assertThat(redisTemplate.hasKey(PENDING)).isFalse();
+    }
+
+    /*
+     * 큐에 떠 있는 번호가 재건에 반영되는지 본다.
+     * 이것이 없으면 재건이 그 번호를 아무도 안 쥔 것으로 보고 남에게 다시 내준다.
+     */
+    @Test
+    void 큐에_있는_번호는_되살아난다() {
+        발급행을_심는다(9101, 1);
+        발급행을_심는다(9102, 2);
+        // 다른 인스턴스가 5 번을 쥐고 있다. 3 과 4 는 주인이 없다
+        다른_인스턴스가_쥔다(9103, 5);
+
+        sut.rebuildIfLost(COUPON_ID);
+
+        // 카운터는 DB 의 최댓값이 아니라 큐까지 본 최댓값이다
+        assertThat(redisTemplate.opsForValue().get(COUNTER)).isEqualTo("5");
+
+        // 확정분에는 표시가 붙고 큐에서 온 것에는 안 붙는다. 붙이면 회수가 그 번호를 안 건드린다
+        Map<Object, Object> seq = redisTemplate.opsForHash().entries(SEQ);
+        assertThat(seq).containsOnly(
+                Map.entry("9101", "1:1"),
+                Map.entry("9102", "2:1"),
+                Map.entry("9103", "5"));
+
+        // 5 번은 주인이 있으므로 free 에 들어가면 안 된다
+        assertThat(redisTemplate.opsForZSet().range(FREE, 0, -1)).containsExactly("3", "4");
+
+        // 큐의 티켓이 곧 pending 의 정의다
+        assertThat(redisTemplate.opsForZSet().range(PENDING, 0, -1)).containsExactly("9103");
+    }
+
+    // 재건용 해시는 다 쓰면 지운다. 남으면 다음 재건이 지난 회차의 큐를 보고 세운다
+    @Test
+    void 재건이_끝나면_올려_둔_큐를_지운다() {
+        다른_인스턴스가_쥔다(9103, 1);
+
+        sut.rebuildIfLost(COUPON_ID);
+
+        assertThat(redisTemplate.hasKey(REBUILD_QUEUED)).isFalse();
+    }
+
+    /*
+     * 확정된 매핑을 큐에서 온 것으로 덮으면 안 된다.
+     * 덮으면 회수가 그 번호를 미확정으로 보고 남에게 넘겨 같은 번호가 두 번 나간다.
+     */
+    @Test
+    void 커밋된_회원은_큐의_값으로_덮이지_않는다() {
+        발급행을_심는다(9101, 1);
+        // 플러시가 방금 커밋했는데 그 인스턴스의 스냅숏에는 아직 남아 있던 경우다
+        다른_인스턴스가_쥔다(9101, 1);
+
+        sut.rebuildIfLost(COUPON_ID);
+
+        assertThat(redisTemplate.opsForHash().get(SEQ, "9101")).isEqualTo("1:1");
     }
 
     // 넷의 수명은 counter 가 들고 나머지가 따라간다. 재건은 그 물려받기 경로를 안 지나므로 직접 건다
@@ -153,6 +209,12 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
         sut.rebuildIfLost(COUPON_ID);
 
         assertThat(redisTemplate.hasKey(REBUILD_LOCK)).isFalse();
+    }
+
+    // 다른 인스턴스가 자기 큐를 올린 것을 흉내 낸다. 회원 -> 순번이다
+    private void 다른_인스턴스가_쥔다(long memberId, int issueSeq) {
+        redisTemplate.opsForHash().put(REBUILD_QUEUED,
+                String.valueOf(memberId), String.valueOf(issueSeq));
     }
 
     /*

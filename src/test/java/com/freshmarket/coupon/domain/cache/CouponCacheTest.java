@@ -56,7 +56,7 @@ class CouponCacheTest {
         clock = new MovableClock(Instant.parse("2026-06-01T12:00:00Z"));
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofSeconds(2), FALLBACK_TTL);
+                Duration.ofSeconds(2), Duration.ofSeconds(3), FALLBACK_TTL);
         /*
          * 실행기를 단일 스레드로 준다.
          * AsyncCache 는 future 가 완료될 때 쓰기 시각을 찍는데 그 콜백이 이 실행기에서 돈다.

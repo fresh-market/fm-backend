@@ -83,7 +83,7 @@ class CouponIssueServiceTest {
     void setUp() {
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofMillis(100), Duration.ofSeconds(5));
+                Duration.ofMillis(100), Duration.ofSeconds(3), Duration.ofSeconds(5));
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
         sut = new CouponIssueService(couponCache, memberApi, allocator, rebuildTrigger, queue, writeCircuit,
                 properties, metrics, fixed);

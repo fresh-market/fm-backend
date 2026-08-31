@@ -9,6 +9,8 @@ import java.util.concurrent.RejectedExecutionException;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import com.freshmarket.coupon.domain.issue.CouponSeqRebuildSignal;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -27,7 +29,7 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class CouponSeqRebuildTrigger {
+public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
 
     private final Set<Long> inProgress = ConcurrentHashMap.newKeySet();
 
@@ -42,9 +44,26 @@ public class CouponSeqRebuildTrigger {
     });
 
     private final CouponSeqRebuilder rebuilder;
+    private final StringRedisTemplate redisTemplate;
 
     /**
-     * 요청 스레드가 부른다. 하는 일이 집합에 넣는 것뿐이라 발급 경로에 지는 값이 거의 없다.
+     * 플러시 스레드가 배치를 쓴 뒤 부른다. 재건 중이면 이 인스턴스도 자기 큐를 올려야 한다.
+     *
+     * <p>확인이 키 하나 읽기이고 배치당 한 번이라 값이 싸다. 창 20밀리초 기준으로 초당 50번이다.
+     */
+    @Override
+    public void checkAfterFlush(long couponId) {
+        if (Boolean.TRUE.equals(redisTemplate.hasKey(CouponSeqKeys.rebuild(couponId)))) {
+            suspect(couponId);
+        }
+    }
+
+    /**
+     * 요청 스레드와 플러시 스레드가 부른다. 하는 일이 집합에 넣는 것뿐이라 지는 값이 거의 없다.
+     *
+     * <p><b>부르는 자리가 둘인 이유가 있다.</b> 요청 경로만 두면 ALB 가 요청을 안 보내는
+     * 인스턴스는 손실을 영영 모른다. 그런데 티켓을 쥔 인스턴스는 그것을 쓰느라 반드시 Redis 를
+     * 만지므로, 플러시 쪽에서 알아챌 수 있다.
      *
      * <p>이 호출은 손실을 단정하지 않는다. 관리자가 아직 안 연 이벤트도 같은 자리로 오므로,
      * 그 둘을 가르는 것은 {@link CouponSeqRebuilder} 가 DB 를 보고 한다.

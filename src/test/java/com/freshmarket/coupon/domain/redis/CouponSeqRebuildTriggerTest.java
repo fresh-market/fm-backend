@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 /*
  * 요청 경로가 재건을 몇 번 띄우는지를 본다.
@@ -30,9 +31,12 @@ class CouponSeqRebuildTriggerTest {
     @Mock
     private CouponSeqRebuilder rebuilder;
 
+    @Mock
+    private StringRedisTemplate redisTemplate;
+
     @Test
     void 한_번_부르면_재건이_한_번_뜬다() {
-        CouponSeqRebuildTrigger sut = new CouponSeqRebuildTrigger(rebuilder);
+        CouponSeqRebuildTrigger sut = new CouponSeqRebuildTrigger(rebuilder, redisTemplate);
 
         sut.suspect(COUPON_ID);
 
@@ -53,7 +57,7 @@ class CouponSeqRebuildTriggerTest {
             return null;
         }).when(rebuilder).rebuildIfLost(anyLong());
 
-        CouponSeqRebuildTrigger sut = new CouponSeqRebuildTrigger(rebuilder);
+        CouponSeqRebuildTrigger sut = new CouponSeqRebuildTrigger(rebuilder, redisTemplate);
 
         // when 첫 요청이 재건을 띄우고, 그것이 도는 동안 이천 개가 더 들어온다
         sut.suspect(COUPON_ID);
@@ -75,7 +79,7 @@ class CouponSeqRebuildTriggerTest {
     void 재건이_실패하면_다음_요청이_다시_띄운다() throws Exception {
         doThrow(new IllegalStateException("DB 가 답하지 않는다"))
                 .when(rebuilder).rebuildIfLost(anyLong());
-        CouponSeqRebuildTrigger sut = new CouponSeqRebuildTrigger(rebuilder);
+        CouponSeqRebuildTrigger sut = new CouponSeqRebuildTrigger(rebuilder, redisTemplate);
 
         /*
          * 이벤트가 도는 동안 요청이 계속 들어오는 모양을 그대로 흉내 낸다.
@@ -94,7 +98,7 @@ class CouponSeqRebuildTriggerTest {
     // 쿠폰이 다르면 서로를 막지 않는다. 집합의 키가 쿠폰이라는 뜻이다
     @Test
     void 다른_쿠폰은_서로를_막지_않는다() {
-        CouponSeqRebuildTrigger sut = new CouponSeqRebuildTrigger(rebuilder);
+        CouponSeqRebuildTrigger sut = new CouponSeqRebuildTrigger(rebuilder, redisTemplate);
 
         sut.suspect(COUPON_ID);
         sut.suspect(COUPON_ID + 1);
