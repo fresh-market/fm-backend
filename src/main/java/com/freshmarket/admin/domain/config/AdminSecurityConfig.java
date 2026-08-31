@@ -50,6 +50,7 @@ import org.springframework.security.web.servlet.util.matcher.PathPatternRequestM
 class AdminSecurityConfig {
 
     private static final String ADMIN = "TYPE_ADMIN";
+    private static final String TOKENS_PATH = "/v1/admin/auth/tokens";
 
     @Bean
     @Order(ApiSecurityDefaults.DOMAIN_CHAIN_ORDER)
@@ -60,16 +61,16 @@ class AdminSecurityConfig {
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .ignoringRequestMatchers(
                                 PathPatternRequestMatcher.withDefaults().matcher(
-                                        POST, "/v1/admin/auth/tokens"),
+                                        POST, TOKENS_PATH),
                                 PathPatternRequestMatcher.withDefaults().matcher(
                                         POST, "/v1/admin/auth/tokens:refresh"),
                                 PathPatternRequestMatcher.withDefaults().matcher(
-                                        DELETE, "/v1/admin/auth/tokens")))
+                                        DELETE, TOKENS_PATH)))
                 .authorizeHttpRequests(auth -> auth
                         // 로그인과 토큰 재발급은 기존 Access Token 인증 없이 호출할 수 있어야 한다
                         .requestMatchers(
                                 POST,
-                                "/v1/admin/auth/tokens",
+                                TOKENS_PATH,
                                 "/v1/admin/auth/tokens:refresh")
                         .permitAll()
                         // 로그아웃(DELETE /tokens)을 포함한 그 외 관리자 인증 API는 TYPE_ADMIN 권한을 요구한다
