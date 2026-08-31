@@ -1,5 +1,6 @@
 package com.freshmarket.admin.domain.config;
 
+import static org.springframework.http.HttpMethod.DELETE;
 import static org.springframework.http.HttpMethod.POST;
 
 import com.freshmarket.common.auth.ApiSecurityDefaults;
@@ -35,6 +36,14 @@ import org.springframework.security.web.servlet.util.matcher.PathPatternRequestM
  *
  * admin 로그인은 그 결정 이전에 별도 리뷰를 거쳐 CSRF를 켜기로 이미 확정했다(auth.md "관리자" 절).
  * 그 결정을 지키기 위해 defaults.apply() 이후 이 체인에서만 csrf()를 다시 켠다.
+ *
+ * 로그아웃(DELETE /tokens)도 CSRF 검사에서 뺀다. 이 API가 지금 CSRF 토큰을 발급하는 수단을
+ * 하나도 갖고 있지 않아서(로그인·재발급 둘 다 검사 대상이 아니라 토큰을 만들 일이 없다),
+ * 그대로 두면 정상적으로 로그인한 관리자조차 로그아웃을 못 한다. 로그아웃은 위조돼도
+ * 상대가 강제로 로그아웃당하는 것 이상의 피해가 없어 CSRF로 막을 실익이 없다 — 로그인·
+ * 재발급과 같은 이유로 예외에 넣는다. 앞으로 이 체인에 비밀번호 변경처럼 위조 시 실제
+ * 피해가 있는 API가 추가되면, 그때는 CSRF 토큰을 실제로 내려주는 수단부터 먼저 만들어야
+ * 한다.
  */
 @Configuration
 @EnableMethodSecurity
@@ -53,7 +62,9 @@ class AdminSecurityConfig {
                                 PathPatternRequestMatcher.withDefaults().matcher(
                                         POST, "/v1/admin/auth/tokens"),
                                 PathPatternRequestMatcher.withDefaults().matcher(
-                                        POST, "/v1/admin/auth/tokens:refresh")))
+                                        POST, "/v1/admin/auth/tokens:refresh"),
+                                PathPatternRequestMatcher.withDefaults().matcher(
+                                        DELETE, "/v1/admin/auth/tokens")))
                 .authorizeHttpRequests(auth -> auth
                         // 로그인과 토큰 재발급은 기존 Access Token 인증 없이 호출할 수 있어야 한다
                         .requestMatchers(
