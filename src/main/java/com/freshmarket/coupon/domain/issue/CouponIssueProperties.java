@@ -19,8 +19,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param flushThreads  플러시 스레드 수. 1 부터 늘려가며 잰다
  * @param queueCapacity 큐 상한. 기본은 사실상 무한이고 시험에서 줄여간다
  * @param requestBudget 요청 스레드가 응답까지 기다리는 총 시간. 넘으면 혼잡으로 끊는다
- * @param couponCacheTtl 자격 확인용 쿠폰 스냅샷을 이 JVM 이 들고 있는 시간.
- *                       마감으로 스위치가 꺼진 뒤 이 앱이 요청을 더 받아 주는 시간이기도 하다
+ * @param couponCacheTtl 마감이 없는 쿠폰의 스냅샷을 이 JVM 이 들고 있는 시간.
+ *                       마감이 있으면 이 값을 안 쓰고 Redis 키와 같은 시각에 버린다
  */
 @ConfigurationProperties("coupon.issue")
 public record CouponIssueProperties(
