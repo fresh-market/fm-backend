@@ -4,11 +4,14 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import com.freshmarket.coupon.domain.entity.Coupon;
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
@@ -17,6 +20,7 @@ import com.freshmarket.coupon.domain.repository.MemberCouponSeqRepository;
 import com.freshmarket.coupon.domain.repository.MemberCouponSeqRepository.IssuedSeq;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations.TypedTuple;
 import org.springframework.stereotype.Component;
 
 /**
@@ -170,21 +174,19 @@ public class CouponSeqRebuilder {
      * 시각은 복원할 수 없어 지금으로 넣는다. 그만큼 회수 기준이 뒤로 밀린다.
      */
     private void writePending(long couponId, Map<Long, Integer> queued) {
-        if (queued.isEmpty()) {
-            return;
-        }
         double now = System.currentTimeMillis();
-        queued.keySet().forEach(memberId ->
-                redisTemplate.opsForZSet().add(CouponSeqKeys.pending(couponId),
-                        String.valueOf(memberId), now));
+        Set<TypedTuple<String>> members = queued.keySet().stream()
+                .map(memberId -> TypedTuple.of(String.valueOf(memberId), now))
+                .collect(Collectors.toSet());
+        addInChunks(CouponSeqKeys.pending(couponId), members);
     }
 
     private void writeFree(long couponId, List<Integer> freed) {
-        String key = CouponSeqKeys.free(couponId);
-        for (Integer seq : freed) {
-            // 점수가 번호라 스크립트의 ZPOPMIN 이 낮은 번호부터 꺼낸다
-            redisTemplate.opsForZSet().add(key, String.valueOf(seq), seq);
-        }
+        // 점수가 번호라 스크립트의 ZPOPMIN 이 낮은 번호부터 꺼낸다
+        Set<TypedTuple<String>> numbers = freed.stream()
+                .map(seq -> TypedTuple.of(String.valueOf(seq), (double) seq))
+                .collect(Collectors.toSet());
+        addInChunks(CouponSeqKeys.free(couponId), numbers);
     }
 
     /**
@@ -242,6 +244,27 @@ public class CouponSeqRebuilder {
 
     private void clearContributions(long couponId) {
         redisTemplate.unlink(CouponSeqKeys.rebuildQueued(couponId));
+    }
+
+    /*
+     * 항목마다 한 번씩 치면 만 건이 만 번의 왕복이 된다.
+     * 재건은 발급이 멈춰 있는 동안 도는 일이라 그 시간이 곧 장애 시간이다.
+     */
+    private void addInChunks(String key, Set<TypedTuple<String>> values) {
+        if (values.isEmpty()) {
+            return;
+        }
+        Set<TypedTuple<String>> chunk = new HashSet<>(CHUNK);
+        for (TypedTuple<String> value : values) {
+            chunk.add(value);
+            if (chunk.size() == CHUNK) {
+                redisTemplate.opsForZSet().add(key, chunk);
+                chunk.clear();
+            }
+        }
+        if (!chunk.isEmpty()) {
+            redisTemplate.opsForZSet().add(key, chunk);
+        }
     }
 
     private void putAllInChunks(String key, Map<String, String> fields) {
