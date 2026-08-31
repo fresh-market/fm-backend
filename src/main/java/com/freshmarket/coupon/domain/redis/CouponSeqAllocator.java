@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 
 import com.freshmarket.coupon.domain.issue.CouponIssueProperties;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
@@ -133,6 +134,19 @@ public class CouponSeqAllocator {
             }
             throw new CouponSeqUnavailableException("순번 확보가 실패했다", e);
         }
+    }
+
+    /**
+     * 지금까지 나간 순번 수를 읽는다. 발급 현황 조회가 부른다.
+     *
+     * <p>단순 {@code GET} 이라 순번 확보 스크립트와 자원을 다투지 않는다. 회로도 안 씌운다 —
+     * 이 값을 못 읽어도 발급 자체는 막히지 않으므로, 실패하면 호출부가 DB 값으로 대체하면 된다.
+     *
+     * @return 카운터 키가 없으면(이벤트가 열린 적 없거나 이미 닫혀 키가 지워졌다) 빈 값
+     */
+    public Optional<Integer> currentIssuedCount(long couponId) {
+        String raw = redisTemplate.opsForValue().get(CouponSeqKeys.counter(couponId));
+        return raw != null ? Optional.of(Integer.parseInt(raw)) : Optional.empty();
     }
 
     private SeqOutcome parse(String raw) {
