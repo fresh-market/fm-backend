@@ -93,14 +93,16 @@ class CouponSeqAllocatorIntegrationTest extends IntegrationTestSupport {
 
     /*
      * 앱은 스크립트 본문을 자기 힙에 들고 있을 뿐 서버에 올려 두지는 않는다.
-     * 스프링이 EVALSHA 를 먼저 시도하고 서버가 그 sha 를 모르면 NOSCRIPT 로 튕긴 뒤 EVAL 로
-     * 다시 보내는데, 그 대가를 이벤트의 첫 요청이 문다. 발급이 가장 몰리는 순간이다.
      *
-     * 이 시험은 preloadScript 하나만 본다. 이벤트를 여는 경로가 그것을 실제로 부르는지는
-     * CouponEventOpenedListenerIntegrationTest 가 따로 본다.
+     * 스프링이 EVALSHA 를 먼저 시도하고 서버가 그 sha 를 모르면 NOSCRIPT 로 튕긴 뒤 EVAL 로
+     * 다시 보낸다. 그 EVAL 이 서버 캐시를 채우므로, 미리 올려 두는 장치가 없어도 첫 실행 하나가
+     * 그 일을 대신한다. 손해를 보는 것은 그 창에 들어간 몇 건뿐이다.
+     *
+     * 이 시험이 그 되돌아오는 경로를 못 박는다. 이것이 깨지면 매 요청이 본문을 통째로 실어 보낸다.
      */
     @Test
-    void 스크립트를_미리_올리면_서버가_그것을_안다() throws Exception {
+    void 캐시가_비어_있어도_첫_실행이_서버에_올린다() throws Exception {
+        이벤트를_연다();
         String sha = 스크립트_sha();
         redisTemplate.execute((RedisCallback<Object>) connection -> {
             connection.scriptingCommands().scriptFlush();
@@ -108,7 +110,7 @@ class CouponSeqAllocatorIntegrationTest extends IntegrationTestSupport {
         });
         assertThat(서버가_아는가(sha)).isFalse();
 
-        allocator.preloadScript();
+        assertThat(allocator.allocate(COUPON_ID, 1L, ISSUE_LIMIT)).isEqualTo(new SeqOutcome.Allocated(1));
 
         assertThat(서버가_아는가(sha)).isTrue();
     }

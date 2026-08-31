@@ -19,7 +19,6 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 
-import com.freshmarket.coupon.domain.CouponEventOpenedEvent;
 import com.freshmarket.coupon.domain.entity.Coupon;
 import com.freshmarket.coupon.domain.entity.CouponScope;
 import com.freshmarket.coupon.domain.entity.DiscountType;
@@ -33,7 +32,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
 
 @ExtendWith(MockitoExtension.class)
 class CouponEventServiceTest {
@@ -49,9 +47,6 @@ class CouponEventServiceTest {
     private CouponSeqInitializer seqInitializer;
 
     @Mock
-    private ApplicationEventPublisher eventPublisher;
-
-    @Mock
     private CouponCache couponCache;
 
     private CouponEventService sut;
@@ -59,7 +54,7 @@ class CouponEventServiceTest {
     @BeforeEach
     void setUp() {
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
-        sut = new CouponEventService(couponRepository, seqInitializer, eventPublisher, couponCache, fixed);
+        sut = new CouponEventService(couponRepository, seqInitializer, couponCache, fixed);
     }
 
     @Test
@@ -100,8 +95,6 @@ class CouponEventServiceTest {
 
         // then
         verify(seqInitializer).prepare(COUPON_ID, NOW.plusDays(1));
-        // 첫 요청이 EVALSHA 로 튕기지 않게 CouponEventOpenedListener 가 커밋 뒤에 스크립트를 올린다
-        verify(eventPublisher).publishEvent(new CouponEventOpenedEvent(COUPON_ID));
     }
 
     /*
