@@ -49,8 +49,8 @@ gap 693   DB 장애          순번은 나가고 쓰기만 실패한다
 안에 큐를 비우므로 손실이 없다. DB 가 죽을 때만 번호가 정상적으로 나간 뒤에 못 쓴다.
 
 > **이 `gap 0` 은 코드를 고쳐서 얻은 것이 아니다.** 애플리케이션은 한 줄도 안 바뀌었다.
-> 배수 로직(`CouponIssueFlusher.drainLeftovers`)은 처음부터 있었고 잘 돌고 있었다.
-> 바뀐 것은 **시험이 그 로직에 기회를 주었느냐**뿐이다. 아래 3절에 그 경위를 적었다.
+> 종료 처리는 처음부터 있었고, 바뀐 것은 **시험이 그것에 기회를 주었느냐**뿐이다.
+> 다만 이 값은 **보장된 것이 아니다.** 종료 순서에 구멍이 있다. 아래 3절에 둘 다 적었다.
 
 ---
 
@@ -101,8 +101,55 @@ event=COUPON_FLUSHER_STOPPED
 ### 어떻게 죽이느냐가 결과를 바꿨다
 
 처음에는 `systemctl stop` 으로 세웠고 `gap = 4` 가 났다. **코드를 고쳐 0 으로 만든 것이
-아니다.** 애플리케이션은 그대로이고, 바뀐 것은 주입 방식뿐이다. 앞의 방식이 종료 유예를
-주지 않아 이미 있던 배수 로직이 돌 기회를 못 얻었다.
+아니다.** 애플리케이션은 그대로이고, 바뀐 것은 주입 방식뿐이다.
+
+```
+systemctl stop  ->  ExecStop 이 docker compose down 이다. 컨테이너를 지운다. 유예가 없다
+docker stop     ->  SIGTERM 뒤 stop_grace_period 45s. 스프링이 종료 절차를 돈다
+```
+
+### 4건을 되찾은 것은 배수가 아니다
+
+`docker stop` 회차의 로그는 `event=COUPON_FLUSHER_LEFTOVERS size=1` 하나뿐이다.
+되찾은 것은 4건인데 배수가 건진 것은 1건이다. 나머지 3건은 다른 데서 왔다.
+
+`drainAll` 은 **큐만** 비운다. 그런데 플러시 스레드는 큐에서 꺼낸 티켓을 자기 지역
+`List<IssueTicket> batch` 에 쌓아 두고 (`batch-size: 500`), 이것들은 이미 큐 밖이라
+`drainAll` 이 못 본다. 이 티켓들을 살리는 것은 `stop()` 의 앞 두 줄이다.
+
+```java
+executor.shutdown();
+executor.awaitTermination(10초);   // 돌고 있던 batch 가 여기서 flush 까지 끝난다  <- 3건
+drainLeftovers();                  // 그러고도 큐에 남은 꼬리                        <- 1건
+```
+
+즉 회수의 본체는 `awaitTermination` 이고 `drainLeftovers` 는 꼬리다. `size` 는 배치 수가
+아니라 티켓 수(`leftovers.size()`)라, `size=1` 을 "손실이 1건이었다" 로 읽으면 안 된다.
+
+### `gap = 0` 은 보장된 값이 아니다
+
+종료 순서가 거꾸로다. `CouponIssueFlusher` 는 `getPhase()` 를 재정의하지 않아 기본값
+`Integer.MAX_VALUE` 이고, 톰캣의 우아한 종료는 그보다 낮다.
+
+```
+CouponIssueFlusher                  2147483647   재정의 안 함
+WebServerGracefulShutdownLifecycle  2147482623   = Integer.MAX_VALUE - 1024
+```
+
+`DefaultLifecycleProcessor.stopBeans` 는 `Comparator.reverseOrder()` 로 **높은 phase 부터**
+멈춘다. 그래서 **플러셔가 먼저 죽고 그다음에 톰캣이 남은 요청을 처리한다.** 그 사이에 들어온
+요청은 `hasRoom()` 을 통과해 Redis 순번을 받고 `submit()` 하는데, `submit()` 에는 종료
+가드가 없고 꺼내 갈 스레드는 없고 `drainLeftovers()` 는 이미 지나갔다. 그 순번은 gap 이 된다.
+
+이번 회차에서 이게 안 터진 것은 코드가 막아서가 아니다.
+
+```
+TargetConnectionErrorCount=4574   대부분 앱에 닿지 못하고 연결 단계에서 실패했다
+sold-out-final 2392               재고 1만이 이미 소진돼 순번 할당 자체가 없었다
+```
+
+재고가 남은 채로 종료되면 재현된다. 고치려면 `getPhase()` 를 톰캣보다 낮게(예:
+`Integer.MAX_VALUE - 2048`) 내려 플러셔가 **뒤에** 멈추게 해야 한다. 아직 안 고쳤다.
 
 ```
 systemctl stop  ->  docker compose down  ->  컨테이너를 지운다
@@ -233,6 +280,7 @@ ALB 오류가 다섯 회차 중 가장 크다 (502 9,363 / 연결 9,343). 두 �
   이벤트가 90초라 이 시험 안에서 못 봤다
 * **갑자기 죽는 경우.** `docker kill` 이나 인스턴스 강제 종료처럼 유예가 없을 때는 큐를
   못 비운다. 그때 `gap` 이 얼마나 되고 회수가 메우는지 확인하지 않았다
+* **종료 순서 결함.** 플러셔가 톰캣보다 먼저 멈춘다. 재고가 남은 채 종료되면 순번이 샌다.
 * **DB 장애의 `gap 693` 을 줄이는 길.** 쓰기 회로가 5,118건을 막아 이미 줄인 값이다.
   더 줄이려면 회로가 더 일찍 열려야 하는데, 그러면 정상 상황의 오판 위험이 커진다
 * 장애에서 회복. 도중에 끊는 것은 쟀지만 다시 붙였을 때의 회복 속도는 재지 않았다
