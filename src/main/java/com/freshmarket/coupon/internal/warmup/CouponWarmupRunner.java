@@ -80,6 +80,17 @@ public class CouponWarmupRunner implements ApplicationRunner {
     private static final int CONNECT_ATTEMPTS = 10;
     private static final Duration CONNECT_BACKOFF = Duration.ofMillis(100);
 
+    /*
+     * 워밍업 카운터의 수명이다. 기동할 때마다 다시 쓰므로 영구로 둘 이유가 없다.
+     *
+     * 영구 키로 두면 둘이 걸린다. 워밍업 쿠폰 ID 를 바꿔 배포할 때마다 옛 키가 하나씩 남고,
+     * ElastiCache 기본 축출 정책이 volatile-lru 라 만료가 없는 이 키는 축출 대상에서 빠진다.
+     * 메모리가 찼을 때 실제 발급 상태인 seq 와 pending 이 먼저 날아간다.
+     *
+     * maxDuration 이 60초라 한 시간이면 워밍업이 끝나고도 한참 남는다.
+     */
+    private static final Duration EXHAUSTED_TTL = Duration.ofHours(1);
+
     private final CouponWarmupProperties properties;
     private final JwtTokenProvider jwtTokenProvider;
     private final StringRedisTemplate redisTemplate;
@@ -152,7 +163,7 @@ public class CouponWarmupRunner implements ApplicationRunner {
     }
 
     private void markExhausted() {
-        redisTemplate.opsForValue().set(counterKey(), EXHAUSTED);
+        redisTemplate.opsForValue().set(counterKey(), EXHAUSTED, EXHAUSTED_TTL);
     }
 
     private String counterKey() {
