@@ -64,6 +64,22 @@ class CouponWarmupRunnerTest {
     }
 
     /*
+     * 카운터를 영구 키로 두면 워밍업 쿠폰 ID 를 바꿀 때마다 옛 키가 남고,
+     * volatile-lru 가 만료 없는 키를 축출하지 않아 실제 발급 상태가 먼저 밀려난다.
+     */
+    @Test
+    void 카운터에_만료를_건다() {
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        when(redis.hasKey(anyString())).thenReturn(false);
+        when(redis.opsForValue()).thenReturn(values);
+        when(webServer.getWebServer()).thenThrow(new IllegalStateException("여기까지 왔으면 충분하다"));
+
+        runner(enabled(1)).run(new DefaultApplicationArguments());
+
+        verify(values).set("coupon:1000000:counter", String.valueOf(Integer.MAX_VALUE), Duration.ofHours(1));
+    }
+
+    /*
      * 끝내 못 붙어도 예외가 밖으로 나가면 안 된다.
      * 나가면 인스턴스가 ready 를 못 받고 ASG 가 교체를 반복한다.
      */
