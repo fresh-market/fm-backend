@@ -645,7 +645,7 @@ coupon.warmup:
   coupon-id: 1000000    # 전용 워밍업 쿠폰. 카운터를 소진 상태로 세워 member_coupon 에 안 쓴다
   requests: 3000        # 여기서 p99 가 1초 아래로 떨어졌다 (0건이면 4.69초)
   concurrency: 20       # 순차로 보내면 실제 이벤트의 동시성을 못 흉내 낸다
-  max-duration: 60s     # 못 채워도 끝낸다. 없으면 readiness 가 영영 안 올라가 ASG 가 교체를 반복한다
+  max-duration: 60s     # 못 채워도 끝낸다. 없으면 readiness 가 안 올라가 이벤트를 못 연다
 ```
 
 `CouponWarmupRunner` 가 `ApplicationRunner` 라 `ApplicationReadyEvent` **앞에** 돈다. 스프링 부트가 그 이벤트에서 readiness 를 올리므로, 여기서 데우면 readiness 가 자연히 늦춰지고 `coupon-event.sh open` 의 "healthy 대기" 가 곧 "warm 대기" 가 된다. 스크립트는 안 바뀐다.

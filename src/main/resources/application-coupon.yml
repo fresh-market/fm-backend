@@ -253,6 +253,12 @@ coupon:
     requests: 3000
     # 순차로 보내면 실제 이벤트의 동시성을 못 흉내 낸다
     concurrency: 20
-    # 못 채워도 이 시간에 끝낸다. 없으면 readiness 가 영영 안 올라가고 ASG 가 교체를 반복한다.
-    # 3,000건이 약 30초였다. health_check_grace_period 300초 안에 넉넉히 들어간다
+    # 못 채워도 이 시간에 끝낸다.
+    #
+    # 없으면 readiness 가 영영 안 올라가 ALB 대상이 healthy 가 안 되고, coupon-event.sh open 의
+    # healthy 대기가 상한 600초를 태우고 실패한다. 전용 ASG 는 health_check_type 이 EC2 라
+    # 인스턴스를 죽이지 않으므로 자동 복구가 없다. 사람이 로그를 보고 알아채야 한다.
+    #
+    # 상한의 천장이 그 600초다. health_check_grace_period 300초가 아니다. 그 값은 EC2 상태
+    # 검사에 걸린 것이라 readiness 와 무관하다. 3,000건이 약 30초였으므로 60초는 그 안에 든다
     max-duration: 60s

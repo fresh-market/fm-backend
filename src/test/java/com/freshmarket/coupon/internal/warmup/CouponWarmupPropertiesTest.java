@@ -19,8 +19,8 @@ class CouponWarmupPropertiesTest {
             .withUserConfiguration(CouponWarmupConfig.class);
 
     /*
-     * 상한이 없으면 워밍업이 안 끝나 readiness 가 영영 안 올라가고 ASG 가 인스턴스를
-     * 교체하는 루프에 빠진다. 그래서 0 을 기동에서 막는다.
+     * 상한이 없으면 워밍업이 안 끝나 readiness 가 영영 안 올라가고, coupon-event.sh 의
+     * healthy 대기가 600초를 태우고 실패해 이벤트를 못 연다. 그래서 0 을 기동에서 막는다.
      */
     @Test
     void 상한이_0_이면_기동에서_막는다() {

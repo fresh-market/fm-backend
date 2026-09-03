@@ -116,7 +116,12 @@ public class CouponWarmupRunner implements ApplicationRunner {
         } catch (Exception e) {
             /*
              * 삼킨다. 워밍업은 최적화이지 정합성 요건이 아니다.
-             * 여기서 던지면 인스턴스가 ready 가 못 되고 ASG 가 교체를 반복한다.
+             *
+             * 여기서 던지면 인스턴스가 ready 를 못 받고, ALB 대상이 healthy 가 안 되어
+             * coupon-event.sh open 의 healthy 대기(상한 600초)가 실패한다. 이벤트를 못 연다.
+             *
+             * 전용 ASG 는 health_check_type 이 EC2 라 그 인스턴스를 죽이지는 않는다. 살아서
+             * 트래픽만 못 받으므로 자동 복구가 없고, 이 로그가 유일한 단서다.
              */
             log.warn("event=COUPON_WARMUP_FAILED elapsedMs={}", elapsedMillis(startedAt), e);
         }
