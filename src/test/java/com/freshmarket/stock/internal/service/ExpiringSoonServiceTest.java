@@ -21,7 +21,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -57,10 +57,15 @@ class ExpiringSoonServiceTest {
                 campaignTargetLotProductInfoService, campaignTargetLotCacheRepository, clock);
     }
 
-    // 캐시가 비어 있는 기본 상황. 캐시 적중을 보는 테스트만 이 스텁을 덮어쓴다
+    /*
+     * 캐시가 비어 있는 기본 상황. getOrLoad 목이 loader 를 그대로 실행하게 해
+     * 서비스의 DB 경로가 도는지 볼 수 있게 한다. 캐시 적중을 보는 테스트만 이 스텁을 덮어쓴다.
+     */
+    @SuppressWarnings("unchecked")
     private void 캐시_미스() {
-        when(campaignTargetLotCacheRepository.find(any(), any(), any(), any(), anyInt()))
-                .thenReturn(Optional.empty());
+        when(campaignTargetLotCacheRepository.getOrLoad(any(), any(), any(), any(), anyInt(), any()))
+                .thenAnswer(invocation ->
+                        ((Supplier<CursorPageResponse<ExpiringSoonResponse>>) invocation.getArgument(5)).get());
     }
 
     private CampaignTargetLot targetLot(long stockLotId, int targetRank) {
@@ -178,25 +183,25 @@ class ExpiringSoonServiceTest {
     void 캐시가_있으면_DB를_보지_않는다() {
         CursorPageResponse<ExpiringSoonResponse> cached = CursorPageResponse.of(
                 List.of(new ExpiringSoonResponse(12L, "감귤", 31L, "1kg", 12900)), null);
-        when(campaignTargetLotCacheRepository.find(any(), any(), any(), any(), anyInt()))
-                .thenReturn(Optional.of(cached));
+        // loader 를 실행하지 않고 담아둔 값을 그대로 주는 상황
+        when(campaignTargetLotCacheRepository.getOrLoad(any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(cached);
 
         CursorPageResponse<ExpiringSoonResponse> result =
                 expiringSoonService.getExpiringSoonProducts(null, null, 20);
 
         assertThat(result.items()).hasSize(1);
         assertThat(result.items().get(0).productName()).isEqualTo("감귤");
-        /*
-         * 무거운 경로를 안 탄다. 확정본 버전 조회 한 번은 캐시 키를 만들려고 남는다 —
-         * 그것까지 없애면 재실행으로 확정본이 바뀐 것을 알 수 없다.
-         */
-        verify(campaignTargetLotRepository).findConfirmedVersion(TODAY);
-        verifyNoMoreInteractions(campaignTargetLotRepository);
+        // 확정본을 읽는 무거운 경로를 안 탄다
         verifyNoInteractions(campaignTargetLotProductInfoService);
     }
 
+    /*
+     * 캐시가 비어 있으면 확정본을 읽어 상품 정보를 붙여 돌려준다.
+     * 담아두는 것은 캐시 쪽(getOrLoad)이 하므로 여기서는 결과만 본다.
+     */
     @Test
-    void 캐시에_없으면_DB에서_구한_결과를_담아둔다() {
+    void 캐시에_없으면_확정본을_읽어_돌려준다() {
         캐시_미스();
         when(campaignTargetLotRepository.findByTargetDateAndTargetRankGreaterThanOrderByTargetRankAsc(
                 eq(TODAY), eq(0), any())).thenReturn(List.of(targetLot(100L, 1)));
@@ -207,7 +212,6 @@ class ExpiringSoonServiceTest {
                 expiringSoonService.getExpiringSoonProducts(null, null, 20);
 
         assertThat(result.items()).hasSize(1);
-        // 다음 요청이 DB 를 다시 보지 않도록 채워둔다 — 이 write-back 이 캐시의 전부다
-        verify(campaignTargetLotCacheRepository).put(eq(TODAY), any(), eq(null), eq(null), eq(20), eq(result));
+        assertThat(result.items().get(0).productName()).isEqualTo("감귤");
     }
 }

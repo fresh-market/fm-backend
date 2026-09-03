@@ -15,7 +15,6 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -51,8 +50,9 @@ public class ExpiringSoonService {
     private final Clock clock;
 
     /*
-     * 확정본이라 하루 종일 값이 같아 캐시를 앞에 둔다. 캐시에 없으면 그대로 DB 에서 구하고
-     * 그 결과를 채워둔다 — 캐시는 없어도 동작에 지장이 없는 층이다.
+     * 확정본이라 하루 종일 값이 같아 캐시를 앞에 둔다. 캐시가 없으면 DB 에서 구해 채우는 것을
+     * 캐시 쪽이 한 번에 처리한다 — 조회와 적재를 나눠 부르면 같은 키가 동시에 미스했을 때
+     * 요청 수만큼 DB 로 내려간다(getOrLoad 주석 참고).
      *
      * 캐시 키에 확정본 버전을 함께 넣는다. 관리자가 재실행하면 그날 행이 새로 만들어져
      * 버전이 바뀌고, 키가 달라져 옛 응답을 다시 내보내지 않는다. 로컬 캐시라 인스턴스별로
@@ -68,16 +68,9 @@ public class ExpiringSoonService {
         LocalDate today = ExpiringSoonPolicy.businessToday(clock);
         Long version = campaignTargetLotRepository.findConfirmedVersion(today);
 
-        Optional<CursorPageResponse<ExpiringSoonResponse>> cached =
-                campaignTargetLotCacheRepository.find(today, version, categoryId, pageToken, effectivePageSize);
-        if (cached.isPresent()) {
-            return cached.get();
-        }
-
-        CursorPageResponse<ExpiringSoonResponse> response =
-                loadFromDatabase(today, categoryId, pageToken, effectivePageSize);
-        campaignTargetLotCacheRepository.put(today, version, categoryId, pageToken, effectivePageSize, response);
-        return response;
+        return campaignTargetLotCacheRepository.getOrLoad(
+                today, version, categoryId, pageToken, effectivePageSize,
+                () -> loadFromDatabase(today, categoryId, pageToken, effectivePageSize));
     }
 
     private CursorPageResponse<ExpiringSoonResponse> loadFromDatabase(

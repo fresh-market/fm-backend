@@ -4,7 +4,7 @@ import com.freshmarket.common.response.CursorPageResponse;
 import com.freshmarket.stock.internal.dto.ExpiringSoonResponse;
 import java.time.Duration;
 import java.time.LocalDate;
-import java.util.Optional;
+import java.util.function.Supplier;
 import org.springframework.stereotype.Repository;
 
 import com.github.benmanes.caffeine.cache.Cache;
@@ -32,8 +32,8 @@ import com.github.benmanes.caffeine.cache.Caffeine;
  * <p><b>빈 결과는 캐시하지 않는다.</b> 자정 직후 배치가 아직 커밋하기 전에 들어온 요청이
  * 빈 목록을 굳혀버리는 것을 막기 위해서다. 빈 응답은 값이 싸므로 매번 DB 를 보는 편이 낫다.
  *
- * <p>없으면 없는 대로 DB 에서 구하면 되므로 조회는 Optional 을 준다. 호출부가 캐시 유무로
- * 분기할 일이 없다는 뜻이다.
+ * <p><b>조회와 적재를 한 메서드로 묶었다.</b> 나눠 두면 같은 키가 동시에 미스했을 때 요청 수만큼
+ * 원본 조회가 도는데, 그게 하필 캐시가 가장 필요한 순간(쿠폰 오픈 직후)에 일어난다.
  */
 @Repository
 public class CampaignTargetLotCacheRepository {
@@ -50,17 +50,35 @@ public class CampaignTargetLotCacheRepository {
             .expireAfterWrite(EXPIRE_AFTER_WRITE)
             .build();
 
-    public Optional<CursorPageResponse<ExpiringSoonResponse>> find(
-            LocalDate targetDate, Long version, Long categoryId, String pageToken, int pageSize) {
-        return Optional.ofNullable(cache.getIfPresent(keyOf(targetDate, version, categoryId, pageToken, pageSize)));
-    }
+    /*
+     * 캐시에 있으면 그것을, 없으면 loader 로 구해 담고 돌려준다.
+     *
+     * 조회와 적재를 따로 부르지 않고 하나로 묶은 이유가 있다. 나눠 부르면 같은 키가 동시에
+     * 미스했을 때 들어온 요청 수만큼 loader 가 돈다 — 캐시가 막으려던 바로 그 순간
+     * (쿠폰 오픈 직후 캐시가 비어 있을 때) 원본 조회가 폭주한다.
+     *
+     * Caffeine 의 get(key, loader) 는 같은 키에 대해 loader 를 한 번만 실행하고 나머지는
+     * 그 결과를 기다린다. 요청이 몇 개든 DB 로는 하나만 내려간다.
+     *
+     * 빈 결과는 담아두지 않는다. 자정 직후 배치가 아직 커밋하기 전에 들어온 요청이 빈 목록을
+     * 굳혀버리면 그날 대상이 확정된 뒤에도 계속 빈 응답을 주기 때문이다. 담은 뒤 곧바로
+     * 지우는 방식을 쓴다 — loader 가 null 을 주면 기록하지 않는 성질을 쓸 수도 있지만,
+     * 그러면 반환값이 null 인지 확인하는 분기가 생겨 흐름이 한 겹 늘어난다.
+     *
+     * 지우기 전 아주 짧은 순간에 다른 요청이 그 빈 결과를 받을 수 있다. 어차피 그 시점에
+     * 직접 조회해도 같은 빈 결과라 문제가 되지 않는다.
+     */
+    public CursorPageResponse<ExpiringSoonResponse> getOrLoad(
+            LocalDate targetDate, Long version, Long categoryId, String pageToken, int pageSize,
+            Supplier<CursorPageResponse<ExpiringSoonResponse>> loader) {
 
-    public void put(LocalDate targetDate, Long version, Long categoryId, String pageToken, int pageSize,
-            CursorPageResponse<ExpiringSoonResponse> response) {
+        String key = keyOf(targetDate, version, categoryId, pageToken, pageSize);
+        CursorPageResponse<ExpiringSoonResponse> response = cache.get(key, ignored -> loader.get());
+
         if (response.items().isEmpty()) {
-            return;
+            cache.invalidate(key);
         }
-        cache.put(keyOf(targetDate, version, categoryId, pageToken, pageSize), response);
+        return response;
     }
 
     /*
