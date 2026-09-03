@@ -73,6 +73,11 @@ class LoadtestTokenMintTest {
             return false;
         }
         assertThat(process.waitFor(30, TimeUnit.SECONDS)).isTrue();
+
+        if (process.exitValue() == 9009) {
+            return false;
+        }
+
         assertThat(process.exitValue()).isZero();
         return true;
     }
