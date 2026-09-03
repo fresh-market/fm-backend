@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -96,11 +95,11 @@ class CampaignTargetLotRebuildServiceTest {
         폐기_이력_없음();
         when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt())).thenReturn(candidates);
 
-        batch.rebuild();
+        assertThat(batch.rebuild()).isEqualTo(1);
 
-        // then — 5건 중 하위 10%(ceil(5/10)=1건) 만 대상. 가장 낮은 소진율 하나만 저장된다
+        // 건수는 반환값으로 본다. 어느 로트가 1순위인지는 저장된 값을 봐야 알 수 있어 캡처한다
         ArgumentCaptor<CampaignTargetLot> captor = ArgumentCaptor.forClass(CampaignTargetLot.class);
-        verify(campaignTargetLotRepository, times(1)).save(captor.capture());
+        verify(campaignTargetLotRepository).save(captor.capture());
         assertThatSaved(captor.getValue(), 4L, 1);
     }
 
@@ -111,9 +110,8 @@ class CampaignTargetLotRebuildServiceTest {
         폐기_이력_없음();
         when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt())).thenReturn(candidates(50));
 
-        batch.rebuild();
-
-        verify(campaignTargetLotRepository, times(5)).save(any());
+        // 확정 건수는 rebuild() 가 돌려준다. save 호출 횟수를 세면 저장 방식을 바꿀 때 깨진다
+        assertThat(batch.rebuild()).isEqualTo(5);
     }
 
     @Test
@@ -123,9 +121,7 @@ class CampaignTargetLotRebuildServiceTest {
         폐기_이력_없음();
         when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt())).thenReturn(candidates(10));
 
-        batch.rebuild();
-
-        verify(campaignTargetLotRepository, times(1)).save(any());
+        assertThat(batch.rebuild()).isEqualTo(1);
     }
 
     @Test
@@ -143,11 +139,11 @@ class CampaignTargetLotRebuildServiceTest {
         when(stockMovementRepository.findDisposedQtyByStockLotIds(any()))
                 .thenReturn(List.of(new LotDisposedQty(1L, 30L)));
 
-        batch.rebuild();
+        assertThat(batch.rebuild()).isEqualTo(1);
 
         // then — 2건 중 하위 10%(ceil(2/10)=1건). 폐기를 걷어낸 lot1 이 1순위로 저장된다
         ArgumentCaptor<CampaignTargetLot> captor = ArgumentCaptor.forClass(CampaignTargetLot.class);
-        verify(campaignTargetLotRepository, times(1)).save(captor.capture());
+        verify(campaignTargetLotRepository).save(captor.capture());
         assertThatSaved(captor.getValue(), 1L, 1);
     }
 
