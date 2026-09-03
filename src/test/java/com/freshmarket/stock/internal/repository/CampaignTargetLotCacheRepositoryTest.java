@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 class CampaignTargetLotCacheRepositoryTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 8, 28);
+    private static final Long VERSION = 100L;
 
     private CampaignTargetLotCacheRepository repository;
 
@@ -33,9 +34,9 @@ class CampaignTargetLotCacheRepositoryTest {
 
     @Test
     void 담아두면_같은_조건으로_다시_꺼낼_수_있다() {
-        repository.put(TODAY, null, null, 20, response("감귤"));
+        repository.put(TODAY, VERSION, null, null, 20, response("감귤"));
 
-        Optional<CursorPageResponse<ExpiringSoonResponse>> found = repository.find(TODAY, null, null, 20);
+        Optional<CursorPageResponse<ExpiringSoonResponse>> found = repository.find(TODAY, VERSION, null, null, 20);
 
         assertThat(found).isPresent();
         assertThat(found.get().items().get(0).productName()).isEqualTo("감귤");
@@ -43,7 +44,7 @@ class CampaignTargetLotCacheRepositoryTest {
 
     @Test
     void 담아둔_적이_없으면_비어_있다() {
-        assertThat(repository.find(TODAY, null, null, 20)).isEmpty();
+        assertThat(repository.find(TODAY, VERSION, null, null, 20)).isEmpty();
     }
 
     /*
@@ -52,31 +53,31 @@ class CampaignTargetLotCacheRepositoryTest {
      */
     @Test
     void 기준일이_다르면_다른_항목이다() {
-        repository.put(TODAY, null, null, 20, response("어제 감귤"));
+        repository.put(TODAY, VERSION, null, null, 20, response("어제 감귤"));
 
-        assertThat(repository.find(TODAY.plusDays(1), null, null, 20)).isEmpty();
+        assertThat(repository.find(TODAY.plusDays(1), VERSION, null, null, 20)).isEmpty();
     }
 
     @Test
     void 카테고리가_다르면_다른_항목이다() {
-        repository.put(TODAY, 4L, null, 20, response("과일"));
+        repository.put(TODAY, VERSION, 4L, null, 20, response("과일"));
 
-        assertThat(repository.find(TODAY, 5L, null, 20)).isEmpty();
-        assertThat(repository.find(TODAY, null, null, 20)).isEmpty();
+        assertThat(repository.find(TODAY, VERSION, 5L, null, 20)).isEmpty();
+        assertThat(repository.find(TODAY, VERSION, null, null, 20)).isEmpty();
     }
 
     @Test
     void 페이지_토큰이_다르면_다른_항목이다() {
-        repository.put(TODAY, null, null, 20, response("첫 페이지"));
+        repository.put(TODAY, VERSION, null, null, 20, response("첫 페이지"));
 
-        assertThat(repository.find(TODAY, null, "cursor-token", 20)).isEmpty();
+        assertThat(repository.find(TODAY, VERSION, null, "cursor-token", 20)).isEmpty();
     }
 
     @Test
     void 페이지_크기가_다르면_다른_항목이다() {
-        repository.put(TODAY, null, null, 20, response("20건"));
+        repository.put(TODAY, VERSION, null, null, 20, response("20건"));
 
-        assertThat(repository.find(TODAY, null, null, 10)).isEmpty();
+        assertThat(repository.find(TODAY, VERSION, null, null, 10)).isEmpty();
     }
 
     /*
@@ -85,8 +86,20 @@ class CampaignTargetLotCacheRepositoryTest {
      */
     @Test
     void 빈_결과는_담지_않는다() {
-        repository.put(TODAY, null, null, 20, CursorPageResponse.of(List.of(), null));
+        repository.put(TODAY, VERSION, null, null, 20, CursorPageResponse.of(List.of(), null));
 
-        assertThat(repository.find(TODAY, null, null, 20)).isEmpty();
+        assertThat(repository.find(TODAY, VERSION, null, null, 20)).isEmpty();
+    }
+
+    /*
+     * 관리자가 재실행하면 그날 행이 새로 만들어져 확정본 버전이 바뀐다.
+     * 키가 달라져야 옛 응답을 다시 내보내지 않는다 — 로컬 캐시라 인스턴스별로 비울 방법이
+     * 없어 무효화 대신 이 키 분리로 푼다.
+     */
+    @Test
+    void 확정본_버전이_다르면_다른_항목이다() {
+        repository.put(TODAY, VERSION, null, null, 20, response("재실행 전 감귤"));
+
+        assertThat(repository.find(TODAY, VERSION + 1, null, null, 20)).isEmpty();
     }
 }

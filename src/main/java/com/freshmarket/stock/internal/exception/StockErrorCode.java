@@ -44,6 +44,15 @@ public enum StockErrorCode implements ErrorCode {
     // 같은 로트를 동시에 건드리는 reserve/confirm/release/expire와 폐기가 경합한 경우
     DISPOSAL_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-012", "동일한 로트에 대한 처리가 아직 진행 중입니다. 잠시 후 다시 시도해주세요."),
     /*
+     * 캠페인 대상 확정이 이미 돌고 있는데 또 들어온 경우.
+     *
+     * 자정 스케줄과 관리자 재실행이 같은 확정 로직을 쓰므로 겹칠 수 있다. 확정은 그날 행을
+     * 지우고 다시 넣는 작업이라 겹치면 uk_campaign_target_date_lot 이 뒤엣것을 거절한다.
+     * 그 상황을 500 이 아니라 "지금은 안 되니 잠시 후" 로 알린다.
+     */
+    CAMPAIGN_REBUILD_IN_PROGRESS(HttpStatus.CONFLICT, "STOCK-014",
+            "캠페인 대상 확정이 아직 진행 중입니다. 잠시 후 다시 시도해주세요."),
+    /*
      * (CMP-4-04) 알려진 제약 위반이 아닌 저장 실패(로트 입고, 폐기 이력 저장)를 여기로 묶는다.
      * 원인(DB 예외 메시지)은 cause로만 유지해 로그에 남기고, 응답에는 이 고정 문구만 나간다 —
      * 내부 DB 오류 메시지를 그대로 클라이언트에 노출하지 않는다.

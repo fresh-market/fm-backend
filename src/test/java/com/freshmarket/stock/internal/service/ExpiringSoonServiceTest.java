@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.freshmarket.common.response.CursorPageResponse;
@@ -58,7 +59,7 @@ class ExpiringSoonServiceTest {
 
     // 캐시가 비어 있는 기본 상황. 캐시 적중을 보는 테스트만 이 스텁을 덮어쓴다
     private void 캐시_미스() {
-        when(campaignTargetLotCacheRepository.find(any(), any(), any(), anyInt()))
+        when(campaignTargetLotCacheRepository.find(any(), any(), any(), any(), anyInt()))
                 .thenReturn(Optional.empty());
     }
 
@@ -177,7 +178,7 @@ class ExpiringSoonServiceTest {
     void 캐시가_있으면_DB를_보지_않는다() {
         CursorPageResponse<ExpiringSoonResponse> cached = CursorPageResponse.of(
                 List.of(new ExpiringSoonResponse(12L, "감귤", 31L, "1kg", 12900)), null);
-        when(campaignTargetLotCacheRepository.find(any(), any(), any(), anyInt()))
+        when(campaignTargetLotCacheRepository.find(any(), any(), any(), any(), anyInt()))
                 .thenReturn(Optional.of(cached));
 
         CursorPageResponse<ExpiringSoonResponse> result =
@@ -185,7 +186,13 @@ class ExpiringSoonServiceTest {
 
         assertThat(result.items()).hasSize(1);
         assertThat(result.items().get(0).productName()).isEqualTo("감귤");
-        verifyNoInteractions(campaignTargetLotRepository, campaignTargetLotProductInfoService);
+        /*
+         * 무거운 경로를 안 탄다. 확정본 버전 조회 한 번은 캐시 키를 만들려고 남는다 —
+         * 그것까지 없애면 재실행으로 확정본이 바뀐 것을 알 수 없다.
+         */
+        verify(campaignTargetLotRepository).findConfirmedVersion(TODAY);
+        verifyNoMoreInteractions(campaignTargetLotRepository);
+        verifyNoInteractions(campaignTargetLotProductInfoService);
     }
 
     @Test
@@ -201,6 +208,6 @@ class ExpiringSoonServiceTest {
 
         assertThat(result.items()).hasSize(1);
         // 다음 요청이 DB 를 다시 보지 않도록 채워둔다 — 이 write-back 이 캐시의 전부다
-        verify(campaignTargetLotCacheRepository).put(eq(TODAY), eq(null), eq(null), eq(20), eq(result));
+        verify(campaignTargetLotCacheRepository).put(eq(TODAY), any(), eq(null), eq(null), eq(20), eq(result));
     }
 }

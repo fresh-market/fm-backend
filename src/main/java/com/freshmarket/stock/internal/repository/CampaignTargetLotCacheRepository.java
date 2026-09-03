@@ -21,9 +21,13 @@ import com.github.benmanes.caffeine.cache.Caffeine;
  * (모든 인스턴스가 같은 확정본을 읽으므로 각자 채워도 내용이 같다), 네트워크 왕복 없이 읽는
  * 것이 목적이기 때문이다. 앱 인스턴스가 최대 2대라 최악의 경우에도 DB 조회가 2배에 그친다.
  *
- * <p><b>TTL 은 정확성이 아니라 메모리 회수를 위한 것이다.</b> 캐시 키에 기준일이 들어가 있어
- * 자정이 지나면 키 자체가 달라진다 — 지난 날짜의 값을 잘못 내보낼 경로가 없다. 그래서 만료는
- * 오래된 날짜 항목을 치우는 역할만 한다.
+ * <p><b>TTL 은 정확성이 아니라 메모리 회수를 위한 것이다.</b> 캐시 키에 기준일과 확정본
+ * 버전이 들어가 있어, 자정이 지나거나 배치를 다시 돌리면 키 자체가 달라진다 — 지난 값을
+ * 잘못 내보낼 경로가 없다. 그래서 만료는 아무도 안 찾게 된 옛 항목을 치우는 역할만 한다.
+ *
+ * <p><b>무효화 대신 키 분리를 쓰는 이유가 있다.</b> 로컬 캐시라 한 인스턴스에서 비워도
+ * 나머지는 그대로다. 관리자 재실행은 API 인스턴스 중 한 대로만 들어오므로 비우는 방식으로는
+ * 나머지를 손댈 수 없다. 키에 버전을 넣으면 모든 인스턴스가 각자 새 키를 만들어 채운다.
  *
  * <p><b>빈 결과는 캐시하지 않는다.</b> 자정 직후 배치가 아직 커밋하기 전에 들어온 요청이
  * 빈 목록을 굳혀버리는 것을 막기 위해서다. 빈 응답은 값이 싸므로 매번 DB 를 보는 편이 낫다.
@@ -47,24 +51,23 @@ public class CampaignTargetLotCacheRepository {
             .build();
 
     public Optional<CursorPageResponse<ExpiringSoonResponse>> find(
-            LocalDate targetDate, Long categoryId, String pageToken, int pageSize) {
-        return Optional.ofNullable(cache.getIfPresent(keyOf(targetDate, categoryId, pageToken, pageSize)));
+            LocalDate targetDate, Long version, Long categoryId, String pageToken, int pageSize) {
+        return Optional.ofNullable(cache.getIfPresent(keyOf(targetDate, version, categoryId, pageToken, pageSize)));
     }
 
-    public void put(LocalDate targetDate, Long categoryId, String pageToken, int pageSize,
+    public void put(LocalDate targetDate, Long version, Long categoryId, String pageToken, int pageSize,
             CursorPageResponse<ExpiringSoonResponse> response) {
         if (response.items().isEmpty()) {
             return;
         }
-        cache.put(keyOf(targetDate, categoryId, pageToken, pageSize), response);
+        cache.put(keyOf(targetDate, version, categoryId, pageToken, pageSize), response);
     }
 
     /*
-     * 담아둔 것을 전부 버린다.
+     * 담아둔 것을 전부 버린다. 테스트가 회차 사이를 격리하는 데 쓴다.
      *
-     * 배치를 같은 날 다시 돌리면 확정본이 바뀌는데, 캐시는 그것을 알 방법이 없어 만료될 때까지
-     * 옛 목록을 준다. 그때 비우기 위한 것이다. 다만 로컬 캐시라 이 인스턴스만 비워지므로,
-     * 여러 대가 떠 있으면 나머지는 만료를 기다려야 한다 — 그 시간을 EXPIRE_AFTER_WRITE 가 묶는다.
+     * 운영에서 이것을 부를 일은 없다. 확정본이 바뀌는 경우는 키에 버전이 들어가 있어
+     * 저절로 갈리기 때문이다.
      */
     public void clear() {
         cache.invalidateAll();
@@ -75,8 +78,9 @@ public class CampaignTargetLotCacheRepository {
      * 기준일이 앞에 있어 자정이 지나면 키가 통째로 달라진다.
      * pageToken 은 불투명 문자열이라 그대로 쓰고, 첫 페이지(null)는 "first" 로 구분한다.
      */
-    private String keyOf(LocalDate targetDate, Long categoryId, String pageToken, int pageSize) {
+    private String keyOf(LocalDate targetDate, Long version, Long categoryId, String pageToken, int pageSize) {
         return targetDate
+                + ":v" + version
                 + ":" + (categoryId != null ? categoryId : "all")
                 + ":" + (pageToken != null ? pageToken : "first")
                 + ":" + pageSize;
