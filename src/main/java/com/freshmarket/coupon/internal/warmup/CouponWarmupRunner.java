@@ -54,7 +54,7 @@ public class CouponWarmupRunner implements ApplicationRunner {
     /*
      * 워밍업이 쓸 회원 식별자다. 실재하지 않아도 된다.
      *
-     * 워밍업 쿠폰은 재고가 0 이라 요청이 순번 확보에서 소진으로 끝나고 member_coupon 에
+     * 러너가 카운터를 소진 상태로 세워 두어 요청이 순번 확보에서 끝나고 member_coupon 에
      * 아무것도 안 쓴다. 그래서 fk_mc_member 에 걸릴 일이 없다. 토큰의 주체로만 쓰인다.
      */
     private static final long WARMUP_MEMBER_ID = -1L;
@@ -68,7 +68,7 @@ public class CouponWarmupRunner implements ApplicationRunner {
      * 경로(Lua, 회로, 큐)를 하나도 안 지나고, 그 -2 가 재건까지 깨운다. 재건기는 켜져 있고
      * 수량이 있는 쿠폰의 카운터가 없으면 손실로 보기 때문이다.
      *
-     * 총량보다 크기만 하면 되므로 int 상한을 쓴다. V32 의 total_quantity 값에 안 묶인다.
+     * 총량보다 크기만 하면 되므로 int 상한을 쓴다. V33 의 total_quantity 값에 안 묶인다.
      * 스크립트가 INCR 로 이 값을 넘긴 뒤 DECR 로 되돌리므로 값이 자라지도 않는다.
      */
     private static final String EXHAUSTED = String.valueOf(Integer.MAX_VALUE);
@@ -123,12 +123,6 @@ public class CouponWarmupRunner implements ApplicationRunner {
     }
 
     /*
-     * 이 쿠폰을 소진 상태로 세운다. 워밍업 요청이 발급까지 가면 안 된다.
-     *
-     * 발급되면 member_coupon 에 행이 생기고 fk_mc_member 가 워밍업용 회원 행을 요구한다.
-     * 소진에서 멈추면 순번 확보까지는 다 지나면서 DB 에는 아무것도 안 쓴다.
-     */
-    /*
      * 첫 Redis 명령을 보내기 전에 커넥션부터 세운다.
      *
      * 이 JVM 의 첫 명령은 DNS 조회와 TCP 핸드셰이크와 Lettuce 초기화를 함께 문다. 그 전부가
@@ -162,6 +156,12 @@ public class CouponWarmupRunner implements ApplicationRunner {
         }
     }
 
+    /*
+     * 이 쿠폰을 소진 상태로 세운다. 워밍업 요청이 발급까지 가면 안 된다.
+     *
+     * 발급되면 member_coupon 에 행이 생기고 fk_mc_member 가 워밍업용 회원 행을 요구한다.
+     * 소진에서 멈추면 순번 확보까지는 다 지나면서 DB 에는 아무것도 안 쓴다.
+     */
     private void markExhausted() {
         redisTemplate.opsForValue().set(counterKey(), EXHAUSTED, EXHAUSTED_TTL);
     }
@@ -224,7 +224,7 @@ public class CouponWarmupRunner implements ApplicationRunner {
                 .timeout(Duration.ofSeconds(2))
                 .POST(HttpRequest.BodyPublishers.noBody())
                 .build();
-        // 응답 코드는 보지 않는다. 소진(409)이 정상이고, 무엇이 오든 경로는 지나갔다
+        // 응답 코드는 보지 않는다. 최종 소진(410)이 정상이고, 무엇이 오든 경로는 지나갔다
         client.send(request, HttpResponse.BodyHandlers.discarding());
     }
 

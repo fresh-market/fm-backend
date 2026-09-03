@@ -247,7 +247,7 @@ coupon:
   # coupon-event.sh open 의 "healthy 대기" 가 곧 "warm 대기" 가 되고 스크립트는 안 바뀐다.
   warmup:
     enabled: true
-    # 전용 쿠폰(V32). 러너가 카운터를 소진 상태로 세워 두어 member_coupon 에 아무것도 안 쓴다
+    # 전용 쿠폰(V33). 러너가 카운터를 소진 상태로 세워 두어 member_coupon 에 아무것도 안 쓴다
     coupon-id: 1000000
     # 3,000 에서 p99 가 1초 아래로 떨어졌다. 200 으로는 모자랐다 (최대 응답 1.72초)
     requests: 3000
