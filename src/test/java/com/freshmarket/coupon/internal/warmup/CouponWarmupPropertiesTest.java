@@ -65,7 +65,8 @@ class CouponWarmupPropertiesTest {
 
     @Test
     void 음수_동시성은_막는다() {
-        assertThatThrownBy(() -> new CouponWarmupProperties(true, 1L, 10, 0, Duration.ofSeconds(1)))
+        assertThatThrownBy(() ->
+                new CouponWarmupProperties(true, 1L, 10, 0, Duration.ofSeconds(1), 0, Duration.ofSeconds(20)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("concurrency");
     }

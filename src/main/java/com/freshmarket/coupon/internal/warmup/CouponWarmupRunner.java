@@ -42,8 +42,13 @@ import org.springframework.stereotype.Component;
  * 워밍업 3,000건     p99 0.288 ~ 0.939초 (표본 5)
  * </pre>
  *
+ * <p>이 러너가 보내는 HTTP 요청은 <b>큐 앞에서 멈춘다.</b> 카운터를 소진으로 세워 두어 요청이
+ * 순번 확보에서 끝나기 때문이다. 배치 INSERT 는 {@link CouponWriteWarmup} 이 넣었다 되돌리는
+ * 방식으로 맡는다.
+ *
  * <p>자세한 측정은 {@code fm-infra} 의
- * {@code docs/verification/선착순쿠폰_워밍업_설계와측정.md} 에 있다.
+ * {@code docs/verification/선착순쿠폰_워밍업_설계와측정.md} 에,
+ * 지금 도는 것의 요약은 {@code docs/coupon/warmup.md} 에 있다.
  */
 @Slf4j
 @Component
@@ -101,6 +106,9 @@ public class CouponWarmupRunner implements ApplicationRunner {
      */
     private final WebServerApplicationContext webServerContext;
 
+    // HTTP 요청이 못 지나는 배치 INSERT 를 맡는다
+    private final CouponWriteWarmup writeWarmup;
+
     @Override
     public void run(ApplicationArguments args) {
         if (!properties.enabled()) {
@@ -111,8 +119,13 @@ public class CouponWarmupRunner implements ApplicationRunner {
             connectRedis();
             markExhausted();
             Result result = warmUp();
-            log.info("event=COUPON_WARMUP_DONE sent={} ok={} elapsedMs={}",
-                    result.sent(), result.ok(), elapsedMillis(startedAt));
+            /*
+             * 쓰기 경로는 HTTP 뒤에 데운다.
+             * 이쪽이 나중에 붙은 것이고, 실패해도 앞의 것은 이미 끝나 있어야 한다.
+             */
+            int writtenRows = writeWarmup.warmUp();
+            log.info("event=COUPON_WARMUP_DONE sent={} ok={} writeRows={} elapsedMs={}",
+                    result.sent(), result.ok(), writtenRows, elapsedMillis(startedAt));
         } catch (Exception e) {
             /*
              * 삼킨다. 워밍업은 최적화이지 정합성 요건이 아니다.
