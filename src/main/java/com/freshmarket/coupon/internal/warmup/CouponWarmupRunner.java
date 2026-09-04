@@ -42,8 +42,13 @@ import org.springframework.stereotype.Component;
  * 워밍업 3,000건     p99 0.288 ~ 0.939초 (표본 5)
  * </pre>
  *
+ * <p>이 러너가 보내는 HTTP 요청은 <b>큐 앞에서 멈춘다.</b> 카운터를 소진으로 세워 두어 요청이
+ * 순번 확보에서 끝나기 때문이다. 배치 INSERT 는 {@link CouponWriteWarmup} 이 넣었다 되돌리는
+ * 방식으로 맡는다.
+ *
  * <p>자세한 측정은 {@code fm-infra} 의
- * {@code docs/verification/선착순쿠폰_워밍업_설계와측정.md} 에 있다.
+ * {@code docs/verification/선착순쿠폰_워밍업_설계와측정.md} 에,
+ * 지금 도는 것의 요약은 {@code docs/coupon/warmup.md} 에 있다.
  */
 @Slf4j
 @Component
@@ -54,7 +59,7 @@ public class CouponWarmupRunner implements ApplicationRunner {
     /*
      * 워밍업이 쓸 회원 식별자다. 실재하지 않아도 된다.
      *
-     * 워밍업 쿠폰은 재고가 0 이라 요청이 순번 확보에서 소진으로 끝나고 member_coupon 에
+     * 러너가 카운터를 소진 상태로 세워 두어 요청이 순번 확보에서 끝나고 member_coupon 에
      * 아무것도 안 쓴다. 그래서 fk_mc_member 에 걸릴 일이 없다. 토큰의 주체로만 쓰인다.
      */
     private static final long WARMUP_MEMBER_ID = -1L;
@@ -68,7 +73,7 @@ public class CouponWarmupRunner implements ApplicationRunner {
      * 경로(Lua, 회로, 큐)를 하나도 안 지나고, 그 -2 가 재건까지 깨운다. 재건기는 켜져 있고
      * 수량이 있는 쿠폰의 카운터가 없으면 손실로 보기 때문이다.
      *
-     * 총량보다 크기만 하면 되므로 int 상한을 쓴다. V32 의 total_quantity 값에 안 묶인다.
+     * 총량보다 크기만 하면 되므로 int 상한을 쓴다. V33 의 total_quantity 값에 안 묶인다.
      * 스크립트가 INCR 로 이 값을 넘긴 뒤 DECR 로 되돌리므로 값이 자라지도 않는다.
      */
     private static final String EXHAUSTED = String.valueOf(Integer.MAX_VALUE);
@@ -101,6 +106,9 @@ public class CouponWarmupRunner implements ApplicationRunner {
      */
     private final WebServerApplicationContext webServerContext;
 
+    // HTTP 요청이 못 지나는 배치 INSERT 를 맡는다
+    private final CouponWriteWarmup writeWarmup;
+
     @Override
     public void run(ApplicationArguments args) {
         if (!properties.enabled()) {
@@ -111,23 +119,27 @@ public class CouponWarmupRunner implements ApplicationRunner {
             connectRedis();
             markExhausted();
             Result result = warmUp();
-            log.info("event=COUPON_WARMUP_DONE sent={} ok={} elapsedMs={}",
-                    result.sent(), result.ok(), elapsedMillis(startedAt));
+            /*
+             * 쓰기 경로는 HTTP 뒤에 데운다.
+             * 이쪽이 나중에 붙은 것이고, 실패해도 앞의 것은 이미 끝나 있어야 한다.
+             */
+            int writtenRows = writeWarmup.warmUp();
+            log.info("event=COUPON_WARMUP_DONE sent={} ok={} writeRows={} elapsedMs={}",
+                    result.sent(), result.ok(), writtenRows, elapsedMillis(startedAt));
         } catch (Exception e) {
             /*
              * 삼킨다. 워밍업은 최적화이지 정합성 요건이 아니다.
-             * 여기서 던지면 인스턴스가 ready 가 못 되고 ASG 가 교체를 반복한다.
+             *
+             * 여기서 던지면 인스턴스가 ready 를 못 받고, ALB 대상이 healthy 가 안 되어
+             * coupon-event.sh open 의 healthy 대기(상한 600초)가 실패한다. 이벤트를 못 연다.
+             *
+             * 전용 ASG 는 health_check_type 이 EC2 라 그 인스턴스를 죽이지는 않는다. 살아서
+             * 트래픽만 못 받으므로 자동 복구가 없고, 이 로그가 유일한 단서다.
              */
             log.warn("event=COUPON_WARMUP_FAILED elapsedMs={}", elapsedMillis(startedAt), e);
         }
     }
 
-    /*
-     * 이 쿠폰을 소진 상태로 세운다. 워밍업 요청이 발급까지 가면 안 된다.
-     *
-     * 발급되면 member_coupon 에 행이 생기고 fk_mc_member 가 워밍업용 회원 행을 요구한다.
-     * 소진에서 멈추면 순번 확보까지는 다 지나면서 DB 에는 아무것도 안 쓴다.
-     */
     /*
      * 첫 Redis 명령을 보내기 전에 커넥션부터 세운다.
      *
@@ -162,6 +174,12 @@ public class CouponWarmupRunner implements ApplicationRunner {
         }
     }
 
+    /*
+     * 이 쿠폰을 소진 상태로 세운다. 워밍업 요청이 발급까지 가면 안 된다.
+     *
+     * 발급되면 member_coupon 에 행이 생기고 fk_mc_member 가 워밍업용 회원 행을 요구한다.
+     * 소진에서 멈추면 순번 확보까지는 다 지나면서 DB 에는 아무것도 안 쓴다.
+     */
     private void markExhausted() {
         redisTemplate.opsForValue().set(counterKey(), EXHAUSTED, EXHAUSTED_TTL);
     }
@@ -224,7 +242,7 @@ public class CouponWarmupRunner implements ApplicationRunner {
                 .timeout(Duration.ofSeconds(2))
                 .POST(HttpRequest.BodyPublishers.noBody())
                 .build();
-        // 응답 코드는 보지 않는다. 소진(409)이 정상이고, 무엇이 오든 경로는 지나갔다
+        // 응답 코드는 보지 않는다. 최종 소진(410)이 정상이고, 무엇이 오든 경로는 지나갔다
         client.send(request, HttpResponse.BodyHandlers.discarding());
     }
 
