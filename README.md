@@ -645,10 +645,18 @@ coupon.warmup:
   coupon-id: 1000000    # 전용 워밍업 쿠폰. 카운터를 소진 상태로 세워 member_coupon 에 안 쓴다
   requests: 3000        # 여기서 p99 가 1초 아래로 떨어졌다 (0건이면 4.69초)
   concurrency: 20       # 순차로 보내면 실제 이벤트의 동시성을 못 흉내 낸다
-  max-duration: 60s     # 못 채워도 끝낸다. 없으면 readiness 가 영영 안 올라가 ASG 가 교체를 반복한다
+  max-duration: 60s     # 못 채워도 끝낸다. 없으면 readiness 가 안 올라가 이벤트를 못 연다
+  write-rows: 5000      # 배치 INSERT 를 넣었다 되돌리며 데운다. 0 이면 안 한다
+  write-timeout: 20s    # 한 라운드의 트랜잭션 상한
 ```
 
 `CouponWarmupRunner` 가 `ApplicationRunner` 라 `ApplicationReadyEvent` **앞에** 돈다. 스프링 부트가 그 이벤트에서 readiness 를 올리므로, 여기서 데우면 readiness 가 자연히 늦춰지고 `coupon-event.sh open` 의 "healthy 대기" 가 곧 "warm 대기" 가 된다. 스크립트는 안 바뀐다.
+
+**HTTP 요청은 큐 앞에서 멈춘다.** 카운터를 소진으로 세워 두어 순번 확보에서 끝나기 때문이다. 그래서 배치 INSERT 는 `CouponWriteWarmup` 이 따로 맡는다. 워밍업 회원과 발급분을 한 트랜잭션에 넣고 통째로 롤백하므로 **운영 데이터에 한 행도 안 남는다.** 외래 키 검사는 같은 트랜잭션 안을 보므로 통과한다.
+
+**큐 뒤는 둘을 합쳐도 못 데운다.** 큐 submit 과 플러시 스레드와 `markCommitted` 와 future 완료는 커밋이 성공해야만 도는 코드다. 롤백하면 그 앞에서 끝나고, 돌게 하려면 커밋해야 하고, 커밋하면 행이 남는다.
+
+설정값과 물렸던 것들은 [`docs/coupon/warmup.md`](./docs/coupon/warmup.md) 에 있다.
 
 ### 6.5 시험 중에 고친 것
 
