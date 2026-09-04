@@ -4,12 +4,14 @@ import com.freshmarket.common.response.PageCursor;
 import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.common.response.ResponseEnvelope;
 import com.freshmarket.stock.internal.dto.AdminCampaignTargetLotListResponse;
+import com.freshmarket.stock.internal.dto.AdminCampaignTargetLotRebuildResponse;
 import com.freshmarket.stock.internal.service.AdminCampaignTargetLotService;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -40,5 +42,16 @@ class AdminCampaignTargetLotController {
         PageCursor cursor = PageTokens.decode(pageToken);
         return ResponseEntity.ok(ResponseEnvelope.success(
                 adminCampaignTargetLotService.find(cursor, pageSize)));
+    }
+
+    @Operation(summary = "캠페인 대상 로트 재확정",
+            description = "오늘자 캠페인 대상을 다시 확정한다. 자정 배치가 실패했거나 기준 데이터가 "
+                    + "바뀌었을 때 다음 자정까지 기다리지 않고 복구하는 수단이다. "
+                    + "재계산형이라 여러 번 호출해도 결과가 같다. 확정된 건수를 돌려주며 "
+                    + "후보가 없는 날은 0 이 정상이다.")
+    @PostMapping("/target-lots:rebuild")
+    public ResponseEntity<ResponseEnvelope<AdminCampaignTargetLotRebuildResponse>> rebuildToday() {
+        return ResponseEntity.ok(ResponseEnvelope.success(
+                adminCampaignTargetLotService.rebuildToday()));
     }
 }

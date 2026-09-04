@@ -1,12 +1,15 @@
 package com.freshmarket.stock.internal.batch;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.freshmarket.stock.internal.dto.CampaignTargetLotCandidate;
+import com.freshmarket.stock.internal.exception.StockErrorCode;
+import com.freshmarket.stock.internal.exception.StockException;
 import com.freshmarket.stock.internal.dto.LotDisposedQty;
 import com.freshmarket.stock.internal.entity.CampaignTargetLot;
 import com.freshmarket.stock.internal.repository.CampaignTargetLotRepository;
@@ -29,7 +32,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
  * 실제 QueryDSL 조회는 StockLotQueryRepositoryIntegrationTest 가 검증한다.
  */
 @ExtendWith(MockitoExtension.class)
-class CampaignTargetLotBatchTest {
+class CampaignTargetLotRebuildServiceTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 8, 24);
 
@@ -42,13 +45,13 @@ class CampaignTargetLotBatchTest {
     @Mock
     private StockMovementRepository stockMovementRepository;
 
-    private CampaignTargetLotBatch batch;
+    private CampaignTargetLotRebuildService batch;
 
     @BeforeEach
     void setUp() {
         Clock clock = Clock.fixed(
                 TODAY.atStartOfDay(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
-        batch = new CampaignTargetLotBatch(
+        batch = new CampaignTargetLotRebuildService(
                 stockLotQueryRepository, campaignTargetLotRepository, stockMovementRepository, clock);
     }
 
@@ -74,11 +77,11 @@ class CampaignTargetLotBatchTest {
     }
 
     // 재실행 시 당일 기존 대상을 지우고 다시 확정하는 것은 관찰 가능한 결과(저장된 행)로
-    // CampaignTargetLotBatchIntegrationTest 가 검증한다. 여기서 deleteByTargetDate 호출
+    // CampaignTargetLotRebuildServiceIntegrationTest 가 검증한다. 여기서 deleteByTargetDate 호출
     // 여부만 verify 하는 것은 구현 세부 결합이라 UT-1-02/UT-2-02 에 따라 지운다.
 
     // 잔여재고 하한과 확보재고 조건은 SQL 의 where 로 내려가 이 클래스의 책임이 아니게 됐다.
-    // 실제 필터링은 CampaignTargetLotBatchIntegrationTest 가 진짜 DB 로 검증한다.
+    // 실제 필터링은 CampaignTargetLotRebuildServiceIntegrationTest 가 진짜 DB 로 검증한다.
 
     @Test
     void 소진율이_가장_낮은_로트가_1순위가_된다() {
@@ -92,11 +95,11 @@ class CampaignTargetLotBatchTest {
         폐기_이력_없음();
         when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt())).thenReturn(candidates);
 
-        batch.run();
+        assertThat(batch.rebuild()).isEqualTo(1);
 
-        // then — 5건 중 하위 10%(ceil(5/10)=1건) 만 대상. 가장 낮은 소진율 하나만 저장된다
+        // 건수는 반환값으로 본다. 어느 로트가 1순위인지는 저장된 값을 봐야 알 수 있어 캡처한다
         ArgumentCaptor<CampaignTargetLot> captor = ArgumentCaptor.forClass(CampaignTargetLot.class);
-        verify(campaignTargetLotRepository, times(1)).save(captor.capture());
+        verify(campaignTargetLotRepository).save(captor.capture());
         assertThatSaved(captor.getValue(), 4L, 1);
     }
 
@@ -107,9 +110,8 @@ class CampaignTargetLotBatchTest {
         폐기_이력_없음();
         when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt())).thenReturn(candidates(50));
 
-        batch.run();
-
-        verify(campaignTargetLotRepository, times(5)).save(any());
+        // 확정 건수는 rebuild() 가 돌려준다. save 호출 횟수를 세면 저장 방식을 바꿀 때 깨진다
+        assertThat(batch.rebuild()).isEqualTo(5);
     }
 
     @Test
@@ -119,9 +121,7 @@ class CampaignTargetLotBatchTest {
         폐기_이력_없음();
         when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt())).thenReturn(candidates(10));
 
-        batch.run();
-
-        verify(campaignTargetLotRepository, times(1)).save(any());
+        assertThat(batch.rebuild()).isEqualTo(1);
     }
 
     @Test
@@ -139,16 +139,47 @@ class CampaignTargetLotBatchTest {
         when(stockMovementRepository.findDisposedQtyByStockLotIds(any()))
                 .thenReturn(List.of(new LotDisposedQty(1L, 30L)));
 
-        batch.run();
+        assertThat(batch.rebuild()).isEqualTo(1);
 
         // then — 2건 중 하위 10%(ceil(2/10)=1건). 폐기를 걷어낸 lot1 이 1순위로 저장된다
         ArgumentCaptor<CampaignTargetLot> captor = ArgumentCaptor.forClass(CampaignTargetLot.class);
-        verify(campaignTargetLotRepository, times(1)).save(captor.capture());
+        verify(campaignTargetLotRepository).save(captor.capture());
         assertThatSaved(captor.getValue(), 1L, 1);
     }
 
     private void assertThatSaved(CampaignTargetLot saved, Long expectedLotId, int expectedRank) {
         org.assertj.core.api.Assertions.assertThat(saved.getStockLotId()).isEqualTo(expectedLotId);
         org.assertj.core.api.Assertions.assertThat(saved.getTargetRank()).isEqualTo(expectedRank);
+    }
+
+    /*
+     * 확정이 도는 중에 또 들어오면 막는다.
+     *
+     * 리포지토리 조회가 불리는 순간에 같은 서비스를 다시 부르는 것으로 "겹친 호출" 을 만든다.
+     * 실제로는 관리자가 버튼을 두 번 누르거나 자정 스케줄과 겹치는 상황이다.
+     */
+    @Test
+    void 확정이_도는_중에_또_부르면_막는다() {
+        when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt()))
+                .thenAnswer(invocation -> {
+                    assertThatThrownBy(() -> batch.rebuild())
+                            .isInstanceOf(StockException.class)
+                            .hasMessageContaining(
+                                    StockErrorCode.CAMPAIGN_REBUILD_IN_PROGRESS.getMessage());
+                    return List.of();
+                });
+
+        batch.rebuild();
+    }
+
+    // 끝난 뒤에는 다시 부를 수 있어야 한다. 플래그가 안 내려가면 한 번 쓰고 못 쓴다
+    @Test
+    void 확정이_끝나면_다시_부를_수_있다() {
+        when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt()))
+                .thenReturn(List.of());
+
+        batch.rebuild();
+
+        assertThat(batch.rebuild()).isZero();
     }
 }
