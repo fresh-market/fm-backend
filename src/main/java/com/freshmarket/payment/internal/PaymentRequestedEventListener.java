@@ -10,19 +10,23 @@ import com.freshmarket.payment.PaymentStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 /*
  * order가 발행한 결제 요청(공용 common.event)을 받아 이 도메인 안에서 PaymentApi를 부른다.
  * order는 PaymentApi를 직접 import할 수 없지만(둘 다 L2), 이 클래스는 payment.domain에 있으므로
  * 문제 없다 — 자세한 이유는 OrderPaymentRequestedEvent의 클래스 주석 참고.
  *
- * @EventListener는 기본이 동기다(@Async 없음) — order.OrderCreateService.createOrder()가 연
- * 트랜잭션 안에서 이 메서드까지 같은 스레드로 이어져 실행된다(cart의
- * MemberRegisteredEvent -> CartService.createCartForNewMember 패턴과 동일). 여기서 예외가 나면
- * 그대로 주문 생성 트랜잭션 전체가 롤백된다 — 지금은 결제가 항상 mock으로 성공하므로 실제로 이
- * 경로를 탈 일은 없지만, 실패 시 별도 보상 로직(재고 해제 등)이 아직 없다는 뜻이기도 하다.
+ * [2026-09-05 17:28 KST] @TransactionalEventListener(AFTER_COMMIT)로 변경.
+ * order.OrderCreateService.createOrder()가 연 주문 생성 트랜잭션이 커밋된 뒤에야
+ * 이 메서드가 실행된다(@Async는 없으므로 같은 스레드에서, 커밋 직후 이어서 실행된다).
+ * 이전에는 평범한 @EventListener라 주문 트랜잭션이 열린 채로 PG 호출까지 실행됐다.
+ * mock이라 즉시 끝나서 드러나지 않았을 뿐, 실제 PG나 fake PG로 timeout을 흉내내면 그만큼
+ * DB 커넥션과 락을 오래 잡는 문제였다. 커밋 이후로 옮기면 이 문제가 사라지는 대신, 주문 자체는 이미
+ * 확정된 뒤이므로 여기서 예외가 나도 주문 생성 자체는 롤백되지 않는다.
+ * 실패 보상(주문 취소, 재고 해제)은 이 결과를 보고 별도로 처리해야 한다.
  *
  * 결제수단은 아직 API로 선택받지 않는다(쿠폰 미연동과 같은 이유로 이번 범위 밖) — 카드로 고정한다.
  */
@@ -34,7 +38,7 @@ class PaymentRequestedEventListener {
     private final PaymentApi paymentApi;
     private final ApplicationEventPublisher eventPublisher;
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPaymentRequested(OrderPaymentRequestedEvent event) {
         PaymentResult result = paymentApi.requestPayment(
                 new PaymentRequest(event.orderId(), event.amount(), PaymentMethod.CARD));
