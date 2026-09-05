@@ -62,6 +62,41 @@ public class PaymentService {
         return PaymentResult.from(payment);
     }
 
+    /*
+     * [2026-09-05 17:54 KST] PG가 명확히 거절했을 때 호출한다. 이미 FAILED면 그대로 반환해
+     * 재시도로 인한 중복 처리를 막는다 — PAID처럼 findByIdForUpdate로 잠근 뒤 판단하므로 동시
+     * 호출에도 안전하다.
+     */
+    @Transactional
+    public PaymentResult failPayment(Long paymentId, String reason) {
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+                .orElseThrow(() -> new PaymentException(PaymentErrorCode.PAYMENT_NOT_FOUND));
+        if (payment.isFailed()) {
+            return PaymentResult.from(payment);
+        }
+        payment.fail();
+        log.info("event=PAYMENT_FAILED paymentId={} orderId={} amount={} method={} reason={}",
+                payment.getId(), payment.getOrderId(), payment.getAmount(), payment.getMethod(), reason);
+        return PaymentResult.from(payment);
+    }
+
+    /*
+     * [2026-09-05 17:54 KST] PG 응답을 알 수 없을 때(timeout·연결 유실) 호출한다. 복구 배치가
+     * PG 거래 조회로 PAID/FAILED를 확정하기 전까지의 중간 상태다.
+     */
+    @Transactional
+    public PaymentResult markPaymentUnknown(Long paymentId, String reason) {
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+                .orElseThrow(() -> new PaymentException(PaymentErrorCode.PAYMENT_NOT_FOUND));
+        if (payment.isUnknown()) {
+            return PaymentResult.from(payment);
+        }
+        payment.markUnknown();
+        log.info("event=PAYMENT_UNKNOWN paymentId={} orderId={} amount={} method={} reason={}",
+                payment.getId(), payment.getOrderId(), payment.getAmount(), payment.getMethod(), reason);
+        return PaymentResult.from(payment);
+    }
+
     public Optional<Payment> findPayment(Long orderId) {
         return paymentRepository.findByOrderId(orderId);
     }
