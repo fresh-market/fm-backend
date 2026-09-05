@@ -83,12 +83,44 @@ public class Payment extends BaseMutableTimeEntity {
         this.status = PaymentStatus.PAID;
     }
 
+    /*
+     * [2026-09-05 17:54 KST] PG가 명확히 거절한 경우의 전이. 재시도해도 같은 결과가 나오는 확정된
+     * 실패이므로 FAILED로 확정한다. 지금은 PENDING에서만 허용한다 — UNKNOWN 상태에 놓인 결제를
+     * 복구 배치가 FAILED로 확정하는 경로는 아직 없고, 그건 복구 배치 구현 시 별도로 다룬다.
+     */
+    public void fail() {
+        if (!isPending()) {
+            throw new IllegalStateException("승인 대기 상태의 결제만 실패로 전이할 수 있습니다.");
+        }
+        this.status = PaymentStatus.FAILED;
+    }
+
+    /*
+     * [2026-09-05 17:54 KST] PG 응답이 timeout·연결 유실 등으로 결과를 알 수 없는 경우의 전이.
+     * 실제로는 승인됐을 수도 있으므로 FAILED로 단정하지 않는다. 이후 PG 거래 조회(reconciliation)로
+     * PAID 또는 FAILED로 재확정해야 한다 — 그 확정 경로 역시 복구 배치 구현 시 추가한다.
+     */
+    public void markUnknown() {
+        if (!isPending()) {
+            throw new IllegalStateException("승인 대기 상태의 결제만 UNKNOWN으로 전이할 수 있습니다.");
+        }
+        this.status = PaymentStatus.UNKNOWN;
+    }
+
     public boolean isPaid() {
         return status == PaymentStatus.PAID;
     }
 
     public boolean isPending() {
         return status == PaymentStatus.PENDING;
+    }
+
+    public boolean isFailed() {
+        return status == PaymentStatus.FAILED;
+    }
+
+    public boolean isUnknown() {
+        return status == PaymentStatus.UNKNOWN;
     }
 
     public boolean matches(PaymentRequest request) {
