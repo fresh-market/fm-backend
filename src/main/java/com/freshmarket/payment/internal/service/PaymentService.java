@@ -39,6 +39,11 @@ public class PaymentService {
         return new PaymentPreparation(payment, newlyPrepared);
     }
 
+    /*
+     * [2026-09-05 18:28 KST] PENDING의 최초 승인뿐 아니라, 복구 배치가 UNKNOWN을 뒤늦게 PAID로
+     * 확정할 때도 이 메서드를 그대로 쓴다 — 그래서 "대기 상태가 아니면 거부"하는 조건에 UNKNOWN도
+     * 통과시키도록 넓혔다. Payment.approve() 쪽 가드도 같은 이유로 함께 넓어졌다.
+     */
     @Transactional
     public PaymentResult approvePayment(Long paymentId, PaymentGatewayApproval approval) {
         if (paymentId == null || paymentId <= 0 || approval == null
@@ -50,7 +55,7 @@ public class PaymentService {
         if (payment.isPaid()) {
             return PaymentResult.from(payment);
         }
-        if (!payment.isPending()) {
+        if (!payment.isPending() && !payment.isUnknown()) {
             throw new PaymentException(PaymentErrorCode.PAYMENT_NOT_PENDING);
         }
 
@@ -65,7 +70,8 @@ public class PaymentService {
     /*
      * [2026-09-05 17:54 KST] PG가 명확히 거절했을 때 호출한다. 이미 FAILED면 그대로 반환해
      * 재시도로 인한 중복 처리를 막는다 — PAID처럼 findByIdForUpdate로 잠근 뒤 판단하므로 동시
-     * 호출에도 안전하다.
+     * 호출에도 안전하다. PENDING에서의 최초 거절, UNKNOWN에서의 복구 배치 확정 모두 이 메서드로
+     * 처리한다(Payment.fail() 가드 참고).
      */
     @Transactional
     public PaymentResult failPayment(Long paymentId, String reason) {

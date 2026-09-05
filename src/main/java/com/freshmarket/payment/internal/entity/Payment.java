@@ -68,9 +68,14 @@ public class Payment extends BaseMutableTimeEntity {
         return new Payment(orderId, method, amount);
     }
 
+    /*
+     * [2026-09-05 18:28 KST] 복구 배치(PaymentReconciliationService)가 UNKNOWN을 뒤늦게 PAID로
+     * 확정할 때도 이 메서드를 그대로 재사용한다 — PENDING에서의 최초 승인과 UNKNOWN에서의 뒤늦은
+     * 확정은 "PG가 승인했다"는 같은 사실을 반영하는 것뿐이라 별도 메서드를 두지 않았다.
+     */
     public void approve(String pgTid, LocalDateTime paidAt) {
-        if (!isPending()) {
-            throw new IllegalStateException("승인 대기 상태의 결제만 승인할 수 있습니다.");
+        if (!isPending() && !isUnknown()) {
+            throw new IllegalStateException("승인 대기 또는 UNKNOWN 상태의 결제만 승인할 수 있습니다.");
         }
         if (pgTid == null || pgTid.isBlank() || pgTid.length() > PG_TID_MAX_LENGTH) {
             throw new IllegalArgumentException("유효한 pgTid 가 필요하다");
@@ -84,21 +89,22 @@ public class Payment extends BaseMutableTimeEntity {
     }
 
     /*
-     * [2026-09-05 17:54 KST] PG가 명확히 거절한 경우의 전이. 재시도해도 같은 결과가 나오는 확정된
-     * 실패이므로 FAILED로 확정한다. 지금은 PENDING에서만 허용한다 — UNKNOWN 상태에 놓인 결제를
-     * 복구 배치가 FAILED로 확정하는 경로는 아직 없고, 그건 복구 배치 구현 시 별도로 다룬다.
+     * [2026-09-05 18:28 KST] PG가 명확히 거절한 경우의 전이. 재시도해도 같은 결과가 나오는 확정된
+     * 실패이므로 FAILED로 확정한다. approve()와 같은 이유로 UNKNOWN에서도 허용한다 — 복구 배치가
+     * PG 재조회 결과 "사실은 거절이었다"를 확정할 때도 이 메서드를 그대로 쓴다.
      */
     public void fail() {
-        if (!isPending()) {
-            throw new IllegalStateException("승인 대기 상태의 결제만 실패로 전이할 수 있습니다.");
+        if (!isPending() && !isUnknown()) {
+            throw new IllegalStateException("승인 대기 또는 UNKNOWN 상태의 결제만 실패로 전이할 수 있습니다.");
         }
         this.status = PaymentStatus.FAILED;
     }
 
     /*
-     * [2026-09-05 17:54 KST] PG 응답이 timeout·연결 유실 등으로 결과를 알 수 없는 경우의 전이.
+     * [2026-09-05 18:28 KST] PG 응답이 timeout·연결 유실 등으로 결과를 알 수 없는 경우의 전이.
      * 실제로는 승인됐을 수도 있으므로 FAILED로 단정하지 않는다. 이후 PG 거래 조회(reconciliation)로
-     * PAID 또는 FAILED로 재확정해야 한다 — 그 확정 경로 역시 복구 배치 구현 시 추가한다.
+     * PAID 또는 FAILED로 재확정한다 — PENDING에서만 진입하고, UNKNOWN에서 다시 UNKNOWN으로 가는
+     * 전이는 없다(PaymentService.markPaymentUnknown이 이미 UNKNOWN이면 호출 자체를 건너뛴다).
      */
     public void markUnknown() {
         if (!isPending()) {
