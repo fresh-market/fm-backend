@@ -14,4 +14,13 @@ public interface PaymentGateway {
      * 따라야 하며, 호출하는 쪽은 후자를 FAILED로 단정하지 말고 UNKNOWN으로 다뤄야 한다.
      */
     PaymentGatewayApproval request(PaymentRequest request);
+
+    /*
+     * [2026-09-05 18:28 KST] 복구 배치가 UNKNOWN 결제의 실제 PG 측 결과를 재확인할 때 부른다.
+     *
+     * orderId는 request() 호출 시 PG에 함께 보낸 merchant key와 같다 — UNKNOWN 상태의 결제는
+     * pgTid가 없어(성공 응답을 못 받았으니) 그걸로는 조회할 수 없고, 애초에 요청 때 보낸 식별자로
+     * 물어야 한다.
+     */
+    PaymentGatewayInquiryResult inquire(Long orderId);
 }

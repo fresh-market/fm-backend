@@ -22,12 +22,20 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * callCount()로 실제 호출 횟수를 확인할 수 있다. idempotency key 적용 후 "같은 요청을 재시도해도
  * PG가 중복 호출되지 않는다"를 검증하는 데 쓴다.
+ *
+ * [2026-09-05 18:28 KST] inquire() 시나리오 큐를 별도로 추가했다. request()와 기본값을 다르게
+ * 뒀다 — request()는 시나리오가 없으면 승인으로 기본 동작하지만, inquire()는 STILL_PROCESSING으로
+ * 기본 동작한다. inquire()를 호출하는 건 결국 복구 배치 테스트뿐인데, 그 테스트가 시나리오를
+ * 깜빡 등록 안 했을 때 조용히 승인 처리되어 버그를 가리는 것보다, 아무 것도 확정되지 않아 테스트가
+ * 눈에 띄게 실패하는 쪽이 안전하다.
  */
 public class FakePaymentGateway implements PaymentGateway {
 
     private final Clock clock;
     private final Deque<Scenario> scenarios = new ArrayDeque<>();
+    private final Deque<InquiryScenario> inquiryScenarios = new ArrayDeque<>();
     private final AtomicInteger callCount = new AtomicInteger();
+    private final AtomicInteger inquireCallCount = new AtomicInteger();
 
     public FakePaymentGateway(Clock clock) {
         this.clock = clock;
@@ -40,8 +48,19 @@ public class FakePaymentGateway implements PaymentGateway {
         return (scenario == null ? Scenario.approve() : scenario).resolve(clock);
     }
 
+    @Override
+    public PaymentGatewayInquiryResult inquire(Long orderId) {
+        inquireCallCount.incrementAndGet();
+        InquiryScenario scenario = inquiryScenarios.poll();
+        return (scenario == null ? InquiryScenario.stillProcessing() : scenario).resolve(clock);
+    }
+
     public int callCount() {
         return callCount.get();
+    }
+
+    public int inquireCallCount() {
+        return inquireCallCount.get();
     }
 
     public void willApprove() {
@@ -60,10 +79,24 @@ public class FakePaymentGateway implements PaymentGateway {
         scenarios.add(Scenario.loseResponse());
     }
 
+    public void willInquireApprove() {
+        inquiryScenarios.add(InquiryScenario.approve());
+    }
+
+    public void willInquireReject(String reason) {
+        inquiryScenarios.add(InquiryScenario.reject(reason));
+    }
+
+    public void willInquireStillProcessing() {
+        inquiryScenarios.add(InquiryScenario.stillProcessing());
+    }
+
     // 테스트 간 상태가 새지 않도록 시나리오 큐와 호출 횟수를 초기화한다. 빈으로 재사용할 때 @BeforeEach에서 부른다.
     public void reset() {
         scenarios.clear();
+        inquiryScenarios.clear();
         callCount.set(0);
+        inquireCallCount.set(0);
     }
 
     private record Scenario(Type type, String reason) {
@@ -92,6 +125,32 @@ public class FakePaymentGateway implements PaymentGateway {
                 case REJECT -> throw new PaymentGatewayRejectedException(reason);
                 case TIMEOUT -> throw new PaymentGatewayUnknownException("PG 응답 timeout", null);
                 case LOSE_RESPONSE -> throw new PaymentGatewayUnknownException("PG 응답 유실", null);
+            };
+        }
+    }
+
+    private record InquiryScenario(Type type, String reason) {
+
+        enum Type {APPROVE, REJECT, STILL_PROCESSING}
+
+        static InquiryScenario approve() {
+            return new InquiryScenario(Type.APPROVE, null);
+        }
+
+        static InquiryScenario reject(String reason) {
+            return new InquiryScenario(Type.REJECT, reason);
+        }
+
+        static InquiryScenario stillProcessing() {
+            return new InquiryScenario(Type.STILL_PROCESSING, null);
+        }
+
+        PaymentGatewayInquiryResult resolve(Clock clock) {
+            return switch (type) {
+                case APPROVE -> PaymentGatewayInquiryResult.approved(
+                        "fake_" + UUID.randomUUID(), LocalDateTime.now(clock));
+                case REJECT -> PaymentGatewayInquiryResult.rejected(reason);
+                case STILL_PROCESSING -> PaymentGatewayInquiryResult.stillProcessing();
             };
         }
     }
