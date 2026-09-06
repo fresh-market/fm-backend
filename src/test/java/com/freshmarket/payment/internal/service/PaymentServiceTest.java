@@ -6,9 +6,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.freshmarket.common.event.OrderPaymentApprovedEvent;
+import com.freshmarket.common.event.OrderPaymentFailedEvent;
 import com.freshmarket.payment.PaymentMethod;
 import com.freshmarket.payment.PaymentRequest;
 import com.freshmarket.payment.PaymentResult;
@@ -29,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
@@ -37,12 +41,15 @@ class PaymentServiceTest {
     @Mock
     private PaymentRepository paymentRepository;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     private PaymentService sut;
 
     @BeforeEach
     void setUp() {
         Clock clock = Clock.fixed(Instant.parse("2026-08-22T00:00:00Z"), ZoneId.of("Asia/Seoul"));
-        sut = new PaymentService(paymentRepository, clock);
+        sut = new PaymentService(paymentRepository, clock, eventPublisher);
     }
 
     @Test
@@ -104,6 +111,7 @@ class PaymentServiceTest {
         assertThat(result.status()).isEqualTo(PaymentStatus.PAID);
         assertThat(result.pgTid()).isEqualTo("mock_123");
         assertThat(result.paidAt()).isEqualTo(paidAt);
+        verify(eventPublisher).publishEvent(new OrderPaymentApprovedEvent(payment.getOrderId(), 10L, paidAt));
     }
 
     @Test
@@ -127,6 +135,7 @@ class PaymentServiceTest {
                 new PaymentGatewayApproval("different_tid", LocalDateTime.of(2026, 8, 21, 16, 0)));
 
         assertThat(result.pgTid()).isEqualTo("mock_123");
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -140,6 +149,68 @@ class PaymentServiceTest {
                 .isInstanceOf(PaymentException.class)
                 .extracting(e -> ((PaymentException) e).getErrorCode())
                 .isEqualTo(PaymentErrorCode.PAYMENT_NOT_PENDING);
+    }
+
+    @Test
+    void gateway_거절_결과로_결제를_실패처리한다() {
+        Payment payment = payment(10L);
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
+
+        PaymentResult result = sut.failPayment(10L, "카드 한도 초과");
+
+        assertThat(result.status()).isEqualTo(PaymentStatus.FAILED);
+        verify(eventPublisher).publishEvent(new OrderPaymentFailedEvent(payment.getOrderId(), 10L, "카드 한도 초과"));
+    }
+
+    @Test
+    void 없는_결제는_실패처리할_수_없다() {
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sut.failPayment(10L, "카드 한도 초과"))
+                .isInstanceOf(PaymentException.class)
+                .extracting(e -> ((PaymentException) e).getErrorCode())
+                .isEqualTo(PaymentErrorCode.PAYMENT_NOT_FOUND);
+    }
+
+    /*
+     * 재시도로 같은 실패 결과가 두 번 들어와도 OrderPaymentFailedEvent를 두 번 발행하지 않는다 —
+     * order 쪽이 이미 취소 처리한 주문을 다시 취소 시도할 필요가 없다.
+     */
+    @Test
+    void 이미_실패한_결제는_다시_실패처리하지_않는다() {
+        Payment payment = payment(10L);
+        payment.fail();
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
+
+        PaymentResult result = sut.failPayment(10L, "재시도로 들어온 동일 실패");
+
+        assertThat(result.status()).isEqualTo(PaymentStatus.FAILED);
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    /*
+     * PG 응답이 불확실(timeout/응답유실)하면 UNKNOWN으로만 남기고, order에게는 아무 이벤트도
+     * 보내지 않는다 — 아직 결론이 안 났으니 주문을 건드리면 안 된다(PaymentService 클래스 주석 참고).
+     */
+    @Test
+    void PG_응답이_불확실하면_UNKNOWN으로_남기고_order에는_알리지_않는다() {
+        Payment payment = payment(10L);
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
+
+        PaymentResult result = sut.markPaymentUnknown(10L, "PG 응답 timeout");
+
+        assertThat(result.status()).isEqualTo(PaymentStatus.UNKNOWN);
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void 없는_결제는_UNKNOWN으로_남길_수_없다() {
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sut.markPaymentUnknown(10L, "PG 응답 timeout"))
+                .isInstanceOf(PaymentException.class)
+                .extracting(e -> ((PaymentException) e).getErrorCode())
+                .isEqualTo(PaymentErrorCode.PAYMENT_NOT_FOUND);
     }
 
     @Test
