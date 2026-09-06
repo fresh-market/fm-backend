@@ -8,6 +8,7 @@ import com.freshmarket.order.internal.dto.OrderCreateRequest;
 import com.freshmarket.order.internal.dto.OrderCreateResponse;
 import com.freshmarket.order.internal.entity.Order;
 import com.freshmarket.order.internal.entity.OrderItem;
+import com.freshmarket.order.internal.entity.OrderStatus;
 import com.freshmarket.order.internal.repository.OrderItemRepository;
 import com.freshmarket.order.internal.repository.OrderRepository;
 import com.freshmarket.stock.StockApi;
@@ -91,15 +92,42 @@ public class OrderCreateService {
          * 돌아온 것이라, 정상 흐름에서는 여기서 주문을 못 찾는 경로가 없다 — 즉 이 예외가 실제로
          * 던져진다면 재시도로 풀릴 일시적 문제가 아니라 버그 신호다(같은 id로 다시 조회해도 똑같이
          * 없다). 그래서 그냥 던지지 않고 log.error로 남겨 알림이 가게 한다.
+         *
+         * findByIdForUpdate로 잠근다 — PAYMENT_PENDING 만료 배치(order.internal.batch.
+         * PendingOrderExpirationService)가 같은 주문을 동시에 CANCELED로 확정하려 할 수 있어서,
+         * Order 행 자체를 잠가 둘 중 하나만 먼저 끝나게 한다(OrderRepository.findByIdForUpdate 참고).
          */
-        Order order = orderRepository.findById(event.orderId())
+        Order order = orderRepository.findByIdForUpdate(event.orderId())
                 .orElseThrow(() -> {
                     log.error("event=ORDER_NOT_FOUND_FOR_PAYMENT_APPROVED orderId={} paymentId={}",
                             event.orderId(), event.paymentId());
                     return new IllegalStateException(
                             "결제 승인된 주문을 찾을 수 없습니다. orderId=" + event.orderId());
                 });
-        order.markPaid();
+
+        /*
+         * [2026-09-06 KST] 만료 배치가 이 주문을 먼저 CANCELED로 확정한 뒤에 뒤늦은 PG 승인이 도착한
+         * 경우다. 재고는 이미 release()로 풀려서 다른 주문에 재배분됐을 수 있으므로 주문을 다시 PAID로
+         * 되돌리는 건 안전하지 않다 — order는 그대로 CANCELED로 두고 건드리지 않는다. 대신 PG는 실제로
+         * 승인했다(돈이 이미 나갔다)는 사실을 놓치면 안 되므로 ERROR로 남긴다.
+         * TODO: 자동 환불 로직 추가 — PaymentApi에 환불 계약(예: cancelPayment)이 생기면 여기서 바로
+         * 호출하도록 바꾼다. 지금은 그 계약이 없어(주문 인수인계 문서에도 후속 브랜치로 명시) 사람이
+         * 이 로그를 보고 수동 환불해야 한다.
+         */
+        if (order.getStatus() == OrderStatus.CANCELED) {
+            log.error("event=PAYMENT_APPROVED_AFTER_ORDER_CANCELED orderId={} paymentId={} amount={}",
+                    order.getId(), event.paymentId(), order.getTotalAmount());
+            return;
+        }
+
+        try {
+            order.markPaid();
+        } catch (IllegalStateException e) {
+            // CANCELED 외에 이론상 도달 불가능해야 하는 다른 상태 — 3번과 같은 이유로 던지기 전에 남긴다.
+            log.error("event=ORDER_MARK_PAID_FAILED orderId={} paymentId={} status={}",
+                    order.getId(), event.paymentId(), order.getStatus(), e);
+            throw e;
+        }
 
         // 명령성 상태 변화 로그 — PII/토큰/pgTid 없이 orderId/금액만 남긴다.
         log.info("event=order_paid orderId={} amount={}", order.getId(), order.getTotalAmount());
@@ -122,15 +150,33 @@ public class OrderCreateService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional
     public void onPaymentFailed(OrderPaymentFailedEvent event) {
-        // onPaymentApproved()와 같은 이유로 정상 흐름에서는 못 일어나는 케이스다 — 로그 없이 던지지 않는다.
-        Order order = orderRepository.findById(event.orderId())
+        /*
+         * onPaymentApproved()와 같은 이유로 정상 흐름에서는 못 일어나는 케이스다 — 로그 없이 던지지
+         * 않는다. findByIdForUpdate로 잠그는 이유도 onPaymentApproved()와 같다(만료 배치와의 경합 방지).
+         */
+        Order order = orderRepository.findByIdForUpdate(event.orderId())
                 .orElseThrow(() -> {
                     log.error("event=ORDER_NOT_FOUND_FOR_PAYMENT_FAILED orderId={} paymentId={}",
                             event.orderId(), event.paymentId());
                     return new IllegalStateException(
                             "결제 실패 처리할 주문을 찾을 수 없습니다. orderId=" + event.orderId());
                 });
-        order.cancel();
+
+        /*
+         * [2026-09-06 KST] 만료 배치가 이미 CANCELED로 확정해 놓은 주문에 뒤늦게 거절/타임아웃 결과가
+         * 도착하는 경우다. onPaymentApproved()와 달리 여기는 별도 분기가 필요 없다 — 두 결론이 같은
+         * 방향(취소)이라 Order.cancel()의 멱등 가드(이미 CANCELED면 조용히 리턴)와
+         * StockReservationService.release()의 RESERVED 조건부 조회(이미 RELEASED면 대상에서 빠짐)가
+         * 그대로 안전하게 흡수한다.
+         */
+        try {
+            order.cancel();
+        } catch (IllegalStateException e) {
+            // PAYMENT_PENDING/CANCELED 외에 이론상 도달 불가능해야 하는 다른 상태 — 마찬가지로 남긴다.
+            log.error("event=ORDER_CANCEL_FAILED orderId={} paymentId={} status={}",
+                    order.getId(), event.paymentId(), order.getStatus(), e);
+            throw e;
+        }
 
         // 명령성 상태 변화 로그 — PII/토큰/pgTid 없이 orderId/사유만 남긴다.
         log.info("event=order_canceled orderId={} reason={}", order.getId(), event.reason());
