@@ -37,11 +37,14 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
                        @Param("now") LocalDateTime now);
 
     /*
-     * [2026-09-05 18:28 KST] 복구 배치가 재확인할 UNKNOWN 후보를 페이지 단위로 훑는다.
+     * [2026-09-05 18:28 KST] 복구 배치가 재확인할 후보를 상태별로 페이지 단위로 훑는다. status를
+     * 파라미터로 받으므로 UNKNOWN(PaymentReconciliationService.reconcileUnknownPayments)과
+     * PENDING(reconcilePendingPayments, 2026-09-06 추가) 양쪽 모두 이 메서드 하나를 그대로
+     * 재사용한다 — 조회 로직 자체는 대상 상태가 무엇이든 동일하기 때문이다.
      * PendingProductImageCleanupService.findByUploadStatusAndIdGreaterThanAndCreatedAtBeforeOrderByIdAsc와
-     * 같은 방식 — id 기준 커서로 페이지를 넘기면 한 페이지 처리 중 다른 행이 새로 UNKNOWN이 되어도
-     * 중복/누락 없이 다음 페이지로 넘어간다. updatedAt이 markUnknown() 시점이라, 그 시점 기준으로
-     * 유예 시간이 지난 것만 대상으로 삼는다.
+     * 같은 방식 — id 기준 커서로 페이지를 넘기면 한 페이지 처리 중 다른 행이 새로 같은 상태가 되어도
+     * 중복/누락 없이 다음 페이지로 넘어간다. updatedAt이 그 상태로 전이된 시점이라, 그 시점 기준으로
+     * (상태별로 다른) 유예 시간이 지난 것만 대상으로 삼는다.
      */
     List<Payment> findByStatusAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
             PaymentStatus status, Long afterId, LocalDateTime cutoff, Pageable pageable);
