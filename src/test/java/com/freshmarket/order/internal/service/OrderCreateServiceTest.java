@@ -34,7 +34,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 class OrderCreateServiceTest {
 
     @Mock
-    private OrderPendingCreationService orderPendingCreationService;
+    private OrderPendingCreationCoordinatorService orderPendingCreationCoordinatorService;
 
     @Mock
     private OrderRepository orderRepository;
@@ -53,14 +53,15 @@ class OrderCreateServiceTest {
     @BeforeEach
     void setUp() {
         sut = new OrderCreateService(
-                orderPendingCreationService, orderRepository, orderItemRepository, stockApi, outboxDispatchService);
+                orderPendingCreationCoordinatorService, orderRepository, orderItemRepository, stockApi,
+                outboxDispatchService);
     }
 
     @Test
     void 새로_생성된_주문이면_결제요청_outbox를_dispatch한다() {
         OrderCreateRequest request = request();
         OrderCreateResponse response = new OrderCreateResponse(100L, "100", OrderStatus.PAYMENT_PENDING, 38_700);
-        when(orderPendingCreationService.createPendingOrder(1L, request))
+        when(orderPendingCreationCoordinatorService.createPendingOrder(1L, request))
                 .thenReturn(new PendingOrderResult(response, true));
 
         OrderCreateResponse result = sut.createOrder(1L, request);
@@ -73,7 +74,7 @@ class OrderCreateServiceTest {
     void requestId_재시도면_미전달_결제요청_outbox를_다시_dispatch한다() {
         OrderCreateRequest request = request();
         OrderCreateResponse response = new OrderCreateResponse(100L, "100", OrderStatus.PAID, 38_700);
-        when(orderPendingCreationService.createPendingOrder(1L, request))
+        when(orderPendingCreationCoordinatorService.createPendingOrder(1L, request))
                 .thenReturn(new PendingOrderResult(response, false));
 
         OrderCreateResponse result = sut.createOrder(1L, request);

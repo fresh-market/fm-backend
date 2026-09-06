@@ -31,6 +31,7 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
@@ -66,13 +67,9 @@ class OrderPendingCreationService {
         validateCheckoutMode(request);
         String requestHash = computeRequestHash(memberId, request);
 
-        Order existing = orderRepository.findByRequestId(request.requestId()).orElse(null);
-        if (existing != null) {
-            if (!requestHash.equals(existing.getRequestHash())) {
-                throw new OrderException(OrderErrorCode.DUPLICATE_REQUEST);
-            }
-            // 같은 요청의 재시도(HTTP 재전송, 중복 클릭) — 새로 만들지 않고 그대로 돌려준다.
-            return new PendingOrderResult(OrderCreateResponse.from(existing), false);
+        Optional<PendingOrderResult> existing = findExistingOrderResult(request, requestHash);
+        if (existing.isPresent()) {
+            return existing.get();
         }
 
         AddressInfo address = memberApi.findAddress(request.addressId(), memberId)
@@ -147,6 +144,25 @@ class OrderPendingCreationService {
                 order.getId(), order.getStatus(), order.getTotalAmount());
 
         return new PendingOrderResult(OrderCreateResponse.from(order), true);
+    }
+
+    /*
+     * 동시 요청에서 uk_orders_request_id 충돌로 생성 트랜잭션이 롤백된 뒤, 바깥 조립 서비스가
+     * 별도 트랜잭션 없이 호출한다. 이미 커밋된 주문을 같은 요청의 응답으로 되돌려 주되, requestId를
+     * 다른 내용에 재사용한 요청은 절대 기존 주문으로 수렴시키지 않는다.
+     */
+    Optional<PendingOrderResult> findExistingOrderResult(Long memberId, OrderCreateRequest request) {
+        return findExistingOrderResult(request, computeRequestHash(memberId, request));
+    }
+
+    private Optional<PendingOrderResult> findExistingOrderResult(OrderCreateRequest request, String requestHash) {
+        return orderRepository.findByRequestId(request.requestId()).map(existing -> {
+            if (!requestHash.equals(existing.getRequestHash())) {
+                throw new OrderException(OrderErrorCode.DUPLICATE_REQUEST);
+            }
+            // 같은 요청의 재시도(HTTP 재전송, 중복 클릭) — 새로 만들지 않고 그대로 돌려준다.
+            return new PendingOrderResult(OrderCreateResponse.from(existing), false);
+        });
     }
 
     // 같은 requestId가 다른 내용으로 재사용됐는지 판별하기 위한 해시다. 순서만 다른 cartItemIds는

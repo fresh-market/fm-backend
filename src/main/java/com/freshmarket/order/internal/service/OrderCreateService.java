@@ -25,8 +25,9 @@ import org.springframework.transaction.annotation.Transactional;
  * 달지 않는다 — 아래 세 단계가 각자 자기 트랜잭션을 갖고, 결제 요청은 열린 DB 트랜잭션이 전혀 없는
  * 상태에서 나간다. 이건 팀이 미리 정해둔 경계다(주문 인수인계 문서 5장 "PG 호출과 DB 트랜잭션 경계"):
  *
- *   a. orderPendingCreationService.createPendingOrder(...) — 짧은 트랜잭션. 주문/주문상품 저장,
- *      재고 예약, 장바구니 정리까지 끝내고 커밋한 뒤 돌아온다.
+ *   a. orderPendingCreationCoordinatorService.createPendingOrder(...) — 내부의
+ *      OrderPendingCreationService 짧은 트랜잭션으로 주문/주문상품 저장, 재고 예약, 장바구니 정리까지
+ *      끝내고 커밋한 뒤 돌아온다. requestId 동시 충돌이면 커밋된 기존 주문을 다시 읽어 수렴한다.
  *   b. (여기, 트랜잭션 밖) order outbox dispatch — payment.domain의 리스너가 공용 이벤트를 받아
  *      이벤트를 받아 PaymentApi.requestPayment를 부른다(자세한 이유는 그 이벤트 클래스 주석:
  *      order/payment 둘 다 L2라 서로 직접 못 부른다). 지금은 MockPaymentGateway라 이 호출이
@@ -53,14 +54,14 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class OrderCreateService {
 
-    private final OrderPendingCreationService orderPendingCreationService;
+    private final OrderPendingCreationCoordinatorService orderPendingCreationCoordinatorService;
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final StockApi stockApi;
     private final OrderPaymentRequestOutboxDispatchService outboxDispatchService;
 
     public OrderCreateResponse createOrder(Long memberId, OrderCreateRequest request) {
-        PendingOrderResult pending = orderPendingCreationService.createPendingOrder(memberId, request);
+        PendingOrderResult pending = orderPendingCreationCoordinatorService.createPendingOrder(memberId, request);
         // 새 요청과 requestId 재시도 모두 미전달 outbox만 전송한다. 이미 dispatch된 행은 조회되지 않는다.
         outboxDispatchService.dispatchForOrder(pending.response().orderId());
 
