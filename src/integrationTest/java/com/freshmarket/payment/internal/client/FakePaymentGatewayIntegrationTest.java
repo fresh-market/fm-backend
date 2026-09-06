@@ -28,8 +28,15 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 기본 동작한다. inquire()를 호출하는 건 결국 복구 배치 테스트뿐인데, 그 테스트가 시나리오를
  * 깜빡 등록 안 했을 때 조용히 승인 처리되어 버그를 가리는 것보다, 아무 것도 확정되지 않아 테스트가
  * 눈에 띄게 실패하는 쪽이 안전하다.
+ *
+ * [2026-09-06 KST] 원래 이름은 FakePaymentGateway였는데 PlacementIntegrationTest(
+ * 이름이_IntegrationTest_로_끝난다)가 위반으로 잡았다 — src/integrationTest 아래 최상위 클래스는
+ * 이름만 보고 통합 테스트 소속인 걸 알 수 있어야 한다는 규칙이라, 실행되는 @Test는 없지만 이
+ * 대역도 예외가 아니다. base 패키지(com.freshmarket)로 옮기는 대신 이름만 바꿔 그대로 둔 이유는
+ * base 패키지가 아키텍처 테스트 전용 자리(PlacementIntegrationTest 클래스 주석 "베이스 패키지는
+ * 아키텍처 테스트 자리")이고, 이 대역은 payment 도메인에 속하는 편이 맞기 때문이다.
  */
-public class FakePaymentGateway implements PaymentGateway {
+public class FakePaymentGatewayIntegrationTest implements PaymentGateway {
 
     private final Clock clock;
     private final Deque<Scenario> scenarios = new ArrayDeque<>();
@@ -37,7 +44,7 @@ public class FakePaymentGateway implements PaymentGateway {
     private final AtomicInteger callCount = new AtomicInteger();
     private final AtomicInteger inquireCallCount = new AtomicInteger();
 
-    public FakePaymentGateway(Clock clock) {
+    public FakePaymentGatewayIntegrationTest(Clock clock) {
         this.clock = clock;
     }
 
