@@ -28,7 +28,7 @@ class PaymentResultOutboxDispatchServiceTest {
     @Mock
     private PaymentResultOutboxRepository outboxRepository;
     @Mock
-    private PaymentResultOutboxDeliveryService deliveryService;
+    private PaymentResultOutboxRecordService recordService;
     @Mock
     private ApplicationEventPublisher eventPublisher;
 
@@ -36,7 +36,7 @@ class PaymentResultOutboxDispatchServiceTest {
 
     @BeforeEach
     void setUp() {
-        sut = new PaymentResultOutboxDispatchService(outboxRepository, deliveryService, eventPublisher);
+        sut = new PaymentResultOutboxDispatchService(outboxRepository, recordService, eventPublisher);
     }
 
     @Test
@@ -48,7 +48,7 @@ class PaymentResultOutboxDispatchServiceTest {
         sut.dispatchForPayment(900L);
 
         verify(eventPublisher).publishEvent(new OrderPaymentApprovedEvent(100L, 900L, paidAt));
-        verify(deliveryService).markDispatched(10L);
+        verify(recordService).recordDispatched(10L);
     }
 
     @Test
@@ -70,7 +70,7 @@ class PaymentResultOutboxDispatchServiceTest {
 
         sut.dispatchForPayment(900L);
 
-        verify(deliveryService, never()).markDispatched(any());
+        verify(recordService, never()).recordDispatched(any());
     }
 
     @Test

@@ -1,21 +1,22 @@
-package com.freshmarket.order.internal.service;
+package com.freshmarket.payment.internal.service;
 
-import com.freshmarket.order.internal.repository.OrderPaymentRequestOutboxRepository;
+import com.freshmarket.payment.internal.repository.PaymentResultOutboxRepository;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/** 이벤트 소비 성공 사실을 outbox에 별도 트랜잭션으로 기록한다. */
 @Service
 @RequiredArgsConstructor
-public class OrderPaymentRequestOutboxDeliveryService {
+public class PaymentResultOutboxRecordService {
 
-    private final OrderPaymentRequestOutboxRepository outboxRepository;
+    private final PaymentResultOutboxRepository outboxRepository;
     private final Clock clock;
 
     @Transactional
-    public void markDispatched(Long outboxId) {
+    public void recordDispatched(Long outboxId) {
         outboxRepository.findByIdForUpdate(outboxId)
                 .ifPresent(outbox -> outbox.markDispatched(LocalDateTime.now(clock)));
     }

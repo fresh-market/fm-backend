@@ -1,10 +1,10 @@
-package com.freshmarket.payment.internal.service;
+package com.freshmarket.order.internal.service;
 
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.freshmarket.payment.internal.entity.PaymentResultOutbox;
-import com.freshmarket.payment.internal.repository.PaymentResultOutboxRepository;
+import com.freshmarket.order.internal.entity.OrderPaymentRequestOutbox;
+import com.freshmarket.order.internal.repository.OrderPaymentRequestOutboxRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -16,21 +16,20 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
-class PaymentResultOutboxDeliveryServiceTest {
+class OrderPaymentRequestOutboxRecordServiceTest {
 
     @Mock
-    private PaymentResultOutboxRepository outboxRepository;
+    private OrderPaymentRequestOutboxRepository outboxRepository;
 
     @Test
-    void 전달완료를_기록한다() {
-        PaymentResultOutbox outbox = PaymentResultOutbox.approved(900L, 100L,
-                java.time.LocalDateTime.of(2026, 9, 6, 10, 0));
+    void dispatch_성공_사실을_기록한다() {
+        OrderPaymentRequestOutbox outbox = OrderPaymentRequestOutbox.pending(100L, 38_700);
         ReflectionTestUtils.setField(outbox, "id", 10L);
         when(outboxRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(outbox));
-        PaymentResultOutboxDeliveryService sut = new PaymentResultOutboxDeliveryService(outboxRepository,
+        OrderPaymentRequestOutboxRecordService sut = new OrderPaymentRequestOutboxRecordService(outboxRepository,
                 Clock.fixed(Instant.parse("2026-09-06T00:00:00Z"), ZoneOffset.UTC));
 
-        sut.markDispatched(10L);
+        sut.recordDispatched(10L);
 
         verify(outboxRepository).findByIdForUpdate(10L);
     }

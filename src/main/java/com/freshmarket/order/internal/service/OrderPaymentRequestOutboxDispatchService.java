@@ -22,7 +22,7 @@ public class OrderPaymentRequestOutboxDispatchService {
     private static final int PAGE_SIZE = 100;
 
     private final OrderPaymentRequestOutboxRepository outboxRepository;
-    private final OrderPaymentRequestOutboxDeliveryService deliveryService;
+    private final OrderPaymentRequestOutboxRecordService recordService;
     private final ApplicationEventPublisher eventPublisher;
 
     public void dispatchForOrder(Long orderId) {
@@ -45,7 +45,7 @@ public class OrderPaymentRequestOutboxDispatchService {
     private void dispatchOne(OrderPaymentRequestOutbox outbox) {
         try {
             eventPublisher.publishEvent(new OrderPaymentRequestedEvent(outbox.getOrderId(), outbox.getAmount()));
-            deliveryService.markDispatched(outbox.getId());
+            recordService.recordDispatched(outbox.getId());
         } catch (RuntimeException e) {
             log.error("event=ORDER_PAYMENT_REQUEST_OUTBOX_DISPATCH_FAILED outboxId={} orderId={}",
                     outbox.getId(), outbox.getOrderId(), e);
