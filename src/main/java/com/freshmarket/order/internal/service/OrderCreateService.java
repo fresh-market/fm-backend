@@ -85,9 +85,20 @@ public class OrderCreateService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional
     public void onPaymentApproved(OrderPaymentApprovedEvent event) {
+        /*
+         * [2026-09-06 KST] 이 orderId는 createOrder()에서 주문 저장 커밋이 끝난 뒤에야(오토인크리먼트로
+         * 값을 이미 받은 뒤에야) OrderPaymentRequestedEvent에 실려 나갔다가 결제 승인 이벤트에 그대로
+         * 돌아온 것이라, 정상 흐름에서는 여기서 주문을 못 찾는 경로가 없다 — 즉 이 예외가 실제로
+         * 던져진다면 재시도로 풀릴 일시적 문제가 아니라 버그 신호다(같은 id로 다시 조회해도 똑같이
+         * 없다). 그래서 그냥 던지지 않고 log.error로 남겨 알림이 가게 한다.
+         */
         Order order = orderRepository.findById(event.orderId())
-                .orElseThrow(() -> new IllegalStateException(
-                        "결제 승인된 주문을 찾을 수 없습니다. orderId=" + event.orderId()));
+                .orElseThrow(() -> {
+                    log.error("event=ORDER_NOT_FOUND_FOR_PAYMENT_APPROVED orderId={} paymentId={}",
+                            event.orderId(), event.paymentId());
+                    return new IllegalStateException(
+                            "결제 승인된 주문을 찾을 수 없습니다. orderId=" + event.orderId());
+                });
         order.markPaid();
 
         // 명령성 상태 변화 로그 — PII/토큰/pgTid 없이 orderId/금액만 남긴다.
@@ -111,9 +122,14 @@ public class OrderCreateService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional
     public void onPaymentFailed(OrderPaymentFailedEvent event) {
+        // onPaymentApproved()와 같은 이유로 정상 흐름에서는 못 일어나는 케이스다 — 로그 없이 던지지 않는다.
         Order order = orderRepository.findById(event.orderId())
-                .orElseThrow(() -> new IllegalStateException(
-                        "결제 실패 처리할 주문을 찾을 수 없습니다. orderId=" + event.orderId()));
+                .orElseThrow(() -> {
+                    log.error("event=ORDER_NOT_FOUND_FOR_PAYMENT_FAILED orderId={} paymentId={}",
+                            event.orderId(), event.paymentId());
+                    return new IllegalStateException(
+                            "결제 실패 처리할 주문을 찾을 수 없습니다. orderId=" + event.orderId());
+                });
         order.cancel();
 
         // 명령성 상태 변화 로그 — PII/토큰/pgTid 없이 orderId/사유만 남긴다.
