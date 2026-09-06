@@ -139,6 +139,8 @@ class OrderCreateServiceTest {
         sut.onPaymentFailed(new OrderPaymentFailedEvent(100L, 900L, "카드 한도 초과"));
 
         assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELED);
+        assertThat(item1.getItemStatus()).isEqualTo(OrderItemStatus.CANCELED);
+        assertThat(item2.getItemStatus()).isEqualTo(OrderItemStatus.CANCELED);
         verify(stockApi).release(new StockOrderItemsRequest(100L, List.of(501L, 502L)));
     }
 

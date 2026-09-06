@@ -51,7 +51,9 @@ public class OrderExpirationTransactionService {
         order.cancel();
         log.info("event=order_canceled orderId={} reason=payment_pending_expired", order.getId());
 
-        List<Long> orderItemIds = orderItemRepository.findAllByOrderIdOrderByIdAsc(order.getId()).stream()
+        List<OrderItem> orderItems = orderItemRepository.findAllByOrderIdOrderByIdAsc(order.getId());
+        orderItems.forEach(OrderItem::cancel);
+        List<Long> orderItemIds = orderItems.stream()
                 .map(OrderItem::getId)
                 .toList();
         stockApi.release(new StockOrderItemsRequest(order.getId(), orderItemIds));

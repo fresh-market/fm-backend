@@ -55,6 +55,7 @@ class OrderExpirationTransactionServiceTest {
         sut.expireIfStillPending(100L);
 
         assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELED);
+        assertThat(item.getItemStatus()).isEqualTo(OrderItemStatus.CANCELED);
         verify(stockApi).release(new StockOrderItemsRequest(100L, List.of(501L)));
     }
 

@@ -169,7 +169,9 @@ public class OrderCreateService {
         // 명령성 상태 변화 로그 — PII/토큰/pgTid 없이 orderId/사유만 남긴다.
         log.info("event=order_canceled orderId={} reason={}", order.getId(), event.reason());
 
-        List<Long> orderItemIds = orderItemRepository.findAllByOrderIdOrderByIdAsc(order.getId()).stream()
+        List<OrderItem> orderItems = orderItemRepository.findAllByOrderIdOrderByIdAsc(order.getId());
+        orderItems.forEach(OrderItem::cancel);
+        List<Long> orderItemIds = orderItems.stream()
                 .map(OrderItem::getId)
                 .toList();
         stockApi.release(new StockOrderItemsRequest(order.getId(), orderItemIds));
