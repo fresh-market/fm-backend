@@ -32,5 +32,23 @@
   OrderPaymentFailedEvent 전부)을 그 결정에 맞게 다시 봐야 한다. R01(결제 실패·미확정·복구 상태
   머신)을 먼저 끝내기 위해 지금은 이 v1으로 간다.
 
+  **[2026-09-06 KST] R02 보류 중 알려진 갭 — 재고 확정/해제 결과가 order에게 전달 안 되는 경우**:
+  `OrderCreateService.onPaymentApproved`/`onPaymentFailed` 안에서 `order.markPaid()`/
+  `order.cancel()`과 `stockApi.confirm()`/`stockApi.release()`가 같은 트랜잭션에 있어서, 재고
+  쪽이 실패하면 order 상태 변경까지 통째로 롤백된다 — "주문은 PAID인데 재고는 미확정" 같은
+  절반짜리 상태는 안 생긴다. 진짜 문제는 그다음이다: 이 트랜잭션 자체가 실패하고 나면 Payment는
+  이미 별도 트랜잭션에서 PAID/FAILED로 커밋 완료된 상태인데 order만 그 사실을 놓친 채
+  PAYMENT_PENDING에 멈추고, 이걸 다시 집어서 재시도해줄 장치가 지금 없다 — 이 이벤트 체인 전달
+  자체가 스프링 인메모리 이벤트(`ApplicationEventPublisher`)에만 의존하기 때문이다.
+
+  정석적인 해법은 아웃박스 패턴(Payment.approve()/fail()이 커밋되는 트랜잭션 안에 전달할 이벤트를
+  아웃박스 테이블에 같이 쓰고, 별도 폴러가 order 쪽 전달을 성공할 때까지 재시도)인데, 이건 결국
+  "order-payment가 서로 신뢰성 있게 어떻게 통신할 것인가"라는 R02 본론과 같은 자리의 문제라 R02보다
+  먼저 정식 아웃박스를 놓는 건 이르다고 보고 지금은 손대지 않기로 했다. 필요해지면 정식 아웃박스
+  대신 "Payment는 PAID/FAILED로 확정됐는데 대응하는 Order는 아직 PAYMENT_PENDING인 것"을 훑는
+  order 쪽 재확인 배치(payment.internal.batch.PaymentReconciliationService와 같은 패턴)로 임시로
+  메우는 방법도 있다 — 다만 이것도 R02가 이 v1 이벤트 연결 자체를 다른 방식으로 바꿀 수 있으므로,
+  R02 결정 이후 필요 여부를 다시 판단한다.
+
 coupon 도메인은 아직 호출하지 않는다. 주문·주문 항목의 할인 금액은 0으로 고정하며,
 `OrderPriceCalculator`의 TODO에서 후속 연동 지점을 관리한다.
