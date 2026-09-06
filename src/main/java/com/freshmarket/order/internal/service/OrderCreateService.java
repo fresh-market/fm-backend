@@ -1,6 +1,7 @@
 package com.freshmarket.order.internal.service;
 
 import com.freshmarket.common.event.OrderPaymentApprovedEvent;
+import com.freshmarket.common.event.OrderPaymentFailedEvent;
 import com.freshmarket.common.event.OrderPaymentRequestedEvent;
 import com.freshmarket.order.internal.PendingOrderResult;
 import com.freshmarket.order.internal.dto.OrderCreateRequest;
@@ -15,9 +16,10 @@ import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 /*
  * 장바구니 -> 주문 생성(POST /v1/orders)의 공개 진입점이다. 클래스/메서드 어디에도 @Transactional을
@@ -34,13 +36,23 @@ import org.springframework.transaction.annotation.Transactional;
  *      "mock 성공만 리턴하는 지점"을 한 곳으로 좁히고 싶다면 손댈 곳은 이 이벤트 발행부가 아니라
  *      payment.domain.client.MockPaymentGateway 하나다 — PaymentGateway 인터페이스의 구현체를
  *      실제 PG 클라이언트로 교체하는 것만으로 끝난다(PaymentApiImpl/PaymentService는 안 바뀐다).
- *   c. onPaymentApproved(아래) — 결제가 승인되면 이벤트 체인 끝에서 새로 짧은 트랜잭션을 연다.
+ *   c. onPaymentApproved/onPaymentFailed(아래) — 결제 결과가 확정되면 이벤트 체인 끝에서 새로
+ *      짧은 트랜잭션을 연다.
  *
  * a단계를 이 클래스 안의 @Transactional 메서드로 두지 않고 별도 빈(OrderPendingCreationService)
  * 으로 뺀 이유: 같은 빈 안에서 this.메서드()로 자기 자신을 호출하면 스프링 프록시를 안 거쳐
  * @Transactional이 조용히 무시된다(자기호출 함정) — TransactionTemplate으로 직접 경계를 긋는
  * 방법도 있지만, 이 프로젝트는 지금까지 전부 선언적 @Transactional만 써왔어서(TransactionTemplate
  * 쓰는 곳이 없다) 스타일을 맞추는 쪽을 택했다.
+ *
+ * [2026-09-05 19:13 KST] onPaymentApproved/onPaymentFailed는 원래 평범한 @EventListener였는데
+ * @TransactionalEventListener(AFTER_COMMIT)로 바꿨다. PaymentService.approvePayment()/
+ * failPayment()가 이제 "자기 트랜잭션 안에서" 이벤트를 발행하기 때문이다 — 발행 시점엔 payment
+ * 쪽 트랜잭션이 아직 커밋 전이라, 평범한 @EventListener라면 이 메서드가 payment의 커밋 여부와
+ * 무관하게 같은 호출 스택 안에서 즉시 실행돼 버린다(그 상태에서 이 메서드가 실패하면 아직 커밋도
+ * 안 한 payment 트랜잭션까지 함께 말려들 위험도 있다). AFTER_COMMIT으로 두면 payment 쪽
+ * 트랜잭션이 실제로 커밋된 뒤에만 실행되고, 여기서 예외가 나도 이미 커밋된 payment 상태는
+ * 되돌리지 않는다 — order 쪽 실패가 이미 확정된 결제를 롤백시키면 안 되기 때문이다.
  */
 @Slf4j
 @Service
@@ -67,10 +79,10 @@ public class OrderCreateService {
     }
 
     /*
-     * 결제 승인(mock) 뒤 payment 도메인이 발행한 이벤트를 받아 주문을 PAID로 바꾸고 재고를
-     * 확정한다. createOrder()의 a단계와는 별개의 새 트랜잭션이다(위 클래스 주석의 c단계).
+     * 결제 승인 뒤 payment 도메인이 발행한 이벤트를 받아 주문을 PAID로 바꾸고 재고를 확정한다.
+     * createOrder()의 a단계와는 별개의 새 트랜잭션이다(위 클래스 주석의 c단계).
      */
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional
     public void onPaymentApproved(OrderPaymentApprovedEvent event) {
         Order order = orderRepository.findById(event.orderId())
@@ -85,5 +97,31 @@ public class OrderCreateService {
                 .map(OrderItem::getId)
                 .toList();
         stockApi.confirm(new StockOrderItemsRequest(order.getId(), orderItemIds));
+    }
+
+    /*
+     * [2026-09-05 19:13 KST] 결제가 최종 실패(FAILED)했을 때 payment 도메인이 발행한 이벤트를
+     * 받아 주문을 취소하고 재고 예약을 해제한다. onPaymentApproved()와 대칭인 보상 흐름이다.
+     *
+     * v1: order/payment가 둘 다 L2라 서로 직접 못 부르는 제약 때문에 지금은 common.event를 통한
+     * 발행/구독으로 풀었다(docs/order-create-foundation.md 참고). R02(order-payment 도메인 경계
+     * ADR)가 팀 논의를 거쳐 결정되면 이 연결 방식 자체를 다시 봐야 한다 — 지금은 R01(결제 실패·
+     * 미확정·복구 상태 머신)을 먼저 끝내기 위한 v1이다.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional
+    public void onPaymentFailed(OrderPaymentFailedEvent event) {
+        Order order = orderRepository.findById(event.orderId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "결제 실패 처리할 주문을 찾을 수 없습니다. orderId=" + event.orderId()));
+        order.cancel();
+
+        // 명령성 상태 변화 로그 — PII/토큰/pgTid 없이 orderId/사유만 남긴다.
+        log.info("event=order_canceled orderId={} reason={}", order.getId(), event.reason());
+
+        List<Long> orderItemIds = orderItemRepository.findAllByOrderIdOrderByIdAsc(order.getId()).stream()
+                .map(OrderItem::getId)
+                .toList();
+        stockApi.release(new StockOrderItemsRequest(order.getId(), orderItemIds));
     }
 }
