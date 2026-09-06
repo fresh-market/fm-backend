@@ -16,9 +16,11 @@ import com.freshmarket.order.internal.entity.Order;
 import com.freshmarket.order.internal.entity.OrderItem;
 import com.freshmarket.order.internal.entity.OrderItemPlacement;
 import com.freshmarket.order.internal.entity.OrderPlacement;
+import com.freshmarket.order.internal.entity.OrderPaymentRequestOutbox;
 import com.freshmarket.order.internal.exception.OrderErrorCode;
 import com.freshmarket.order.internal.exception.OrderException;
 import com.freshmarket.order.internal.repository.OrderItemRepository;
+import com.freshmarket.order.internal.repository.OrderPaymentRequestOutboxRepository;
 import com.freshmarket.order.internal.repository.OrderRepository;
 import com.freshmarket.stock.StockApi;
 import com.freshmarket.stock.StockReservationItemRequest;
@@ -51,6 +53,7 @@ class OrderPendingCreationService {
 
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
+    private final OrderPaymentRequestOutboxRepository orderPaymentRequestOutboxRepository;
     private final CartApi cartApi;
     private final MemberApi memberApi;
     private final StockApi stockApi;
@@ -134,6 +137,10 @@ class OrderPendingCreationService {
         if (checkout.isCartOrder()) {
             cartApi.removeCheckedOutItems(memberId, checkout.cartItems());
         }
+
+        // 주문 저장과 결제 요청 전달 의도를 같은 트랜잭션에 남긴다. 커밋 뒤 전송이 실패해도 outbox가 남는다.
+        orderPaymentRequestOutboxRepository.save(
+                OrderPaymentRequestOutbox.pending(order.getId(), order.getTotalAmount()));
 
         // 명령성 상태 변화 로그 — PII/토큰/pgTid 없이 orderId/상태/금액만 남긴다.
         log.info("event=order_created orderId={} status={} amount={}",

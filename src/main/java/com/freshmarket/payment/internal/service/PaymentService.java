@@ -1,21 +1,20 @@
 package com.freshmarket.payment.internal.service;
 
-import com.freshmarket.common.event.OrderPaymentApprovedEvent;
-import com.freshmarket.common.event.OrderPaymentFailedEvent;
 import com.freshmarket.payment.PaymentRequest;
 import com.freshmarket.payment.PaymentResult;
 import com.freshmarket.payment.internal.PaymentPreparation;
 import com.freshmarket.payment.internal.client.PaymentGatewayApproval;
 import com.freshmarket.payment.internal.entity.Payment;
+import com.freshmarket.payment.internal.entity.PaymentResultOutbox;
 import com.freshmarket.payment.internal.exception.PaymentErrorCode;
 import com.freshmarket.payment.internal.exception.PaymentException;
 import com.freshmarket.payment.internal.repository.PaymentRepository;
+import com.freshmarket.payment.internal.repository.PaymentResultOutboxRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import java.util.Optional;
 import java.time.Clock;
 import java.time.LocalDateTime;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,8 +25,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class PaymentService {
 
     private final PaymentRepository paymentRepository;
+    private final PaymentResultOutboxRepository paymentResultOutboxRepository;
     private final Clock clock;
-    private final ApplicationEventPublisher eventPublisher;
 
     // PG 호출 전에 PENDING 행을 별도 트랜잭션으로 확정한다. 외부 호출 동안 DB 트랜잭션을 잡지 않는다.
     @Transactional
@@ -48,11 +47,8 @@ public class PaymentService {
      * 확정할 때도 이 메서드를 그대로 쓴다 — 그래서 "대기 상태가 아니면 거부"하는 조건에 UNKNOWN도
      * 통과시키도록 넓혔다. Payment.approve() 쪽 가드도 같은 이유로 함께 넓어졌다.
      *
-     * order에게 승인을 알리는 OrderPaymentApprovedEvent도 여기서 직접 발행한다 — 동기 흐름(최초
-     * 승인)이든 복구 배치가 나중에 확정하는 것이든, 실제로 상태가 바뀌는 지점이 오직 여기 하나이므로
-     * 호출하는 쪽(PaymentRequestedEventListener, PaymentReconciliationService)이 각자 발행할
-     * 필요가 없다 — 전엔 PaymentRequestedEventListener가 직접 발행했는데, 그러면 복구 배치가
-     * 확정하는 경로는 이 이벤트를 놓치게 된다.
+     * order 전달 의도도 여기서 outbox로 저장한다. Payment 상태와 같은 트랜잭션에 남기므로, 프로세스가
+     * 커밋 직후 죽어도 dispatcher가 나중에 order에 다시 전달할 수 있다.
      */
     @Transactional
     public PaymentResult approvePayment(Long paymentId, PaymentGatewayApproval approval) {
@@ -73,8 +69,8 @@ public class PaymentService {
 
         log.info("event=PAYMENT_PAID paymentId={} orderId={} amount={} method={}",
                 payment.getId(), payment.getOrderId(), payment.getAmount(), payment.getMethod());
-        eventPublisher.publishEvent(
-                new OrderPaymentApprovedEvent(payment.getOrderId(), payment.getId(), payment.getPaidAt()));
+        paymentResultOutboxRepository.save(
+                PaymentResultOutbox.approved(payment.getId(), payment.getOrderId(), payment.getPaidAt()));
 
         return PaymentResult.from(payment);
     }
@@ -84,7 +80,7 @@ public class PaymentService {
      * 재조회로 거절을 확인했을 때 모두 이 메서드로 온다. 이미 FAILED면 그대로 반환해 재시도로 인한
      * 중복 처리를 막는다 — PAID처럼 findByIdForUpdate로 잠근 뒤 판단하므로 동시 호출에도 안전하다.
      *
-     * OrderPaymentFailedEvent도 실제로 FAILED로 전이할 때만(이미 FAILED였던 경우는 제외) 발행한다.
+     * 실패 결과 outbox도 실제로 FAILED로 전이할 때만(이미 FAILED였던 경우는 제외) 저장한다.
      * UNKNOWN 상태에서는 이 메서드가 호출되지 않으므로 — 아직 PG 결과가 확정 안 된 결제 때문에
      * 주문을 섣불리 취소하는 일은 없다.
      */
@@ -98,7 +94,7 @@ public class PaymentService {
         payment.fail();
         log.info("event=PAYMENT_FAILED paymentId={} orderId={} amount={} method={} reason={}",
                 payment.getId(), payment.getOrderId(), payment.getAmount(), payment.getMethod(), reason);
-        eventPublisher.publishEvent(new OrderPaymentFailedEvent(payment.getOrderId(), payment.getId(), reason));
+        paymentResultOutboxRepository.save(PaymentResultOutbox.failed(payment.getId(), payment.getOrderId(), reason));
         return PaymentResult.from(payment);
     }
 

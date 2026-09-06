@@ -2,7 +2,6 @@ package com.freshmarket.order.internal.service;
 
 import com.freshmarket.common.event.OrderPaymentApprovedEvent;
 import com.freshmarket.common.event.OrderPaymentFailedEvent;
-import com.freshmarket.common.event.OrderPaymentRequestedEvent;
 import com.freshmarket.order.internal.PendingOrderResult;
 import com.freshmarket.order.internal.dto.OrderCreateRequest;
 import com.freshmarket.order.internal.dto.OrderCreateResponse;
@@ -16,12 +15,10 @@ import com.freshmarket.stock.StockOrderItemsRequest;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.transaction.event.TransactionalEventListener;
 
 /*
  * 장바구니 -> 주문 생성(POST /v1/orders)의 공개 진입점이다. 클래스/메서드 어디에도 @Transactional을
@@ -30,7 +27,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *
  *   a. orderPendingCreationService.createPendingOrder(...) — 짧은 트랜잭션. 주문/주문상품 저장,
  *      재고 예약, 장바구니 정리까지 끝내고 커밋한 뒤 돌아온다.
- *   b. (여기, 트랜잭션 밖) OrderPaymentRequestedEvent 발행 — payment.domain의 리스너가 이
+ *   b. (여기, 트랜잭션 밖) order outbox dispatch — payment.domain의 리스너가 공용 이벤트를 받아
  *      이벤트를 받아 PaymentApi.requestPayment를 부른다(자세한 이유는 그 이벤트 클래스 주석:
  *      order/payment 둘 다 L2라 서로 직접 못 부른다). 지금은 MockPaymentGateway라 이 호출이
  *      순식간에 끝나지만, 나중에 실제 PG WebClient로 바뀌어 네트워크 지연이 생겨도 이 시점엔 DB
@@ -47,21 +44,9 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * 방법도 있지만, 이 프로젝트는 지금까지 전부 선언적 @Transactional만 써왔어서(TransactionTemplate
  * 쓰는 곳이 없다) 스타일을 맞추는 쪽을 택했다.
  *
- * [2026-09-05 19:13 KST] onPaymentApproved/onPaymentFailed는 원래 평범한 @EventListener였는데
- * @TransactionalEventListener(AFTER_COMMIT)로 바꿨다. PaymentService.approvePayment()/
- * failPayment()가 이제 "자기 트랜잭션 안에서" 이벤트를 발행하기 때문이다 — 발행 시점엔 payment
- * 쪽 트랜잭션이 아직 커밋 전이라, 평범한 @EventListener라면 이 메서드가 payment의 커밋 여부와
- * 무관하게 같은 호출 스택 안에서 즉시 실행돼 버린다(그 상태에서 이 메서드가 실패하면 아직 커밋도
- * 안 한 payment 트랜잭션까지 함께 말려들 위험도 있다). AFTER_COMMIT으로 두면 payment 쪽
- * 트랜잭션이 실제로 커밋된 뒤에만 실행되고, 여기서 예외가 나도 이미 커밋된 payment 상태는
- * 되돌리지 않는다 — order 쪽 실패가 이미 확정된 결제를 롤백시키면 안 되기 때문이다.
- *
- * [2026-09-06 KST] 아래 두 리스너의 @Transactional엔 propagation = REQUIRES_NEW가 반드시 있어야
- * 한다 — 스프링이 "@TransactionalEventListener 메서드는 REQUIRES_NEW/NOT_SUPPORTED가 아니면
- * @Transactional을 못 붙인다"고 기동 시점에 막는다(그냥 @Transactional만 붙이면 컨텍스트 자체가
- * 안 뜬다: BeanInitializationException). 의미상으로도 REQUIRES_NEW가 맞다 — AFTER_COMMIT 시점엔
- * createOrder()의 원래 트랜잭션이 이미 끝나 있어 "참여할" 트랜잭션이 없고, 여기서 새로 여는 게
- * 원래 의도였다.
+ * 결제 결과도 payment outbox가 payment 커밋 뒤에 발행한다. 따라서 이 리스너는 평범한
+ * @EventListener로 받고 REQUIRES_NEW에서 order/stock을 함께 확정한다. 처리 실패는 publisher에
+ * 전달되어 outbox가 미완료 상태로 남고, batch가 다시 전달한다.
  */
 @Slf4j
 @Service
@@ -72,17 +57,12 @@ public class OrderCreateService {
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final StockApi stockApi;
-    private final ApplicationEventPublisher eventPublisher;
+    private final OrderPaymentRequestOutboxDispatchService outboxDispatchService;
 
     public OrderCreateResponse createOrder(Long memberId, OrderCreateRequest request) {
         PendingOrderResult pending = orderPendingCreationService.createPendingOrder(memberId, request);
-        if (!pending.newlyCreated()) {
-            // requestId 재시도로 기존 주문을 그대로 돌려주는 경우 — 결제를 다시 요청하지 않는다.
-            return pending.response();
-        }
-
-        eventPublisher.publishEvent(new OrderPaymentRequestedEvent(
-                pending.response().orderId(), pending.response().totalAmount()));
+        // 새 요청과 requestId 재시도 모두 미전달 outbox만 전송한다. 이미 dispatch된 행은 조회되지 않는다.
+        outboxDispatchService.dispatchForOrder(pending.response().orderId());
 
         return pending.response();
     }
@@ -91,7 +71,7 @@ public class OrderCreateService {
      * 결제 승인 뒤 payment 도메인이 발행한 이벤트를 받아 주문을 PAID로 바꾸고 재고를 확정한다.
      * createOrder()의 a단계와는 별개의 새 트랜잭션이다(위 클래스 주석의 c단계).
      */
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @EventListener
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onPaymentApproved(OrderPaymentApprovedEvent event) {
         /*
@@ -155,7 +135,7 @@ public class OrderCreateService {
      * ADR)가 팀 논의를 거쳐 결정되면 이 연결 방식 자체를 다시 봐야 한다 — 지금은 R01(결제 실패·
      * 미확정·복구 상태 머신)을 먼저 끝내기 위한 v1이다.
      */
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @EventListener
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onPaymentFailed(OrderPaymentFailedEvent event) {
         /*

@@ -9,7 +9,6 @@ import static org.mockito.Mockito.when;
 
 import com.freshmarket.common.event.OrderPaymentApprovedEvent;
 import com.freshmarket.common.event.OrderPaymentFailedEvent;
-import com.freshmarket.common.event.OrderPaymentRequestedEvent;
 import com.freshmarket.order.internal.PendingOrderResult;
 import com.freshmarket.order.internal.dto.OrderCreateRequest;
 import com.freshmarket.order.internal.dto.OrderCreateResponse;
@@ -29,7 +28,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
@@ -48,18 +46,18 @@ class OrderCreateServiceTest {
     private StockApi stockApi;
 
     @Mock
-    private ApplicationEventPublisher eventPublisher;
+    private OrderPaymentRequestOutboxDispatchService outboxDispatchService;
 
     private OrderCreateService sut;
 
     @BeforeEach
     void setUp() {
         sut = new OrderCreateService(
-                orderPendingCreationService, orderRepository, orderItemRepository, stockApi, eventPublisher);
+                orderPendingCreationService, orderRepository, orderItemRepository, stockApi, outboxDispatchService);
     }
 
     @Test
-    void 새로_생성된_주문이면_결제요청_이벤트를_발행한다() {
+    void 새로_생성된_주문이면_결제요청_outbox를_dispatch한다() {
         OrderCreateRequest request = request();
         OrderCreateResponse response = new OrderCreateResponse(100L, "100", OrderStatus.PAYMENT_PENDING, 38_700);
         when(orderPendingCreationService.createPendingOrder(1L, request))
@@ -68,11 +66,11 @@ class OrderCreateServiceTest {
         OrderCreateResponse result = sut.createOrder(1L, request);
 
         assertThat(result).isEqualTo(response);
-        verify(eventPublisher).publishEvent(new OrderPaymentRequestedEvent(100L, 38_700));
+        verify(outboxDispatchService).dispatchForOrder(100L);
     }
 
     @Test
-    void requestId_재시도로_기존_주문을_돌려주면_결제요청_이벤트를_다시_발행하지_않는다() {
+    void requestId_재시도면_미전달_결제요청_outbox를_다시_dispatch한다() {
         OrderCreateRequest request = request();
         OrderCreateResponse response = new OrderCreateResponse(100L, "100", OrderStatus.PAID, 38_700);
         when(orderPendingCreationService.createPendingOrder(1L, request))
@@ -81,7 +79,7 @@ class OrderCreateServiceTest {
         OrderCreateResponse result = sut.createOrder(1L, request);
 
         assertThat(result).isEqualTo(response);
-        verify(eventPublisher, never()).publishEvent(any());
+        verify(outboxDispatchService).dispatchForOrder(100L);
     }
 
     @Test

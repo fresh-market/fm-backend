@@ -22,10 +22,12 @@ import com.freshmarket.order.internal.dto.OrderCreateItemRequest;
 import com.freshmarket.order.internal.entity.Order;
 import com.freshmarket.order.internal.entity.OrderItem;
 import com.freshmarket.order.internal.entity.OrderPlacement;
+import com.freshmarket.order.internal.entity.OrderPaymentRequestOutbox;
 import com.freshmarket.order.internal.entity.OrderStatus;
 import com.freshmarket.order.internal.exception.OrderErrorCode;
 import com.freshmarket.order.internal.exception.OrderException;
 import com.freshmarket.order.internal.repository.OrderItemRepository;
+import com.freshmarket.order.internal.repository.OrderPaymentRequestOutboxRepository;
 import com.freshmarket.order.internal.repository.OrderRepository;
 import com.freshmarket.stock.StockApi;
 import com.freshmarket.stock.StockReservationRequest;
@@ -58,6 +60,9 @@ class OrderPendingCreationServiceTest {
     private OrderItemRepository orderItemRepository;
 
     @Mock
+    private OrderPaymentRequestOutboxRepository orderPaymentRequestOutboxRepository;
+
+    @Mock
     private CartApi cartApi;
 
     @Mock
@@ -78,7 +83,8 @@ class OrderPendingCreationServiceTest {
     void setUp() {
         Clock clock = Clock.fixed(Instant.parse("2026-08-21T03:00:00Z"), ZoneId.of("Asia/Seoul"));
         sut = new OrderPendingCreationService(
-                orderRepository, orderItemRepository, cartApi, memberApi, stockApi, productApi, orderNoGenerator, clock);
+                orderRepository, orderItemRepository, orderPaymentRequestOutboxRepository, cartApi, memberApi,
+                stockApi, productApi, orderNoGenerator, clock);
     }
 
     @Test
@@ -103,6 +109,7 @@ class OrderPendingCreationServiceTest {
         assertThat(captor.getValue().items()).hasSize(2);
 
         verify(cartApi).removeCheckedOutItems(MEMBER_ID, checkoutInfo().items());
+        verify(orderPaymentRequestOutboxRepository).save(any(OrderPaymentRequestOutbox.class));
     }
 
     @Test

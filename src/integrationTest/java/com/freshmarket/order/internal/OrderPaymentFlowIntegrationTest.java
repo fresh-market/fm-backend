@@ -96,6 +96,8 @@ class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
         assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.PAID);
         assertThat(paymentStatus(orderId)).isEqualTo("PAID");
         assertThat(stockAllocationStatuses(orderId)).containsOnly("CONFIRMED");
+        assertThat(orderPaymentRequestOutboxDispatched(orderId)).isTrue();
+        assertThat(paymentResultOutboxDispatched(orderId)).isTrue();
         assertThat(fakePaymentGateway.callCount()).isEqualTo(1);
     }
 
@@ -109,6 +111,8 @@ class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
         assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.CANCELED);
         assertThat(paymentStatus(orderId)).isEqualTo("FAILED");
         assertThat(stockAllocationStatuses(orderId)).containsOnly("RELEASED");
+        assertThat(orderPaymentRequestOutboxDispatched(orderId)).isTrue();
+        assertThat(paymentResultOutboxDispatched(orderId)).isTrue();
     }
 
     /*
@@ -126,6 +130,7 @@ class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
         assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.PAYMENT_PENDING);
         assertThat(paymentStatus(orderId)).isEqualTo("UNKNOWN");
         assertThat(stockAllocationStatuses(orderId)).containsOnly("RESERVED");
+        assertThat(orderPaymentRequestOutboxDispatched(orderId)).isTrue();
     }
 
     private OrderCreateRequest request() {
@@ -154,6 +159,16 @@ class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
                         + "JOIN order_item oi ON oi.order_item_id = sa.order_item_id "
                         + "WHERE oi.order_id = ?",
                 String.class, orderId);
+    }
+
+    private boolean orderPaymentRequestOutboxDispatched(Long orderId) {
+        return Boolean.TRUE.equals(jdbcTemplate.queryForObject(
+                "SELECT dispatched FROM order_payment_request_outbox WHERE order_id = ?", Boolean.class, orderId));
+    }
+
+    private boolean paymentResultOutboxDispatched(Long orderId) {
+        return Boolean.TRUE.equals(jdbcTemplate.queryForObject(
+                "SELECT dispatched FROM payment_result_outbox WHERE order_id = ?", Boolean.class, orderId));
     }
 
     // ---- fixture: 이 테스트 하나가 만든 행만 정확히 지운다. MySQL 컨테이너는 다른 통합테스트
@@ -226,7 +241,9 @@ class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
                             + "JOIN order_item oi ON oi.order_item_id = sa.order_item_id "
                             + "WHERE oi.order_id = ?",
                     orderId);
+            jdbcTemplate.update("DELETE FROM payment_result_outbox WHERE order_id = ?", orderId);
             jdbcTemplate.update("DELETE FROM payment WHERE order_id = ?", orderId);
+            jdbcTemplate.update("DELETE FROM order_payment_request_outbox WHERE order_id = ?", orderId);
             jdbcTemplate.update("DELETE FROM order_item WHERE order_id = ?", orderId);
             jdbcTemplate.update("DELETE FROM orders WHERE order_id = ?", orderId);
         }

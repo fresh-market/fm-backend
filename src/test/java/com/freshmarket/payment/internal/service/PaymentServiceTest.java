@@ -10,8 +10,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.freshmarket.common.event.OrderPaymentApprovedEvent;
-import com.freshmarket.common.event.OrderPaymentFailedEvent;
 import com.freshmarket.payment.PaymentMethod;
 import com.freshmarket.payment.PaymentRequest;
 import com.freshmarket.payment.PaymentResult;
@@ -19,9 +17,11 @@ import com.freshmarket.payment.PaymentStatus;
 import com.freshmarket.payment.internal.PaymentPreparation;
 import com.freshmarket.payment.internal.client.PaymentGatewayApproval;
 import com.freshmarket.payment.internal.entity.Payment;
+import com.freshmarket.payment.internal.entity.PaymentResultOutbox;
 import com.freshmarket.payment.internal.exception.PaymentErrorCode;
 import com.freshmarket.payment.internal.exception.PaymentException;
 import com.freshmarket.payment.internal.repository.PaymentRepository;
+import com.freshmarket.payment.internal.repository.PaymentResultOutboxRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -32,7 +32,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
@@ -42,14 +41,14 @@ class PaymentServiceTest {
     private PaymentRepository paymentRepository;
 
     @Mock
-    private ApplicationEventPublisher eventPublisher;
+    private PaymentResultOutboxRepository paymentResultOutboxRepository;
 
     private PaymentService sut;
 
     @BeforeEach
     void setUp() {
         Clock clock = Clock.fixed(Instant.parse("2026-08-22T00:00:00Z"), ZoneId.of("Asia/Seoul"));
-        sut = new PaymentService(paymentRepository, clock, eventPublisher);
+        sut = new PaymentService(paymentRepository, paymentResultOutboxRepository, clock);
     }
 
     @Test
@@ -111,7 +110,7 @@ class PaymentServiceTest {
         assertThat(result.status()).isEqualTo(PaymentStatus.PAID);
         assertThat(result.pgTid()).isEqualTo("mock_123");
         assertThat(result.paidAt()).isEqualTo(paidAt);
-        verify(eventPublisher).publishEvent(new OrderPaymentApprovedEvent(payment.getOrderId(), 10L, paidAt));
+        verify(paymentResultOutboxRepository).save(any(PaymentResultOutbox.class));
     }
 
     @Test
@@ -135,7 +134,7 @@ class PaymentServiceTest {
                 new PaymentGatewayApproval("different_tid", LocalDateTime.of(2026, 8, 21, 16, 0)));
 
         assertThat(result.pgTid()).isEqualTo("mock_123");
-        verify(eventPublisher, never()).publishEvent(any());
+        verify(paymentResultOutboxRepository, never()).save(any());
     }
 
     @Test
@@ -159,7 +158,7 @@ class PaymentServiceTest {
         PaymentResult result = sut.failPayment(10L, "카드 한도 초과");
 
         assertThat(result.status()).isEqualTo(PaymentStatus.FAILED);
-        verify(eventPublisher).publishEvent(new OrderPaymentFailedEvent(payment.getOrderId(), 10L, "카드 한도 초과"));
+        verify(paymentResultOutboxRepository).save(any(PaymentResultOutbox.class));
     }
 
     @Test
@@ -185,7 +184,7 @@ class PaymentServiceTest {
         PaymentResult result = sut.failPayment(10L, "재시도로 들어온 동일 실패");
 
         assertThat(result.status()).isEqualTo(PaymentStatus.FAILED);
-        verify(eventPublisher, never()).publishEvent(any());
+        verify(paymentResultOutboxRepository, never()).save(any());
     }
 
     /*
@@ -200,7 +199,7 @@ class PaymentServiceTest {
         PaymentResult result = sut.markPaymentUnknown(10L, "PG 응답 timeout");
 
         assertThat(result.status()).isEqualTo(PaymentStatus.UNKNOWN);
-        verify(eventPublisher, never()).publishEvent(any());
+        verify(paymentResultOutboxRepository, never()).save(any());
     }
 
     @Test

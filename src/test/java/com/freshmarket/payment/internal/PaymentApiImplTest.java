@@ -9,6 +9,7 @@ import com.freshmarket.payment.PaymentStatus;
 import com.freshmarket.payment.internal.client.PaymentGateway;
 import com.freshmarket.payment.internal.entity.Payment;
 import com.freshmarket.payment.internal.service.PaymentService;
+import com.freshmarket.payment.internal.service.PaymentResultOutboxDispatchService;
 import java.time.LocalDateTime;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -26,13 +27,16 @@ class PaymentApiImplTest {
     @Mock
     private PaymentGateway paymentGateway;
 
+    @Mock
+    private PaymentResultOutboxDispatchService paymentResultOutboxDispatchService;
+
     @Test
     void 내부_결제_엔티티를_공개_조회_계약으로_변환한다() {
         Payment payment = Payment.prepare(1L, PaymentMethod.CARD, 25_800);
         ReflectionTestUtils.setField(payment, "id", 10L);
         payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30));
         when(paymentService.findPayment(1L)).thenReturn(Optional.of(payment));
-        PaymentApiImpl sut = new PaymentApiImpl(paymentService, paymentGateway);
+        PaymentApiImpl sut = new PaymentApiImpl(paymentService, paymentResultOutboxDispatchService, paymentGateway);
 
         Optional<PaymentInfo> result = sut.findPaymentInfo(1L);
 

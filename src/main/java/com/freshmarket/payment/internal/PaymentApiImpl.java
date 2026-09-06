@@ -9,6 +9,7 @@ import com.freshmarket.payment.internal.client.PaymentGatewayApproval;
 import com.freshmarket.payment.internal.client.exception.PaymentGatewayRejectedException;
 import com.freshmarket.payment.internal.client.exception.PaymentGatewayUnknownException;
 import com.freshmarket.payment.internal.entity.Payment;
+import com.freshmarket.payment.internal.service.PaymentResultOutboxDispatchService;
 import com.freshmarket.payment.internal.service.PaymentService;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,7 @@ import org.springframework.stereotype.Component;
 class PaymentApiImpl implements PaymentApi {
 
     private final PaymentService paymentService;
+    private final PaymentResultOutboxDispatchService paymentResultOutboxDispatchService;
     private final PaymentGateway paymentGateway;
 
     @Override
@@ -48,13 +50,13 @@ class PaymentApiImpl implements PaymentApi {
         try {
             approval = paymentGateway.request(payment.toRequest());
         } catch (PaymentGatewayRejectedException e) {
-            return paymentService.failPayment(payment.getId(), e.getMessage());
+            return dispatchResult(paymentService.failPayment(payment.getId(), e.getMessage()));
         } catch (PaymentGatewayUnknownException e) {
             return paymentService.markPaymentUnknown(payment.getId(), e.getMessage());
         }
 
         try {
-            return paymentService.approvePayment(payment.getId(), approval);
+            return dispatchResult(paymentService.approvePayment(payment.getId(), approval));
         } catch (RuntimeException e) {
             /*
              * PG는 이미 승인했다(approval을 받았다) — 문제는 그 사실을 우리 DB에 반영하는 이
@@ -67,6 +69,11 @@ class PaymentApiImpl implements PaymentApi {
             return paymentService.markPaymentUnknown(payment.getId(),
                     "internal reflection failed: " + e.getMessage());
         }
+    }
+
+    private PaymentResult dispatchResult(PaymentResult result) {
+        paymentResultOutboxDispatchService.dispatchForPayment(result.paymentId());
+        return result;
     }
 
     @Override
