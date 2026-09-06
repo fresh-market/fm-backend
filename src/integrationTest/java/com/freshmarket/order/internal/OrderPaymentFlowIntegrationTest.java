@@ -21,7 +21,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /*
@@ -42,13 +41,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
 
     /*
-     * MockPaymentGateway가 @Profile 가드 없는 @Component라 이 컨텍스트에도 기본으로 뜬다.
-     * @Primary로 FakePaymentGatewayIntegrationTest를 덮어써야 PaymentApiImpl이 실제로 이걸 호출한다.
+     * integrationTest 프로필에는 local 전용 MockPaymentGateway가 등록되지 않는다.
+     * 이 fake 빈이 이 테스트 컨텍스트의 유일한 PaymentGateway다.
      */
     @TestConfiguration
     static class FakePaymentGatewayTestConfig {
         @Bean
-        @Primary
         FakePaymentGatewayIntegrationTest fakePaymentGateway(Clock clock) {
             return new FakePaymentGatewayIntegrationTest(clock);
         }

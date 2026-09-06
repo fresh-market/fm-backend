@@ -5,10 +5,12 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
-// 개발 단계의 PG 대역. 실제 PG 교체 시 PaymentGateway 계약은 유지한다.
+// 로컬 개발 전용 PG 대역이다. 테스트 PG/운영에서는 실제 PG 구현체만 등록한다.
 @Component
+@Profile("local")
 @RequiredArgsConstructor
 public class MockPaymentGateway implements PaymentGateway {
 
