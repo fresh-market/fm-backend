@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -54,6 +55,13 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * 안 한 payment 트랜잭션까지 함께 말려들 위험도 있다). AFTER_COMMIT으로 두면 payment 쪽
  * 트랜잭션이 실제로 커밋된 뒤에만 실행되고, 여기서 예외가 나도 이미 커밋된 payment 상태는
  * 되돌리지 않는다 — order 쪽 실패가 이미 확정된 결제를 롤백시키면 안 되기 때문이다.
+ *
+ * [2026-09-06 KST] 아래 두 리스너의 @Transactional엔 propagation = REQUIRES_NEW가 반드시 있어야
+ * 한다 — 스프링이 "@TransactionalEventListener 메서드는 REQUIRES_NEW/NOT_SUPPORTED가 아니면
+ * @Transactional을 못 붙인다"고 기동 시점에 막는다(그냥 @Transactional만 붙이면 컨텍스트 자체가
+ * 안 뜬다: BeanInitializationException). 의미상으로도 REQUIRES_NEW가 맞다 — AFTER_COMMIT 시점엔
+ * createOrder()의 원래 트랜잭션이 이미 끝나 있어 "참여할" 트랜잭션이 없고, 여기서 새로 여는 게
+ * 원래 의도였다.
  */
 @Slf4j
 @Service
@@ -84,7 +92,7 @@ public class OrderCreateService {
      * createOrder()의 a단계와는 별개의 새 트랜잭션이다(위 클래스 주석의 c단계).
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onPaymentApproved(OrderPaymentApprovedEvent event) {
         /*
          * [2026-09-06 KST] 이 orderId는 createOrder()에서 주문 저장 커밋이 끝난 뒤에야(오토인크리먼트로
@@ -148,7 +156,7 @@ public class OrderCreateService {
      * 미확정·복구 상태 머신)을 먼저 끝내기 위한 v1이다.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onPaymentFailed(OrderPaymentFailedEvent event) {
         /*
          * onPaymentApproved()와 같은 이유로 정상 흐름에서는 못 일어나는 케이스다 — 로그 없이 던지지
