@@ -12,9 +12,11 @@ import com.freshmarket.payment.internal.entity.Payment;
 import com.freshmarket.payment.internal.service.PaymentService;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 // 공개 API는 트랜잭션을 열지 않고, 짧은 DB 트랜잭션과 외부 PG 호출의 경계를 조립만 한다.
+@Slf4j
 @Component
 @RequiredArgsConstructor
 class PaymentApiImpl implements PaymentApi {
@@ -31,33 +33,39 @@ class PaymentApiImpl implements PaymentApi {
         }
 
         /*
-         * [2026-09-05 17:54 KST] 명확한 거절(FAILED)·미확정(UNKNOWN) 분류를 구현했다. 아래는
-         * 실제 PG Gateway를 붙일 때 마저 구현해야 할 부분이다.
+         * [2026-09-05 19:13 KST] 남은 TODO(실제 PG Gateway를 붙일 때 함께 구현):
          *
          * [중복 승인·결과 수렴]
          * - PG에 orderId 기반의 merchant payment key(또는 PG가 요구하는 고유 주문번호)를 보낸다.
          *   같은 결제 요청·웹훅·복구 작업이 여러 번 와도 PG 승인과 내부 상태가 한 건으로 수렴해야 한다.
          * - PG 웹훅은 서명, 이벤트 ID, 결제 금액, merchant key를 검증하고, 이벤트 ID도 별도로 멱등 처리한다.
-         * - PG 승인 성공 후 DB의 Payment/Order/재고 확정 트랜잭션이 실패할 수 있다. 이 경우 PG 거래를
-         *   재조회해 PAID로 복구할 수 있어야 하며, 단순히 PENDING Payment를 반환하고 끝내면 안 된다.
-         *
-         * [실패·불확실 상태 이후 처리 — 아직 없음]
-         * - FAILED/UNKNOWN이 되어도 order에 알리는 이벤트가 없어 주문은 PAYMENT_PENDING에 그대로
-         *   남는다. 주문 취소·재고 해제·쿠폰 복원으로 이어지는 보상 흐름을 추가해야 한다.
-         * - UNKNOWN은 지금 여기서 더 이상 진행되지 않는다. PG 거래 조회 API와 복구 배치로 PAID 또는
-         *   FAILED로 재확정하는 로직이 별도로 필요하다.
          *
          * [운영]
          * - Gateway HTTP 연결/읽기 타임아웃, 제한된 재시도 정책, PG 원문 응답 코드·추적 ID 로그,
          *   성공·실패·UNKNOWN·복구 지연 메트릭과 알림을 추가한다.
          */
+        PaymentGatewayApproval approval;
         try {
-            PaymentGatewayApproval approval = paymentGateway.request(payment.toRequest());
-            return paymentService.approvePayment(payment.getId(), approval);
+            approval = paymentGateway.request(payment.toRequest());
         } catch (PaymentGatewayRejectedException e) {
             return paymentService.failPayment(payment.getId(), e.getMessage());
         } catch (PaymentGatewayUnknownException e) {
             return paymentService.markPaymentUnknown(payment.getId(), e.getMessage());
+        }
+
+        try {
+            return paymentService.approvePayment(payment.getId(), approval);
+        } catch (RuntimeException e) {
+            /*
+             * PG는 이미 승인했다(approval을 받았다) — 문제는 그 사실을 우리 DB에 반영하는 이
+             * 트랜잭션 자체가 실패한 것이다(DB 커넥션 문제, 제약조건 위반 등). FAILED로 단정하면
+             * 안 된다 — 실제로는 PG 쪽엔 이미 성사된 결제일 가능성이 높다. UNKNOWN으로 남겨서
+             * 다음 복구 배치(PaymentReconciliationService)가 PG 거래 조회로 PAID를 확정하게 한다.
+             */
+            log.error("event=PAYMENT_APPROVE_REFLECT_FAILED paymentId={} orderId={} pgTid={}",
+                    payment.getId(), payment.getOrderId(), approval.pgTid(), e);
+            return paymentService.markPaymentUnknown(payment.getId(),
+                    "internal reflection failed: " + e.getMessage());
         }
     }
 
