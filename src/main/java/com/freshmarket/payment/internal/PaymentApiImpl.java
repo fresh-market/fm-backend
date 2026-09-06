@@ -13,11 +13,9 @@ import com.freshmarket.payment.internal.service.PaymentResultOutboxDispatchServi
 import com.freshmarket.payment.internal.service.PaymentService;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 // 공개 API는 트랜잭션을 열지 않고, 짧은 DB 트랜잭션과 외부 PG 호출의 경계를 조립만 한다.
-@Slf4j
 @Component
 @RequiredArgsConstructor
 class PaymentApiImpl implements PaymentApi {
@@ -55,20 +53,13 @@ class PaymentApiImpl implements PaymentApi {
             return paymentService.markPaymentUnknown(payment.getId(), e.getMessage());
         }
 
-        try {
-            return dispatchResult(paymentService.approvePayment(payment.getId(), approval));
-        } catch (RuntimeException e) {
-            /*
-             * PG는 이미 승인했다(approval을 받았다) — 문제는 그 사실을 우리 DB에 반영하는 이
-             * 트랜잭션 자체가 실패한 것이다(DB 커넥션 문제, 제약조건 위반 등). FAILED로 단정하면
-             * 안 된다 — 실제로는 PG 쪽엔 이미 성사된 결제일 가능성이 높다. UNKNOWN으로 남겨서
-             * 다음 복구 배치(PaymentReconciliationService)가 PG 거래 조회로 PAID를 확정하게 한다.
-             */
-            log.error("event=PAYMENT_APPROVE_REFLECT_FAILED paymentId={} orderId={} pgTid={}",
-                    payment.getId(), payment.getOrderId(), approval.pgTid(), e);
-            return paymentService.markPaymentUnknown(payment.getId(),
-                    "internal reflection failed: " + e.getMessage());
-        }
+        /*
+         * 승인 반영 트랜잭션과 결과 outbox 전달은 이미 각각 자기 실패 처리를 가진다.
+         * 여기서 둘을 RuntimeException으로 함께 잡아 UNKNOWN으로 바꾸면, PAID 커밋 뒤 전달 단계에서
+         * 난 예외까지 "승인 반영 실패"로 오인한다. DB 반영이 롤백된 경우는 PENDING으로 남아
+         * reconciliation이 PG 조회로 확정하고, PAID가 커밋된 경우는 결과 outbox가 재전송한다.
+         */
+        return dispatchResult(paymentService.approvePayment(payment.getId(), approval));
     }
 
     private PaymentResult dispatchResult(PaymentResult result) {
