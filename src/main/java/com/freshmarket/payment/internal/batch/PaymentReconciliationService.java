@@ -96,8 +96,8 @@ public class PaymentReconciliationService {
     }
 
     /*
-     * 한 건의 조회 실패(PG 조회 API 자체가 응답하지 않는 경우 등)가 이번 주기의 나머지 대상까지
-     * 멈추지 않는다 — 실패한 행은 상태와 updatedAt을 그대로 유지하므로 다음 주기에 다시 대상이 된다
+     * 한 건의 PG 조회 또는 확정 실패가 이번 주기의 나머지 대상까지 멈추지 않는다. 실패한 행은
+     * 상태와 updatedAt을 그대로 유지하므로 다음 주기에 다시 대상이 된다
      * (PendingProductImageCleanupService.cleanupOne과 같은 이유).
      */
     private void reconcileOne(Payment payment) {
@@ -110,21 +110,30 @@ public class PaymentReconciliationService {
             return;
         }
 
-        switch (result.status()) {
-            case APPROVED -> {
-                PaymentResult reconciled = paymentService.approvePayment(payment.getId(),
-                        new PaymentGatewayApproval(result.pgTid(), result.paidAt()));
-                log.info("event=PAYMENT_RECONCILIATION_RESOLVED paymentId={} orderId={} status={}",
-                        payment.getId(), payment.getOrderId(), reconciled.status());
+        try {
+            switch (result.status()) {
+                case APPROVED -> {
+                    PaymentResult reconciled = paymentService.approvePayment(payment.getId(),
+                            new PaymentGatewayApproval(result.pgTid(), result.paidAt()));
+                    log.info("event=PAYMENT_RECONCILIATION_RESOLVED paymentId={} orderId={} status={}",
+                            payment.getId(), payment.getOrderId(), reconciled.status());
+                }
+                case REJECTED -> {
+                    PaymentResult reconciled = paymentService.failPayment(payment.getId(), result.reason());
+                    log.info("event=PAYMENT_RECONCILIATION_RESOLVED paymentId={} orderId={} status={}",
+                            payment.getId(), payment.getOrderId(), reconciled.status());
+                }
+                case STILL_PROCESSING -> log.info(
+                        "event=PAYMENT_RECONCILIATION_STILL_UNRESOLVED paymentId={} orderId={} status={}",
+                        payment.getId(), payment.getOrderId(), payment.getStatus());
             }
-            case REJECTED -> {
-                PaymentResult reconciled = paymentService.failPayment(payment.getId(), result.reason());
-                log.info("event=PAYMENT_RECONCILIATION_RESOLVED paymentId={} orderId={} status={}",
-                        payment.getId(), payment.getOrderId(), reconciled.status());
-            }
-            case STILL_PROCESSING -> log.info(
-                    "event=PAYMENT_RECONCILIATION_STILL_UNRESOLVED paymentId={} orderId={} status={}",
-                    payment.getId(), payment.getOrderId(), payment.getStatus());
+        } catch (RuntimeException e) {
+            /*
+             * 한 결제의 DB 상태 전이 또는 결과 outbox 저장이 실패해도 그 행만 다음 주기에 재시도한다.
+             * 바깥 커서 루프까지 예외를 전파하면 뒤에 있는 결제도 이번 주기에 확인하지 못한다.
+             */
+            log.error("event=PAYMENT_RECONCILIATION_RESOLVE_FAILED paymentId={} orderId={}",
+                    payment.getId(), payment.getOrderId(), e);
         }
     }
 }
