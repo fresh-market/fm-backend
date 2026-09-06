@@ -32,6 +32,26 @@
   OrderPaymentFailedEvent 전부)을 그 결정에 맞게 다시 봐야 한다. R01(결제 실패·미확정·복구 상태
   머신)을 먼저 끝내기 위해 지금은 이 v1으로 간다.
 
+  **[2026-09-06 KST] PAYMENT_PENDING 만료 스케줄러 추가 + 만료-뒤늦은승인 충돌 정책**:
+  `order.internal.batch.PendingOrderExpirationService`/`PendingOrderExpirationScheduler`가
+  PG에 물어볼 거래 자체가 없을 만큼(기본 60분, `order.payment-expiration.grace-minutes`) 오래
+  PAYMENT_PENDING에 멈춘 주문을 취소한다 — orderdevelopmenthandoff.txt 9번 항목의 "순수 TTL
+  기반 만료 스케줄러". `payment.internal.batch.PaymentReconciliationService`(UNKNOWN/PENDING
+  재조회)와는 별개로, PG가 아예 답할 거래가 없는 경우를 시간으로 포기하는 배치다.
+
+  이 배치가 먼저 주문을 CANCELED로 확정한 뒤 뒤늦게 PG 승인이 도착하면
+  `OrderCreateService.onPaymentApproved()`가 이를 감지해 order는 되돌리지 않고(재고가 이미
+  release()로 풀려 다른 주문에 재배분됐을 수 있어 안전하지 않음) `PAYMENT_APPROVED_AFTER_ORDER_
+  CANCELED` ERROR 로그만 남긴다 — PG는 실제로 승인했으므로(돈이 이미 나갔으므로) 사람이 이 로그로
+  수동 환불해야 한다(`OrderCreateService`에 `TODO: 자동 환불 로직` 표시, `PaymentApi`에 환불
+  계약이 아직 없어서다). 반대 방향(만료 뒤 뒤늦은 거절/타임아웃)은 `Order.cancel()`/
+  `StockReservationService.release()`의 기존 멱등 가드가 그대로 흡수하므로 별도 분기가 없다.
+
+  두 배치가 같은 주문을 동시에 건드릴 수 있어(주문 인수인계 문서 5번 섹션 "상태 전이 경쟁"에 이미
+  지적돼 있던 지점) `OrderRepository.findByIdForUpdate`(신규, `PaymentRepository`의 같은 이름
+  메서드와 동일한 패턴)로 잠근 뒤 상태를 다시 확인하게 했다 — `Order`에는 `@Version`이 없어서
+  락 없이는 나중에 커밋하는 쪽이 그냥 덮어쓰는 lost update가 가능했다.
+
   **[2026-09-06 KST] R02 보류 중 알려진 갭 — 재고 확정/해제 결과가 order에게 전달 안 되는 경우**:
   `OrderCreateService.onPaymentApproved`/`onPaymentFailed` 안에서 `order.markPaid()`/
   `order.cancel()`과 `stockApi.confirm()`/`stockApi.release()`가 같은 트랜잭션에 있어서, 재고
