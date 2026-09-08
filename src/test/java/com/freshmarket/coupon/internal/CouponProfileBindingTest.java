@@ -72,6 +72,11 @@ class CouponProfileBindingTest {
      * 통과한다. 실제로 그런 적이 있다. connection-timeout 을 100 으로 적어 둔 채 100 + 250 을
      * 상수로 두었는데, HikariCP 가 하한 250 으로 덮어써서 도는 값은 250 + 250 = 500 이었다.
      * 예산 400 을 이미 넘겨 역전돼 있었는데 시험은 계속 통과했다.
+     *
+     * 세는 항목이 넷인 것도 같은 이유로 한 번 틀렸다. 가운데 둘만 세어 600 < 800 이라고 봤는데,
+     * 배치 윈도우와 확정 표시가 예산 안이라는 것을 안 셌다. 확정 표시가 예산 안인 것은
+     * completeIssued 가 요청 스레드를 깨우기 전에 부르기 때문이고, 그때는 왕복이 둘이라
+     * 실제 합이 820ms 로 예산을 넘고 있었다.
      */
     @Test
     void 요청_예산이_안쪽_합보다_길다() {
@@ -79,11 +84,16 @@ class CouponProfileBindingTest {
             CouponIssueProperties properties = context.getBean(CouponIssueProperties.class);
             Environment env = context.getEnvironment();
 
+            long 배치창 = properties.batchWindow().toMillis();
             long 획득 = Long.parseLong(env.getProperty("spring.datasource.hikari.connection-timeout"));
             long 응답대기 = Long.parseLong(
                     env.getProperty("spring.datasource.hikari.data-source-properties.socketTimeout"));
+            // 확정 표시를 한 번만 곱하는 것은 HSET 과 ZREM 을 파이프라인으로 함께 보내기 때문이다
+            long 확정표시 = Long.parseLong(env.getProperty("spring.data.redis.timeout").replace("ms", ""));
 
-            assertThat(properties.commitWait()).isGreaterThan(Duration.ofMillis(획득 + 응답대기));
+            assertThat(properties.commitWait())
+                    .as("배치 윈도우 + 커넥션 획득 + 소켓 읽기 + 확정 표시")
+                    .isGreaterThan(Duration.ofMillis(배치창 + 획득 + 응답대기 + 확정표시));
         });
     }
 
