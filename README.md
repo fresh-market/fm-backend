@@ -779,6 +779,7 @@ coupon.warmup:
 | [code-architecture/](./docs/code-architecture/) | 규칙은 `guideline`, 근거는 `rationale` 로 짝 |
 | [coupon/coupon.md](./docs/coupon/coupon.md) | **선착순 쿠폰 설계 전체** |
 | [coupon/requirement.md](./docs/coupon/requirement.md) | 주어진 요구사항 |
+| [coupon/coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md) | 발급이 쓰는 Redis 키 여섯, 그리고 언제 무엇이 바뀌나 |
 | [coupon/redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md) | Redis 키 재건 운영 절차 |
 | [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
 | [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |
