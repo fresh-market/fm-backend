@@ -88,7 +88,7 @@ class CouponProfileBindingTest {
             long 획득 = Long.parseLong(env.getProperty("spring.datasource.hikari.connection-timeout"));
             long 응답대기 = Long.parseLong(
                     env.getProperty("spring.datasource.hikari.data-source-properties.socketTimeout"));
-            // 확정 표시를 한 번만 곱하는 것은 HSET 과 ZREM 을 파이프라인으로 함께 보내기 때문이다
+            // 확정 표시를 한 번만 곱하는 것은 HSET 과 ZREM 을 스크립트 하나로 보내기 때문이다
             long 확정표시 = Long.parseLong(env.getProperty("spring.data.redis.timeout").replace("ms", ""));
 
             assertThat(properties.commitWait())

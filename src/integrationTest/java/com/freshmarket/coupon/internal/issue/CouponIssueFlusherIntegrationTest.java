@@ -89,9 +89,9 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
     }
 
     /*
-     * 확정 표시와 미확정 해제를 파이프라인으로 함께 보낸다.
-     * 직렬화를 손으로 다루므로 opsForHash 로 쓴 값과 같은 바이트가 되는지 실물로 확인해야 한다.
-     * 어긋나면 스크립트의 HGET 이 못 읽어 그 회원의 재요청이 매번 DB 까지 간다.
+     * 확정 표시와 미확정 해제를 스크립트 하나로 보낸다.
+     * 회원 수와 무관하게 왕복이 하나이고, 인자를 손으로 펴서 넘기므로 실물로 확인해야 한다.
+     * 값이 어긋나면 순번 확보 스크립트의 HGET 이 못 읽어 그 회원의 재요청이 매번 DB 까지 간다.
      */
     @Test
     void 여러_회원의_확정_표시를_한_번에_남긴다() throws Exception {
