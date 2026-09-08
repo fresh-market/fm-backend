@@ -608,7 +608,7 @@ Redis 가 죽었을 때의 응답과 회로     coupon.md 9장
 확정 표시 실패와 회수 오판           coupon.md 3장
 타임아웃 계층과 요청 예산            application-coupon.yml 의 주석, coupon.md 7장
 정합성 검증                        coupon.md 11장
-장애 났을 때 무엇을 보고 무엇을 하나  redis-promotion-rebuild.md
+재건이 무엇이고 어떤 순서로 도나     redis-promotion-rebuild.md
 ```
 
 **이 문서는 키가 어떻게 생겼고 언제 바뀌는지만 적는다.**

@@ -795,7 +795,7 @@ coupon.warmup:
 | [coupon/requirement.md](./docs/coupon/requirement.md) | 주어진 요구사항 |
 | [coupon/coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md) | 발급이 쓰는 Redis 키 여섯, 그리고 언제 무엇이 바뀌나 |
 | [coupon/coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md) | Lua 스크립트 넷이 무엇을 묶고 언제 도나 |
-| [coupon/redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md) | Redis 키 재건 운영 절차 |
+| [coupon/redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md) | 재건이 무엇이고 어떤 순서로 도나 |
 | [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
 | [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |
 | [wiki](https://github.com/fresh-market/fm-backend/wiki) | 팀 문서, 문제 해결 공유 |
