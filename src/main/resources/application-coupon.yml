@@ -73,10 +73,27 @@ spring:
       #
       # 계층이 역전되면 안 된다 (7장).
       #
-      #   commit-wait 800ms  >  connection-timeout 300 + socketTimeout 300 = 600
-      #
       # 안쪽이 더 길면 요청 스레드가 먼저 포기해 혼잡으로 답한 뒤에 그 배치가 커밋된다.
       # 실패했다고 답했는데 발급된 상태가 되고, 사용자가 안 돌아오면 그 쿠폰은 쓰이지 않는다.
+      #
+      # commit-wait 이 재는 구간은 티켓을 만들어 큐에 넣은 순간부터 요청 스레드가 깨어날
+      # 때까지다. 그 안에 든 것을 전부 세면 이렇다.
+      #
+      #   큐 대기            상한 없음    앞선 배치가 다 빠질 때까지
+      #   배치 윈도우          20ms      fillWithinWindow
+      #   커넥션 획득         300ms      connection-timeout
+      #   소켓 읽기           300ms      socketTimeout. 실행과 커밋이 이 안에 있다
+      #   확정 표시           100ms      redis timeout. 파이프라인이라 왕복 하나다
+      #   future 완료 루프     무시
+      #   -----------------------------
+      #   합                  720ms  <  commit-wait 800ms
+      #
+      # 한때 이 계산이 가운데 둘만 세어 600 이라고 봤다. 배치 윈도우와 확정 표시가 빠져 있었고,
+      # 그때 확정 표시는 HSET 과 ZREM 을 순차로 쳐서 왕복이 둘이라 200ms 였다. 그래서 실제
+      # 합이 820ms 로 예산을 넘었다. 지금은 그 둘을 파이프라인으로 묶어 왕복이 하나다.
+      #
+      # 정상 경로는 200~280ms 다 (커넥션 획득 0ms, 쓰기 실측 147~257ms, Redis 1ms 미만).
+      # 위 합은 여러 값이 동시에 상한에 닿는 최악이고, 그래서 평상시에는 안 드러난다.
       #
       # 풀에서 커넥션을 얻기까지 기다리는 상한. 못 얻으면 SQLTransientConnectionException.
       #
@@ -105,8 +122,8 @@ spring:
         connectTimeout: 250
         # 세워진 소켓에서 읽기 한 번의 상한. 쿼리 전체가 아니다.
         #
-        # 250 에서 300 으로 올린다. 250 으로도 실패가 0건이었으므로 줄일 이유는 없고,
-        # commit-wait 800 - connection-timeout 300 = 500 안에 들어가 계층이 유지된다.
+        # 250 에서 300 으로 올린다. 250 으로도 실패가 0건이었으므로 줄일 이유가 없다.
+        # 이 값이 위 계층 표의 한 줄이다. 혼자서는 예산 안이지만 합으로 봐야 한다.
         #
         # 기본값이 0(무제한)이라 끄면 매달린 쿼리 하나가 플러시 스레드를 영영 묶고 큐 전체가
         # 굶는다. flush-threads 가 1 이라 스레드가 그것뿐이다.
@@ -117,15 +134,19 @@ spring:
       # 이미 세워진 연결 위로 명령을 보내고 응답을 기다리는 상한. 접속을 세우는 시간이 아니다.
       # 그쪽은 connect-timeout 이고, 위 DB 의 socketTimeout 과 connectTimeout 에 각각 대응한다.
       #
-      # 이 값은 commit-wait 밖이라 응답 시간에 그대로 더해진다. 그리고 발급 요청 하나가 Redis 를
-      # 두 번 친다.
+      # 발급 요청 하나가 Redis 를 세 번 친다. 그중 둘만 commit-wait 밖이다.
       #
-      #   JwtAuthenticationFilter  -> 인증 커트라인 조회 (GET)
-      #   CouponSeqAllocator       -> 순번 확보 (EVALSHA)
+      #   밖   JwtAuthenticationFilter  -> 인증 커트라인 조회 (GET)
+      #   밖   CouponSeqAllocator       -> 순번 확보 (EVALSHA)
+      #   안   CouponSeqCommitter       -> 확정 표시와 미확정 해제 (HSET + ZREM 을 파이프라인으로)
       #
-      # 그래서 8장의 SLO(처리된 응답 p99 1초)가 이 값의 상한을 정한다.
+      # 뒤엣것이 안인 것은 completeIssued 가 요청 스레드를 깨우기 전에 부르기 때문이다.
+      # 그래서 8장의 SLO(처리된 응답 p99 1초)를 이렇게 센다.
       #
-      #   100ms x 2 + commit-wait 800ms = 1,000ms
+      #   밖 100ms x 2  +  commit-wait 800ms  =  1,000ms
+      #
+      # 그리고 commit-wait 안쪽 합이 720ms 라 최악이 920ms 로 SLO 안에 든다. 근거는 위
+      # datasource 의 계층 표에 있다.
       #
       # 더 조이면 안 되는 이유가 따로 있다. 이 타임아웃은 벽시계 기준이라 이벤트 루프가 GC 나
       # CPU 포화로 멈춘 시간이 그대로 들어간다. Redis 가 한가해도 앱이 바쁘면 걸린다. 회로의

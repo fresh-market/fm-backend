@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import com.freshmarket.IntegrationTestSupport;
@@ -85,6 +86,25 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
 
         assertThat(redisTemplate.opsForHash().get(SEQ, "9101")).isEqualTo("1:1");
         assertThat(redisTemplate.opsForZSet().score(PENDING, "9101")).isNull();
+    }
+
+    /*
+     * 확정 표시와 미확정 해제를 파이프라인으로 함께 보낸다.
+     * 직렬화를 손으로 다루므로 opsForHash 로 쓴 값과 같은 바이트가 되는지 실물로 확인해야 한다.
+     * 어긋나면 스크립트의 HGET 이 못 읽어 그 회원의 재요청이 매번 DB 까지 간다.
+     */
+    @Test
+    void 여러_회원의_확정_표시를_한_번에_남긴다() throws Exception {
+        List<IssueTicket> tickets = List.of(
+                순번을_받은_요청(9101L, 1), 순번을_받은_요청(9102L, 2), 순번을_받은_요청(9103L, 3));
+        for (IssueTicket ticket : tickets) {
+            결과를_기다린다(ticket);
+        }
+
+        assertThat(redisTemplate.opsForHash().entries(SEQ))
+                .containsExactlyInAnyOrderEntriesOf(
+                        Map.of("9101", "1:1", "9102", "2:1", "9103", "3:1"));
+        assertThat(redisTemplate.opsForZSet().size(PENDING)).isZero();
     }
 
     /*

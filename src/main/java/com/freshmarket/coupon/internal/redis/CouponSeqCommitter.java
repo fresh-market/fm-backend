@@ -11,6 +11,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -85,19 +86,39 @@ public class CouponSeqCommitter {
     /**
      * 커밋이 끝난 회원들에게 확정 표시를 붙이고 미확정 목록(pending)에서 뺀다.
      *
-     * <p>이 메서드는 배치 전체를 명령 둘로 끝낸다. 회원 한 명당 왕복이 아니라 <b>배치당 왕복
-     * 둘</b>이라, 배치가 커질수록 회원 한 명이 지는 Redis 비용이 줄어든다.
+     * <p>이 메서드는 배치 전체를 왕복 <b>하나</b>로 끝낸다. 회원 수와 무관하게 명령이 둘이고,
+     * 그 둘을 파이프라인으로 함께 보내 응답도 함께 기다린다.
+     *
+     * <p><b>왕복 수가 요청 예산에 그대로 든다.</b> 이 메서드는 요청 스레드를 깨우기 전에 돌아서
+     * 그 시간이 {@code commit-wait} 안에 들어간다. 순차로 두 번 치면 Redis 타임아웃이 두 번
+     * 잡혀 예산 안쪽 합이 예산을 넘는다({@code application-coupon.yml} 의 계층 표).
+     *
+     * <p><b>원자성은 필요 없다.</b> 보내기만 묶는 것이라 둘 중 하나만 성공한 상태가 여전히
+     * 가능한데, 어느 쪽이든 해가 없다. 확정 표시만 남으면 회수가 그 표시를 보고 안 뺏고,
+     * 미확정 해제만 되면 아무도 그 번호를 회수 대상으로 보지 않는다.
      */
     public void markCommitted(long couponId, Map<Long, Integer> seqByMember) {
         if (seqByMember.isEmpty()) {
             return;
         }
-        Map<String, String> fields = new HashMap<>(seqByMember.size());
-        seqByMember.forEach((memberId, seq) -> fields.put(String.valueOf(memberId), seq + COMMITTED_SUFFIX));
+        Map<byte[], byte[]> fields = new HashMap<>(seqByMember.size());
+        byte[][] members = new byte[seqByMember.size()][];
+        int i = 0;
+        for (Map.Entry<Long, Integer> entry : seqByMember.entrySet()) {
+            byte[] member = bytes(String.valueOf(entry.getKey()));
+            fields.put(member, bytes(entry.getValue() + COMMITTED_SUFFIX));
+            members[i++] = member;
+        }
 
+        byte[] seqKey = bytes(CouponSeqKeys.seq(couponId));
+        byte[] pendingKey = bytes(CouponSeqKeys.pending(couponId));
         try {
-            redisTemplate.opsForHash().putAll(CouponSeqKeys.seq(couponId), fields);
-            redisTemplate.opsForZSet().remove(CouponSeqKeys.pending(couponId), fields.keySet().toArray());
+            redisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+                connection.hashCommands().hMSet(seqKey, fields);
+                connection.zSetCommands().zRem(pendingKey, members);
+                // 파이프라인 콜백은 null 을 돌려줘야 한다. 값을 돌려주면 스프링이 예외로 끊는다
+                return null;
+            });
         } catch (DataAccessException e) {
             /*
              * 이 표시를 못 남겨도 그 회원들의 발급은 이미 끝나 있다.
@@ -107,6 +128,14 @@ public class CouponSeqCommitter {
             failures.get(Cleanup.MARK).increment();
             log.warn("event=COUPON_SEQ_MARK_FAILED couponId={} size={}", couponId, fields.size(), e);
         }
+    }
+
+    /*
+     * 파이프라인 콜백은 직렬화된 값을 받는다.
+     * 이 템플릿의 직렬화기를 그대로 쓰므로 opsForHash 로 쓴 값과 같은 바이트가 된다.
+     */
+    private byte[] bytes(String value) {
+        return redisTemplate.getStringSerializer().serialize(value);
     }
 
     /**
