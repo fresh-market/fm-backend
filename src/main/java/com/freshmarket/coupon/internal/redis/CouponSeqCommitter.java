@@ -3,12 +3,10 @@ package com.freshmarket.coupon.internal.redis;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.Collection;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -37,6 +35,8 @@ public class CouponSeqCommitter {
     private static final String COMMITTED_SUFFIX = ":1";
     private static final String CLEANUP_FAILURES = "coupon.seq.cleanup.failures";
     private static final String MARK_SCRIPT_PATH = "redis/scripts/coupon-mark-committed.lua";
+    private static final String DROP_SCRIPT_PATH = "redis/scripts/coupon-drop-mapping.lua";
+    private static final String REPAIR_SCRIPT_PATH = "redis/scripts/coupon-return-and-repair.lua";
 
     /** 커밋 뒤 뒷정리 세 갈래다. 어느 것이 깨졌는지에 따라 남는 상태가 달라 나눠 센다. */
     public enum Cleanup {
@@ -61,6 +61,8 @@ public class CouponSeqCommitter {
 
     private final StringRedisTemplate redisTemplate;
     private final RedisScript<Long> markScript;
+    private final RedisScript<Long> dropScript;
+    private final RedisScript<Long> repairScript;
     private final Map<Cleanup, Counter> failures;
 
     /*
@@ -70,21 +72,23 @@ public class CouponSeqCommitter {
      */
     public CouponSeqCommitter(StringRedisTemplate redisTemplate, MeterRegistry registry) {
         this.redisTemplate = redisTemplate;
-        this.markScript = loadMarkScript();
+        this.markScript = load(MARK_SCRIPT_PATH);
+        this.dropScript = load(DROP_SCRIPT_PATH);
+        this.repairScript = load(REPAIR_SCRIPT_PATH);
         this.failures = registerFailures(registry);
     }
 
     /*
-     * 이 생성자가 스크립트 파일을 기동 때 읽어 둔다.
+     * 이 생성자가 스크립트 파일 셋을 기동 때 읽어 둔다.
      * 늦게 읽으면 패키징이 어긋났을 때 이벤트의 첫 커밋에서야 알게 된다. 여기서 읽으면
      * 대신 기동이 실패한다. CouponSeqAllocator 가 같은 이유로 같은 모양을 쓴다.
      */
-    private static RedisScript<Long> loadMarkScript() {
-        ClassPathResource resource = new ClassPathResource(MARK_SCRIPT_PATH);
+    private static RedisScript<Long> load(String path) {
+        ClassPathResource resource = new ClassPathResource(path);
         try (InputStream in = resource.getInputStream()) {
             return RedisScript.of(new String(in.readAllBytes(), StandardCharsets.UTF_8), Long.class);
         } catch (IOException e) {
-            throw new IllegalStateException(MARK_SCRIPT_PATH + " 를 읽지 못했다", e);
+            throw new IllegalStateException(path + " 를 읽지 못했다", e);
         }
     }
 
@@ -161,34 +165,15 @@ public class CouponSeqCommitter {
      * @param actualSeq 이 회원이 원래 갖고 있는 순번
      */
     public void returnAndRepair(long couponId, long memberId, int burnedSeq, int actualSeq) {
-        String member = String.valueOf(memberId);
         try {
-            redisTemplate.opsForZSet().add(CouponSeqKeys.free(couponId), String.valueOf(burnedSeq), burnedSeq);
-            inheritCounterTtl(couponId);
-            redisTemplate.opsForHash().put(CouponSeqKeys.seq(couponId), member, actualSeq + COMMITTED_SUFFIX);
-            redisTemplate.opsForZSet().remove(CouponSeqKeys.pending(couponId), member);
+            redisTemplate.execute(repairScript,
+                    List.of(CouponSeqKeys.seq(couponId), CouponSeqKeys.pending(couponId),
+                            CouponSeqKeys.free(couponId), CouponSeqKeys.counter(couponId)),
+                    String.valueOf(memberId), String.valueOf(burnedSeq), actualSeq + COMMITTED_SUFFIX);
         } catch (DataAccessException e) {
             failures.get(Cleanup.REPAIR).increment();
             log.warn("event=COUPON_SEQ_REPAIR_FAILED couponId={} memberId={} burnedSeq={}",
                     couponId, memberId, burnedSeq, e);
-        }
-    }
-
-    /**
-     * 방금 만들어졌을지 모르는 {@code free} 키에 나머지 셋과 같은 수명을 물려준다.
-     *
-     * <p><b>{@code free} 를 만드는 자리는 바로 위의 반납뿐이다.</b> 순번 확보 스크립트는 그 키에서
-     * 꺼내 쓰기만 하고 만들지 않는다. 그래서 여기서 안 걸면 그 키에는 만료가 영영 안 붙는다.
-     * 이벤트 종료 배치가 지우기는 하지만, 그 배치가 안 돌았을 때 받쳐 주는 TTL 이 넷 중 하나만
-     * 비어 있게 된다.
-     *
-     * <p>이 메서드가 남은 시간을 읽어 상대 시각으로 다시 거는 것은, 절대 만료 시각을 읽는 명령을
-     * 스프링이 안 내주기 때문이다. 그만큼 밀리초 단위로 어긋나지만 TTL 꼬리가 1분이라 잴 값이 아니다.
-     */
-    private void inheritCounterTtl(long couponId) {
-        Long remaining = redisTemplate.getExpire(CouponSeqKeys.counter(couponId), TimeUnit.MILLISECONDS);
-        if (remaining != null && remaining > 0) {
-            redisTemplate.expire(CouponSeqKeys.free(couponId), Duration.ofMillis(remaining));
         }
     }
 
@@ -208,8 +193,8 @@ public class CouponSeqCommitter {
         }
         Object[] members = memberIds.stream().map(String::valueOf).toArray();
         try {
-            redisTemplate.opsForHash().delete(CouponSeqKeys.seq(couponId), members);
-            redisTemplate.opsForZSet().remove(CouponSeqKeys.pending(couponId), members);
+            redisTemplate.execute(dropScript,
+                    List.of(CouponSeqKeys.seq(couponId), CouponSeqKeys.pending(couponId)), members);
         } catch (DataAccessException e) {
             failures.get(Cleanup.DROP).increment();
             log.warn("event=COUPON_SEQ_DROP_FAILED couponId={} size={}", couponId, members.length, e);

@@ -47,6 +47,8 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
 
     private static final String SEQ = "coupon:4344:seq";
     private static final String PENDING = "coupon:4344:pending";
+    private static final String FREE = "coupon:4344:free";
+    private static final String COUNTER = "coupon:4344:counter";
 
     private static final int WARMUP = 200;
     private static final int ROUNDS = 100;
@@ -64,7 +66,7 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
 
     @BeforeEach
     void 키를_비운다() {
-        redisTemplate.delete(List.of(SEQ, PENDING));
+        redisTemplate.delete(List.of(SEQ, PENDING, FREE, COUNTER));
     }
 
     @Test
@@ -161,5 +163,100 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
     private static long p(long[] sorted, int percentile) {
         int index = (int) Math.ceil(sorted.length * percentile / 100.0) - 1;
         return sorted[Math.max(0, index)];
+    }
+
+    /*
+     * 매핑 삭제와 번호 되돌리기도 같은 방식으로 잰다.
+     *
+     * 되돌리기는 티켓마다 한 번이라 배치 크기가 늘 1 이다. 대신 왕복이 다섯이라 줄어드는 폭이
+     * 제일 크고, 그중 둘이 수명 물려주기다. 앱에서는 남은 시간을 읽어 상대 시각으로 다시 걸어야
+     * 했는데, 스크립트 안에서는 절대 시각을 그대로 옮길 수 있어 어긋남도 없어진다.
+     */
+    @Test
+    void 뒷정리_둘도_왕복이_준다() throws IOException {
+        redisTemplate.opsForValue().set(COUNTER, "0");
+        redisTemplate.expire(COUNTER, java.time.Duration.ofMinutes(10));
+        for (int i = 0; i < WARMUP; i++) {
+            committer.dropMappings(COUPON_ID, List.of(nextMember++));
+            매핑을_순차로_지운다(List.of(nextMember++));
+            committer.returnAndRepair(COUPON_ID, nextMember++, 1, 2);
+            번호를_순차로_되돌린다(nextMember++, 1, 2);
+        }
+
+        StringBuilder report = new StringBuilder("\n매핑 삭제와 번호 되돌리기 (마이크로초)\n\n");
+        report.append("배치   방식        p50      p90      p99      max\n");
+
+        for (int size : BATCH_SIZES) {
+            long[] 스크립트 = new long[ROUNDS];
+            long[] 순차 = new long[ROUNDS];
+            for (int i = 0; i < ROUNDS; i++) {
+                List<Long> a = 회원들(size);
+                long t0 = System.nanoTime();
+                committer.dropMappings(COUPON_ID, a);
+                스크립트[i] = (System.nanoTime() - t0) / 1_000;
+
+                List<Long> b = 회원들(size);
+                long t1 = System.nanoTime();
+                매핑을_순차로_지운다(b);
+                순차[i] = (System.nanoTime() - t1) / 1_000;
+            }
+            Arrays.sort(스크립트);
+            Arrays.sort(순차);
+            report.append(줄("%,4d   삭제 스크립트", size, 스크립트));
+            report.append(줄("%,4d   삭제 순차    ", size, 순차));
+        }
+
+        long[] 되돌리기_스크립트 = new long[ROUNDS];
+        long[] 되돌리기_순차 = new long[ROUNDS];
+        for (int i = 0; i < ROUNDS; i++) {
+            long t0 = System.nanoTime();
+            committer.returnAndRepair(COUPON_ID, nextMember++, 1, 2);
+            되돌리기_스크립트[i] = (System.nanoTime() - t0) / 1_000;
+
+            long t1 = System.nanoTime();
+            번호를_순차로_되돌린다(nextMember++, 1, 2);
+            되돌리기_순차[i] = (System.nanoTime() - t1) / 1_000;
+        }
+        Arrays.sort(되돌리기_스크립트);
+        Arrays.sort(되돌리기_순차);
+        report.append(줄("   1   되돌 스크립트", 1, 되돌리기_스크립트));
+        report.append(줄("   1   되돌 순차    ", 1, 되돌리기_순차));
+        report.append("\n왕복  삭제 2 -> 1,  되돌리기 5 -> 1\n");
+
+        System.out.println(report);
+        Files.writeString(Path.of("build", "tmp", "coupon-seq-cleanup-latency.txt"), report.toString());
+
+        assertThat(p(되돌리기_스크립트, 50)).isLessThan(p(되돌리기_순차, 50));
+    }
+
+    // 스크립트로 묶기 전의 매핑 삭제다
+    private void 매핑을_순차로_지운다(List<Long> memberIds) {
+        Object[] members = memberIds.stream().map(String::valueOf).toArray();
+        redisTemplate.opsForHash().delete(SEQ, members);
+        redisTemplate.opsForZSet().remove(PENDING, members);
+    }
+
+    /*
+     * 스크립트로 묶기 전의 번호 되돌리기다.
+     * 가운데 둘이 수명 물려주기인데, 절대 만료 시각을 읽는 명령을 스프링이 안 내줘서
+     * 남은 시간을 읽어 상대 시각으로 다시 걸어야 했다.
+     */
+    private void 번호를_순차로_되돌린다(long memberId, int burnedSeq, int actualSeq) {
+        String member = String.valueOf(memberId);
+        redisTemplate.opsForZSet().add(FREE, String.valueOf(burnedSeq), burnedSeq);
+        Long remaining = redisTemplate.getExpire(COUNTER, java.util.concurrent.TimeUnit.MILLISECONDS);
+        if (remaining != null && remaining > 0) {
+            redisTemplate.expire(FREE, java.time.Duration.ofMillis(remaining));
+        }
+        redisTemplate.opsForHash().put(SEQ, member, actualSeq + ":1");
+        redisTemplate.opsForZSet().remove(PENDING, member);
+    }
+
+    private List<Long> 회원들(int size) {
+        List<Long> members = new java.util.ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            members.add(nextMember++);
+        }
+        return members;
     }
 }
