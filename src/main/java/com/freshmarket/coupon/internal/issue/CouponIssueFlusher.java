@@ -265,6 +265,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
 
     private void flushOneByOne(List<IssueTicket> batch) {
         List<IssueTicket> issued = new ArrayList<>(batch.size());
+        List<IssueTicket> seqTaken = new ArrayList<>();
         for (IssueTicket ticket : batch) {
             try {
                 writeCircuit.write(() -> {
@@ -273,7 +274,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 });
                 issued.add(ticket);
             } catch (DuplicateKeyException e) {
-                resolveDuplicate(ticket);
+                resolveDuplicate(ticket, seqTaken);
             } catch (DataAccessException e) {
                 /*
                  * 이 플러시 스레드는 방금 쓰기가 커밋됐는지 아닌지 모른다.
@@ -292,13 +293,14 @@ public class CouponIssueFlusher implements SmartLifecycle {
             }
         }
         completeIssued(issued);
+        repairSeqTaken(seqTaken);
     }
 
     /*
      * 이 메서드는 어느 UNIQUE 제약에 걸린 것인지를 예외 메시지가 아니라 실제 행을 읽어서 가른다.
      * 메시지 형식은 드라이버와 서버 판에 따라 달라지지만, 그 회원의 행이 있느냐 없느냐는 안 달라진다.
      */
-    private void resolveDuplicate(IssueTicket ticket) {
+    private void resolveDuplicate(IssueTicket ticket, List<IssueTicket> seqTaken) {
         Optional<Integer> actualSeq;
         try {
             actualSeq = bulkRepository.findIssuedSeq(ticket.couponId(), ticket.memberId());
@@ -333,11 +335,60 @@ public class CouponIssueFlusher implements SmartLifecycle {
             return;
         }
 
-        // 그 회원의 행이 없으니 uk_mc_coupon_seq 에 걸린 것이다. 그 번호는 남이 쓰고 있어 반납하면 안 된다
+        /*
+         * 그 회원의 행이 없으니 uk_mc_coupon_seq 에 걸린 것이다. 그 번호는 남이 쓰고 있어 반납하면 안 된다.
+         * 뒷정리는 배치 끝에서 한다. 이 티켓의 응답은 이미 정해졌고 남은 일이 제3자를 고치는 것이라
+         * 응답 경로 위에 없다 (docs/coupon/coupon.md 3장).
+         */
         log.warn("event=COUPON_ISSUE_SEQ_TAKEN couponId={} memberId={} seq={}",
                 ticket.couponId(), ticket.memberId(), ticket.issueSeq());
-        committer.dropMapping(ticket.couponId(), ticket.memberId());
+        seqTaken.add(ticket);
         ticket.complete(new IssueOutcome.Congested(IssueResult.SEQ_TAKEN));
+    }
+
+    /**
+     * 회수가 잘못 짚어 남의 번호를 내준 것을 되돌린다.
+     *
+     * <p>{@code uk_mc_coupon_seq} 위반은 <b>그 번호를 쓰는 행이 DB 에 있다</b>는 증거다. 그런
+     * 상태가 되는 길은 하나뿐이다. 그 행의 주인이 커밋까지 마쳤는데 확정 표시를 못 남겨,
+     * 회수가 그 매핑을 버려진 것으로 보고 지운 뒤 번호를 남에게 넘긴 것이다.
+     *
+     * <p>그래서 이 메서드가 주인을 찾아 확정 표시를 되살린다. 그러면 주인이 다시 왔을 때 소진이
+     * 아니라 이미 발급으로 답하고, 주인이 {@code pending} 에서 빠져 그 번호가 다시 훔쳐지지 않는다.
+     * <b>이것이 없으면 같은 번호가 사람을 계속 태운다.</b>
+     */
+    private void repairSeqTaken(List<IssueTicket> seqTaken) {
+        if (seqTaken.isEmpty()) {
+            return;
+        }
+        Map<Long, List<IssueTicket>> byCoupon = new HashMap<>();
+        for (IssueTicket ticket : seqTaken) {
+            byCoupon.computeIfAbsent(ticket.couponId(), key -> new ArrayList<>()).add(ticket);
+        }
+        byCoupon.forEach(this::repairSeqTaken);
+    }
+
+    private void repairSeqTaken(long couponId, List<IssueTicket> seqTaken) {
+        committer.dropMappings(couponId, seqTaken.stream().map(IssueTicket::memberId).toList());
+
+        List<Integer> seqs = seqTaken.stream().map(IssueTicket::issueSeq).distinct().toList();
+        Map<Integer, Long> owners;
+        try {
+            owners = bulkRepository.findOwners(couponId, seqs);
+        } catch (DataAccessException e) {
+            /*
+             * 주인을 못 찾았으면 아무것도 안 고친다. 이 티켓들의 응답은 이미 나갔고,
+             * 못 고친 주인은 재시도할 때 uk_mc_coupon_member 갈래가 표시를 마저 붙인다.
+             */
+            log.warn("event=COUPON_SEQ_OWNER_LOOKUP_FAILED couponId={} size={}", couponId, seqs.size(), e);
+            return;
+        }
+
+        Map<Long, Integer> seqByOwner = new HashMap<>(owners.size());
+        owners.forEach((seq, owner) -> seqByOwner.put(owner, seq));
+        log.warn("event=COUPON_SEQ_TAKEN_REPAIRED couponId={} taken={} owners={}",
+                couponId, seqTaken.size(), seqByOwner.size());
+        committer.markCommitted(couponId, seqByOwner);
     }
 
     /*

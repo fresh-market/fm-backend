@@ -4,10 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import com.freshmarket.IntegrationTestSupport;
 import com.freshmarket.coupon.internal.entity.CouponScope;
+import org.awaitility.Awaitility;
+import org.awaitility.core.ThrowingRunnable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -86,6 +89,25 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
     }
 
     /*
+     * 확정 표시와 미확정 해제를 파이프라인으로 함께 보낸다.
+     * 직렬화를 손으로 다루므로 opsForHash 로 쓴 값과 같은 바이트가 되는지 실물로 확인해야 한다.
+     * 어긋나면 스크립트의 HGET 이 못 읽어 그 회원의 재요청이 매번 DB 까지 간다.
+     */
+    @Test
+    void 여러_회원의_확정_표시를_한_번에_남긴다() throws Exception {
+        List<IssueTicket> tickets = List.of(
+                순번을_받은_요청(9101L, 1), 순번을_받은_요청(9102L, 2), 순번을_받은_요청(9103L, 3));
+        for (IssueTicket ticket : tickets) {
+            결과를_기다린다(ticket);
+        }
+
+        assertThat(redisTemplate.opsForHash().entries(SEQ))
+                .containsExactlyInAnyOrderEntriesOf(
+                        Map.of("9101", "1:1", "9102", "2:1", "9103", "3:1"));
+        assertThat(redisTemplate.opsForZSet().size(PENDING)).isZero();
+    }
+
+    /*
      * uk_mc_coupon_member 다. Redis 가 매핑을 잃은 뒤에 다시 온 회원에게 생긴다.
      * 이번에 받은 번호는 아무도 안 썼으므로 반납하고, 매핑은 원래 갖고 있던 순번으로 고친다.
      */
@@ -133,9 +155,59 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
         IssueOutcome outcome = 결과를_기다린다(collided);
 
         assertThat(outcome).isInstanceOf(IssueOutcome.Congested.class);
-        assertThat(redisTemplate.opsForZSet().score(FREE, "1")).isNull();
-        assertThat(redisTemplate.opsForHash().get(SEQ, "9102")).isNull();
         assertThat(발급된_행_수()).isEqualTo(1);
+        뒷정리를_기다린다(() -> {
+            assertThat(redisTemplate.opsForZSet().score(FREE, "1")).isNull();
+            assertThat(redisTemplate.opsForHash().get(SEQ, "9102")).isNull();
+        });
+    }
+
+    /*
+     * 회수가 잘못 짚은 뒤를 흉내 낸다.
+     *
+     * 9101 이 1번으로 커밋됐는데 확정 표시를 못 남겼고, 그 뒤 회수가 그 매핑을 버려진 것으로 보고
+     * 지운 채 1번을 9102 에게 넘긴 상태다. 9102 는 uk_mc_coupon_seq 에 막히는데, 그 위반이 곧
+     * "1번의 주인이 DB 에 있다" 는 증거라 플러시가 주인을 찾아 확정 표시를 되살려야 한다.
+     */
+    @Test
+    void 남이_쓰는_번호였으면_그_번호의_주인을_되살린다() throws Exception {
+        결과를_기다린다(순번을_받은_요청(9101L, 1));
+        확정_표시를_못_남기고_회수당한다(9101L);
+
+        IssueOutcome outcome = 결과를_기다린다(순번을_받은_요청(9102L, 1));
+
+        assertThat(outcome).isInstanceOf(IssueOutcome.Congested.class);
+        뒷정리를_기다린다(() -> {
+            assertThat(redisTemplate.opsForHash().get(SEQ, "9101")).isEqualTo("1:1");
+            assertThat(redisTemplate.opsForZSet().score(PENDING, "9101")).isNull();
+            assertThat(redisTemplate.opsForHash().get(SEQ, "9102")).isNull();
+            assertThat(redisTemplate.opsForZSet().score(FREE, "1")).isNull();
+        });
+    }
+
+    /*
+     * 주인이 여럿이어도 조회 한 번과 확정 표시 한 번으로 끝나야 한다.
+     * 이 시험은 왕복 수를 세지 않고 결과만 본다. 셋을 한 배치에 넣어 셋 다 되살아나는지 본다.
+     */
+    @Test
+    void 주인이_여럿이어도_한_번에_되살린다() throws Exception {
+        for (long owner : new long[] {9101L, 9102L, 9103L}) {
+            결과를_기다린다(순번을_받은_요청(owner, (int) (owner - 9100L)));
+            확정_표시를_못_남기고_회수당한다(owner);
+        }
+
+        List<IssueTicket> tickets = List.of(
+                순번을_받은_요청(9104L, 1), 순번을_받은_요청(9105L, 2));
+        for (IssueTicket ticket : tickets) {
+            assertThat(결과를_기다린다(ticket)).isInstanceOf(IssueOutcome.Congested.class);
+        }
+
+        뒷정리를_기다린다(() -> {
+            assertThat(redisTemplate.opsForHash().get(SEQ, "9101")).isEqualTo("1:1");
+            assertThat(redisTemplate.opsForHash().get(SEQ, "9102")).isEqualTo("2:1");
+            // 이 배치가 안 건드린 주인은 그대로다. 조회에 안 넣은 순번까지 되살리면 안 된다
+            assertThat(redisTemplate.opsForHash().get(SEQ, "9103")).isNull();
+        });
     }
 
     /*
@@ -170,6 +242,23 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
 
     private IssueOutcome 결과를_기다린다(IssueTicket ticket) throws Exception {
         return ticket.future().get(AWAIT_SECONDS, TimeUnit.SECONDS);
+    }
+
+    /*
+     * 순번 충돌의 뒷정리는 요청 스레드를 깨운 뒤에 돈다.
+     * 고치는 대상이 제3자라 응답 경로 위에 없기 때문이고, 그래서 future 가 끝났다고 끝난 것이 아니다.
+     */
+    private void 뒷정리를_기다린다(ThrowingRunnable 검증) {
+        Awaitility.await().atMost(Duration.ofSeconds(AWAIT_SECONDS)).untilAsserted(검증);
+    }
+
+    /*
+     * 확정 표시를 못 남긴 채 회수당한 상태를 만든다.
+     * 회수는 매핑을 지우고 pending 에서도 뺀다. 행은 DB 에 그대로 있다.
+     */
+    private void 확정_표시를_못_남기고_회수당한다(long memberId) {
+        redisTemplate.opsForHash().delete(SEQ, String.valueOf(memberId));
+        redisTemplate.opsForZSet().remove(PENDING, String.valueOf(memberId));
     }
 
     private Integer 발급된_순번(long memberId) {
