@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Timestamp;
 import java.util.List;
+import java.util.Map;
 
 import com.freshmarket.IntegrationTestSupport;
 import com.freshmarket.coupon.internal.entity.CouponScope;
@@ -67,6 +68,32 @@ class MemberCouponBulkRepositoryIntegrationTest extends IntegrationTestSupport {
 
         Timestamp issued = 발급_시각(9101L);
         assertThat(issued).isBetween(before, after);
+    }
+
+    /*
+     * uk_mc_coupon_seq 위반의 뒷정리가 이 조회에 기댄다.
+     * 순번마다 따로 묻지 않고 한 문장으로 묻는데, 자리 표시자를 개수만큼 조립하므로 실물로 재야 한다.
+     */
+    @Test
+    void 여러_순번의_주인을_한_번에_찾는다() {
+        sut.insertAll(List.of(요청(9101L, 1), 요청(9102L, 2), 요청(9103L, 3)));
+
+        assertThat(sut.findOwners(COUPON_ID, List.of(1, 3)))
+                .containsExactlyInAnyOrderEntriesOf(Map.of(1, 9101L, 3, 9103L));
+    }
+
+    // 행이 없는 순번은 결과에서 빠진다. 회수가 짚은 것이 정말 버려진 티켓이었으면 이 모양이다
+    @Test
+    void 주인이_없는_순번은_결과에서_빠진다() {
+        sut.insertOne(요청(9101L, 1));
+
+        assertThat(sut.findOwners(COUPON_ID, List.of(1, 77))).containsOnlyKeys(1);
+    }
+
+    // 순번이 비면 문장을 아예 안 만든다. IN () 은 문법 오류라 여기서 끊어야 한다
+    @Test
+    void 순번이_비면_묻지_않는다() {
+        assertThat(sut.findOwners(COUPON_ID, List.of())).isEmpty();
     }
 
     private static IssueTicket 요청(long memberId, int issueSeq) {

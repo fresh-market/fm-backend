@@ -1,11 +1,14 @@
 package com.freshmarket.coupon.internal.redis;
 
 import java.time.Duration;
+import java.util.Collection;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import lombok.RequiredArgsConstructor;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -24,12 +27,60 @@ import org.springframework.stereotype.Component;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class CouponSeqCommitter {
 
     private static final String COMMITTED_SUFFIX = ":1";
+    private static final String CLEANUP_FAILURES = "coupon.seq.cleanup.failures";
+
+    /** 커밋 뒤 뒷정리 세 갈래다. 어느 것이 깨졌는지에 따라 남는 상태가 달라 나눠 센다. */
+    public enum Cleanup {
+
+        /** 확정 표시를 붙이지 못했다. 회수가 그 번호를 버려진 것으로 오판할 수 있다. */
+        MARK("mark"),
+        /** 안 쓰인 번호를 반납하지 못했다. 그 번호가 아무에게도 안 간다. */
+        REPAIR("repair"),
+        /** 남이 쓰는 번호의 매핑을 못 지웠다. 그 회원의 재시도가 같은 벽에 다시 막힌다. */
+        DROP("drop");
+
+        private final String tag;
+
+        Cleanup(String tag) {
+            this.tag = tag;
+        }
+
+        public String tag() {
+            return tag;
+        }
+    }
 
     private final StringRedisTemplate redisTemplate;
+    private final Map<Cleanup, Counter> failures;
+
+    /*
+     * 이 클래스가 자기 계량기를 직접 등록한다.
+     * CouponIssueMetrics 에 두면 internal.redis 가 internal 을 보고, internal 이 internal.issue 를
+     * 보고, 그쪽이 다시 internal.redis 를 봐서 패키지 고리가 닫힌다.
+     */
+    public CouponSeqCommitter(StringRedisTemplate redisTemplate, MeterRegistry registry) {
+        this.redisTemplate = redisTemplate;
+        this.failures = registerFailures(registry);
+    }
+
+    /*
+     * 기동 때 세 갈래를 다 만들어 둔다.
+     * 처음 실패할 때 만들면 한 번도 안 깨진 갈래가 대시보드에 아예 안 보여서,
+     * "실패 0 건" 과 "안 센다" 가 같은 모양이 된다.
+     */
+    private static Map<Cleanup, Counter> registerFailures(MeterRegistry registry) {
+        Map<Cleanup, Counter> counters = new EnumMap<>(Cleanup.class);
+        for (Cleanup cleanup : Cleanup.values()) {
+            counters.put(cleanup, Counter.builder(CLEANUP_FAILURES)
+                    .tag("op", cleanup.tag)
+                    .description("DB 커밋 뒤 Redis 뒷정리가 실패한 횟수. 정확성은 안 깨지지만 순번이 샌다")
+                    .register(registry));
+        }
+        return counters;
+    }
 
     /**
      * 커밋이 끝난 회원들에게 확정 표시를 붙이고 미확정 목록(pending)에서 뺀다.
@@ -53,6 +104,7 @@ public class CouponSeqCommitter {
              * 달라지는 것은 그 회원이 다시 왔을 때 Redis 에서 안 걸러져 DB 까지 간다는 것뿐이고,
              * 거기서 uk_mc_coupon_member 가 막는다. 그 경로는 원래도 있다.
              */
+            failures.get(Cleanup.MARK).increment();
             log.warn("event=COUPON_SEQ_MARK_FAILED couponId={} size={}", couponId, fields.size(), e);
         }
     }
@@ -76,6 +128,7 @@ public class CouponSeqCommitter {
             redisTemplate.opsForHash().put(CouponSeqKeys.seq(couponId), member, actualSeq + COMMITTED_SUFFIX);
             redisTemplate.opsForZSet().remove(CouponSeqKeys.pending(couponId), member);
         } catch (DataAccessException e) {
+            failures.get(Cleanup.REPAIR).increment();
             log.warn("event=COUPON_SEQ_REPAIR_FAILED couponId={} memberId={} burnedSeq={}",
                     couponId, memberId, burnedSeq, e);
         }
@@ -100,18 +153,26 @@ public class CouponSeqCommitter {
     }
 
     /**
-     * 이 번호를 남이 쓰고 있어서 못 쓴 경우를 정리한다({@code uk_mc_coupon_seq} 위반).
+     * 이 번호를 남이 쓰고 있어서 못 쓴 회원들을 정리한다({@code uk_mc_coupon_seq} 위반).
      *
      * <p><b>이 메서드는 번호를 반납하지 않는다.</b> 남이 쓰고 있는 번호를 반납하면 그것을 또 다른
-     * 회원에게 내주게 된다. 매핑만 지워서 이 회원의 다음 요청이 새 번호를 받게 한다.
+     * 회원에게 내주게 된다. 매핑만 지워서 그 회원들의 다음 요청이 새 번호를 받게 한다.
+     *
+     * <p>{@link #markCommitted} 와 같이 회원 수와 무관하게 명령 둘로 끝낸다. 이 갈래는 회수가
+     * 잘못 짚었을 때 오는데, 그 오판을 부른 원인(확정 표시 실패)이 한꺼번에 여러 건을 만들므로
+     * <b>이 갈래도 한 배치에 여러 건이 몰린다.</b>
      */
-    public void dropMapping(long couponId, long memberId) {
-        String member = String.valueOf(memberId);
+    public void dropMappings(long couponId, Collection<Long> memberIds) {
+        if (memberIds.isEmpty()) {
+            return;
+        }
+        Object[] members = memberIds.stream().map(String::valueOf).toArray();
         try {
-            redisTemplate.opsForHash().delete(CouponSeqKeys.seq(couponId), member);
-            redisTemplate.opsForZSet().remove(CouponSeqKeys.pending(couponId), member);
+            redisTemplate.opsForHash().delete(CouponSeqKeys.seq(couponId), members);
+            redisTemplate.opsForZSet().remove(CouponSeqKeys.pending(couponId), members);
         } catch (DataAccessException e) {
-            log.warn("event=COUPON_SEQ_DROP_FAILED couponId={} memberId={}", couponId, memberId, e);
+            failures.get(Cleanup.DROP).increment();
+            log.warn("event=COUPON_SEQ_DROP_FAILED couponId={} size={}", couponId, members.length, e);
         }
     }
 }
