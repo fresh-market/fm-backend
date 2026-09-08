@@ -11,7 +11,7 @@
 import http from 'k6/http';
 import { sleep } from 'k6';
 import exec from 'k6/execution';
-import { Counter } from 'k6/metrics';
+import { Counter, Trend } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
@@ -80,6 +80,12 @@ const retried = new Counter('coupon_retried');
 // 재시도 상한까지 갔는데도 못 받고 끝난 사람 수
 const gaveUp = new Counter('coupon_gave_up');
 const soldOut = new Counter('coupon_sold_out');
+/*
+ * 소진이면서 회수할 것도 없는 경우다 (410). 서버가 409 와 나눠 답한다.
+ * 둘을 나눠 세면 그 비율이 곧 "회수가 얼마나 남았나" 라, 이벤트가 실제로 끝났는지를
+ * 지표에서 볼 수 있다. 앱도 sold-out 과 sold-out-final 로 나눠 센다.
+ */
+const soldOutFinal = new Counter('coupon_sold_out_final');
 const congested = new Counter('coupon_congested');
 const rejected = new Counter('coupon_rejected');
 const unexpected = new Counter('coupon_unexpected');
@@ -88,6 +94,18 @@ const unexpected = new Counter('coupon_unexpected');
  * 앱이 낸 500 과 갈라야 한다. 앞은 시험 환경이 모자란 것이고 뒤는 앱이 잘못한 것이다.
  */
 const connectFailed = new Counter('coupon_connect_failed');
+/*
+ * SLO 가 재는 응답만 담는 지연이다. coupon.md 8장이 모집단을 이렇게 정했다.
+ *
+ *   대상   발급(200)과 소진(409, 410).  서버가 판정을 끝낸 응답이다
+ *   제외   혼잡(503).  요청 예산에서 잘린 값이라 넣으면 예산을 재는 셈이 된다
+ *
+ * http_req_duration 과 둘 다 둔다. 서로 다른 질문에 답하기 때문이다. 그쪽은 503 까지
+ * 담아 사용자가 겪은 시간을 재고, 이쪽은 서버가 판정을 끝낸 것만 담아 SLO 를 잰다.
+ * 전에는 하나로 겸했는데, 그 태그는 expectedStatuses 가 정하고 그 목록은
+ * http_req_failed 를 위한 것이라 503 이 섞여 들어왔다.
+ */
+const settledDuration = new Trend('coupon_settled_duration', true);
 
 export const options = {
   scenarios: {
@@ -115,8 +133,11 @@ export const options = {
      * 전에는 p(95)<2000 이었다. 분위수도 임계도 SLO 보다 느슨해서, 이 임계를 통과해도
      * 합격인지 알 수 없었다. 실제로 5,000 VU 회차가 이 임계는 통과하고 SLO 는 미달이었다
      * (2026-08-30, p99 1.127초). 사람이 Prometheus 를 따로 뒤져야 드러났다.
+     *
+     * 그 뒤에도 모집단이 SLO 와 달랐다. 혼잡(503)까지 들어 있어서, 예산을 바꾸는 것만으로
+     * 이 값이 움직였다. 지금은 판정이 끝난 응답만 담는 지표에 건다.
      */
-    'http_req_duration{expected_response:true}': ['p(99)<1000'],
+    coupon_settled_duration: ['p(99)<1000'],
     // 소진과 혼잡은 정상 응답이라 실패로 안 센다. 여기 걸리는 것은 진짜 오류다
     http_req_failed: ['rate<0.01'],
     coupon_unexpected: ['count==0'],
@@ -124,10 +145,13 @@ export const options = {
 };
 
 /*
- * 소진(409)과 혼잡(503)은 설계가 정한 정상 응답이다.
- * 이걸 안 알려 주면 k6 가 둘을 실패로 세서 http_req_failed 가 뜻을 잃는다.
+ * 소진(409, 410)과 혼잡(503)은 설계가 정한 정상 응답이다.
+ * 이걸 안 알려 주면 k6 가 그것들을 실패로 세서 http_req_failed 가 뜻을 잃는다.
+ *
+ * 410 은 소진이면서 다시 나올 번호도 없다는 뜻이라 재시도를 막으려고 끊는 응답이다.
+ * 동접이 재고의 두 배면 이 응답이 만 건 규모로 나온다.
  */
-http.setResponseCallback(http.expectedStatuses(200, 409, 422, 503));
+http.setResponseCallback(http.expectedStatuses(200, 409, 410, 422, 503));
 
 /*
  * VU 마다 따로 갖는 상태다. k6 는 VU 하나에 자바스크립트 런타임 하나를 주므로
@@ -166,6 +190,14 @@ export default function () {
   });
   attempts += 1;
 
+  /*
+   * 서버가 판정을 끝낸 응답만 SLO 지연에 담는다.
+   * 아래 세 갈래(200, 409, 410)가 그것이고 혼잡(503)은 안 담는다.
+   */
+  if (res.status === 200 || res.status === 409 || res.status === 410) {
+    settledDuration.add(res.timings.duration);
+  }
+
   if (res.status === 200) {
     /*
      * 본문의 alreadyIssued 로 가른다. 문자열로 보는 것은 res.json() 이 2만 VU 에서
@@ -178,8 +210,16 @@ export default function () {
     }
     settled = true;
   } else if (res.status === 409) {
-    // 소진은 최종이다. 다시 시도해도 같다
+    /*
+     * 재고는 없지만 미확정 순번을 쥔 사람이 있어 그 번호가 다시 나올 수 있다.
+     * 이 시험은 그래도 재시도하지 않는다. 회수는 기준 시간이 지나야 도는데
+     * 그때까지 기다리면 이 시험이 재는 것이 발급 경로가 아니라 회수 주기가 된다.
+     */
     soldOut.add(1);
+    settled = true;
+  } else if (res.status === 410) {
+    // 소진이고 쥔 사람도 없다. 다시 나올 번호가 없으므로 최종이다
+    soldOutFinal.add(1);
     settled = true;
   } else if (res.status === 503) {
     congested.add(1);
