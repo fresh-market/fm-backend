@@ -5,10 +5,11 @@
 이 디렉터리는 그 문제를 **여러 방식으로 풀어 보고 비교하기 위해** 있다. 방식마다 버전을 붙이고, 버전마다 문서와 브랜치를 따로 둔다.
 
 ```
-docs/coupon/requirement.md         주어진 요구사항
-docs/coupon/coupon.md              이 문서. 버전과 무관하게 고정된 것
-docs/coupon/coupon-redis-keys.md   발급이 쓰는 Redis 키를 키 단위로 정리한 것
-docs/coupon/coupon-v6.md           v6 설계. 검토했으나 채택하지 않았다
+docs/coupon/requirement.md           주어진 요구사항
+docs/coupon/coupon.md                이 문서. 버전과 무관하게 고정된 것
+docs/coupon/coupon-redis-keys.md     발급이 쓰는 Redis 키를 키 단위로 정리한 것
+docs/coupon/coupon-redis-scripts.md  Lua 스크립트가 무엇을 묶고 언제 도나
+docs/coupon/coupon-v6.md             v6 설계. 검토했으나 채택하지 않았다
 ```
 
 **버전 문서는 그 버전의 브랜치에 있다.** `coupon-v1.md` 는 `feat/coupon-issue-v1` 에 있고 이 브랜치에는 없다. `coupon-v6.md` 만 여기 있는데, **브랜치를 딴 버전이 아니라 검토만 하고 접은 안**이기 때문이다.
