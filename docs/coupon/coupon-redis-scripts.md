@@ -216,6 +216,19 @@ ZREM  pending {회원}             미확정 목록에서 뺀다
 **측정은 `CouponSeqMarkCommittedLatencyIntegrationTest` 가 들고 있다.** 추정으로 정했다가
 재서 뒤집힌 자리라 그 값을 시험으로 남겼다.
 
+**나머지 둘도 같은 시험이 잰다.**
+
+```
+                p50      순차 대비      왕복
+매핑 삭제  1      379      -47%         2 -> 1
+매핑 삭제  50     577      -41%
+매핑 삭제  500  1,782      -21%
+번호 되돌리기    421      -77%         5 -> 1
+```
+
+**되돌리기가 가장 크다.** 왕복이 다섯에서 하나로 주는 것이 그대로 나온다. 배치가 커질수록
+폭이 주는 것은 인자를 실어 보내는 시간이 왕복 하나를 아낀 몫을 덮기 시작해서다.
+
 **믿을 것은 방향이지 폭이 아니다.** 회차마다 개선 폭이 17%에서 45% 사이로 흔들렸고, 로컬
 컨테이너 왕복이 1밀리초를 넘는 것 자체가 이상하다. **근거로 삼는 것은 왕복 수이지 이 표의
 절대값이 아니다.**
@@ -268,10 +281,10 @@ ZREM  pending {회원}             미확정 목록에서 뺀다
 ## 9. 지금 어디까지 들어갔나
 
 ```
-coupon-issue-seq.lua          쓰고 있다
-coupon-mark-committed.lua     쓰고 있다.  파이프라인에서 바꿨다
-coupon-drop-mapping.lua       이 문서와 함께 넣는다
-coupon-return-and-repair.lua  이 문서와 함께 넣는다
+coupon-issue-seq.lua          처음부터 스크립트였다
+coupon-mark-committed.lua     명령 둘을 순차로 치던 것을 바꿨다.  파이프라인을 거쳐 왔다
+coupon-drop-mapping.lua       명령 둘을 순차로 치던 것을 바꿨다
+coupon-return-and-repair.lua  명령 다섯을 순차로 치던 것을 바꿨다
 ```
 
 **`repairSeqTaken` 의 주인 조회는 스크립트로 안 묶는다.** 그쪽은 DB 를 읽어야 해서 Redis
