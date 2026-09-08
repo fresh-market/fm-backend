@@ -83,14 +83,19 @@ spring:
       #   배치 윈도우          20ms      fillWithinWindow
       #   커넥션 획득         300ms      connection-timeout
       #   소켓 읽기           300ms      socketTimeout. 실행과 커밋이 이 안에 있다
-      #   확정 표시           100ms      redis timeout. 파이프라인이라 왕복 하나다
+      #   확정 표시           100ms      redis timeout. 스크립트 하나라 왕복 하나다
       #   future 완료 루프     무시
       #   -----------------------------
       #   합                  720ms  <  commit-wait 800ms
       #
       # 한때 이 계산이 가운데 둘만 세어 600 이라고 봤다. 배치 윈도우와 확정 표시가 빠져 있었고,
       # 그때 확정 표시는 HSET 과 ZREM 을 순차로 쳐서 왕복이 둘이라 200ms 였다. 그래서 실제
-      # 합이 820ms 로 예산을 넘었다. 지금은 그 둘을 파이프라인으로 묶어 왕복이 하나다.
+      # 합이 820ms 로 예산을 넘었다. 지금은 그 둘을 스크립트 하나에 담아 왕복이 하나다.
+      #
+      # 파이프라인으로 묶었다가 되돌렸다. Lettuce 는 공유 커넥션으로 파이프라인을 못 해서
+      # 스프링이 전용 커넥션을 따로 얻는데, 커넥션 풀이 없어 호출마다 새 연결이 열린다.
+      # 재 보니 빈 파이프라인 하나가 4.6밀리초였고 순차 왕복 둘보다 오히려 느렸다
+      # (CouponSeqMarkCommittedLatencyIntegrationTest).
       #
       # 정상 경로는 200~280ms 다 (커넥션 획득 0ms, 쓰기 실측 147~257ms, Redis 1ms 미만).
       # 위 합은 여러 값이 동시에 상한에 닿는 최악이고, 그래서 평상시에는 안 드러난다.
@@ -138,7 +143,7 @@ spring:
       #
       #   밖   JwtAuthenticationFilter  -> 인증 커트라인 조회 (GET)
       #   밖   CouponSeqAllocator       -> 순번 확보 (EVALSHA)
-      #   안   CouponSeqCommitter       -> 확정 표시와 미확정 해제 (HSET + ZREM 을 파이프라인으로)
+      #   안   CouponSeqCommitter       -> 확정 표시와 미확정 해제 (HSET + ZREM 을 스크립트 하나로)
       #
       # 뒤엣것이 안인 것은 completeIssued 가 요청 스레드를 깨우기 전에 부르기 때문이다.
       # 그래서 8장의 SLO(처리된 응답 p99 1초)를 이렇게 센다.

@@ -1,18 +1,22 @@
 package com.freshmarket.coupon.internal.redis;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.EnumMap;
-import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
-import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 
 /**
@@ -32,6 +36,7 @@ public class CouponSeqCommitter {
 
     private static final String COMMITTED_SUFFIX = ":1";
     private static final String CLEANUP_FAILURES = "coupon.seq.cleanup.failures";
+    private static final String MARK_SCRIPT_PATH = "redis/scripts/coupon-mark-committed.lua";
 
     /** 커밋 뒤 뒷정리 세 갈래다. 어느 것이 깨졌는지에 따라 남는 상태가 달라 나눠 센다. */
     public enum Cleanup {
@@ -55,6 +60,7 @@ public class CouponSeqCommitter {
     }
 
     private final StringRedisTemplate redisTemplate;
+    private final RedisScript<Long> markScript;
     private final Map<Cleanup, Counter> failures;
 
     /*
@@ -64,7 +70,22 @@ public class CouponSeqCommitter {
      */
     public CouponSeqCommitter(StringRedisTemplate redisTemplate, MeterRegistry registry) {
         this.redisTemplate = redisTemplate;
+        this.markScript = loadMarkScript();
         this.failures = registerFailures(registry);
+    }
+
+    /*
+     * 이 생성자가 스크립트 파일을 기동 때 읽어 둔다.
+     * 늦게 읽으면 패키징이 어긋났을 때 이벤트의 첫 커밋에서야 알게 된다. 여기서 읽으면
+     * 대신 기동이 실패한다. CouponSeqAllocator 가 같은 이유로 같은 모양을 쓴다.
+     */
+    private static RedisScript<Long> loadMarkScript() {
+        ClassPathResource resource = new ClassPathResource(MARK_SCRIPT_PATH);
+        try (InputStream in = resource.getInputStream()) {
+            return RedisScript.of(new String(in.readAllBytes(), StandardCharsets.UTF_8), Long.class);
+        } catch (IOException e) {
+            throw new IllegalStateException(MARK_SCRIPT_PATH + " 를 읽지 못했다", e);
+        }
     }
 
     /*
@@ -87,38 +108,35 @@ public class CouponSeqCommitter {
      * 커밋이 끝난 회원들에게 확정 표시를 붙이고 미확정 목록(pending)에서 뺀다.
      *
      * <p>이 메서드는 배치 전체를 왕복 <b>하나</b>로 끝낸다. 회원 수와 무관하게 명령이 둘이고,
-     * 그 둘을 파이프라인으로 함께 보내 응답도 함께 기다린다.
+     * 그 둘을 스크립트 하나에 담아 보낸다.
      *
      * <p><b>왕복 수가 요청 예산에 그대로 든다.</b> 이 메서드는 요청 스레드를 깨우기 전에 돌아서
      * 그 시간이 {@code commit-wait} 안에 들어간다. 순차로 두 번 치면 Redis 타임아웃이 두 번
      * 잡혀 예산 안쪽 합이 예산을 넘는다({@code application-coupon.yml} 의 계층 표).
      *
-     * <p><b>원자성은 필요 없다.</b> 보내기만 묶는 것이라 둘 중 하나만 성공한 상태가 여전히
-     * 가능한데, 어느 쪽이든 해가 없다. 확정 표시만 남으면 회수가 그 표시를 보고 안 뺏고,
-     * 미확정 해제만 되면 아무도 그 번호를 회수 대상으로 보지 않는다.
+     * <p><b>파이프라인이 아니라 스크립트인 이유가 있다.</b> Lettuce 는 공유 커넥션으로
+     * 파이프라인을 못 해서 스프링이 전용 커넥션을 따로 얻는데, 우리는 커넥션 풀을 안 써서
+     * 호출마다 새 연결이 열린다. 재 보니 빈 파이프라인 하나가 4.6밀리초였고 명령 둘을 순차로
+     * 치는 것보다 오히려 느렸다({@code CouponSeqMarkCommittedLatencyIntegrationTest}).
+     *
+     * <p><b>원자성은 덤이고 필요하지는 않다.</b> 반쪽만 반영된 상태가 생겨도 해가 없다. 확정
+     * 표시만 남으면 회수가 그 표시를 보고 안 뺏고, 미확정 해제만 되면 아무도 그 번호를 회수
+     * 대상으로 보지 않는다.
      */
     public void markCommitted(long couponId, Map<Long, Integer> seqByMember) {
         if (seqByMember.isEmpty()) {
             return;
         }
-        Map<byte[], byte[]> fields = new HashMap<>(seqByMember.size());
-        byte[][] members = new byte[seqByMember.size()][];
+        Object[] argv = new Object[seqByMember.size() * 2];
         int i = 0;
         for (Map.Entry<Long, Integer> entry : seqByMember.entrySet()) {
-            byte[] member = bytes(String.valueOf(entry.getKey()));
-            fields.put(member, bytes(entry.getValue() + COMMITTED_SUFFIX));
-            members[i++] = member;
+            argv[i++] = String.valueOf(entry.getKey());
+            argv[i++] = entry.getValue() + COMMITTED_SUFFIX;
         }
 
-        byte[] seqKey = bytes(CouponSeqKeys.seq(couponId));
-        byte[] pendingKey = bytes(CouponSeqKeys.pending(couponId));
         try {
-            redisTemplate.executePipelined((RedisCallback<Object>) connection -> {
-                connection.hashCommands().hMSet(seqKey, fields);
-                connection.zSetCommands().zRem(pendingKey, members);
-                // 파이프라인 콜백은 null 을 돌려줘야 한다. 값을 돌려주면 스프링이 예외로 끊는다
-                return null;
-            });
+            redisTemplate.execute(markScript,
+                    List.of(CouponSeqKeys.seq(couponId), CouponSeqKeys.pending(couponId)), argv);
         } catch (DataAccessException e) {
             /*
              * 이 표시를 못 남겨도 그 회원들의 발급은 이미 끝나 있다.
@@ -126,17 +144,10 @@ public class CouponSeqCommitter {
              * 거기서 uk_mc_coupon_member 가 막는다. 그 경로는 원래도 있다.
              */
             failures.get(Cleanup.MARK).increment();
-            log.warn("event=COUPON_SEQ_MARK_FAILED couponId={} size={}", couponId, fields.size(), e);
+            log.warn("event=COUPON_SEQ_MARK_FAILED couponId={} size={}", couponId, seqByMember.size(), e);
         }
     }
 
-    /*
-     * 파이프라인 콜백은 직렬화된 값을 받는다.
-     * 이 템플릿의 직렬화기를 그대로 쓰므로 opsForHash 로 쓴 값과 같은 바이트가 된다.
-     */
-    private byte[] bytes(String value) {
-        return redisTemplate.getStringSerializer().serialize(value);
-    }
 
     /**
      * 이 회원이 이미 이 쿠폰을 갖고 있어서 이번 순번이 안 쓰인 경우를 정리한다
