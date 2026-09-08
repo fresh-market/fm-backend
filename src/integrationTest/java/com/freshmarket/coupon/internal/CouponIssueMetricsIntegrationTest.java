@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.freshmarket.IntegrationTestSupport;
 import com.freshmarket.coupon.internal.cache.CouponCache;
 import com.freshmarket.coupon.internal.issue.IssueResult;
+import com.freshmarket.coupon.internal.redis.CouponSeqCommitter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,6 +39,19 @@ class CouponIssueMetricsIntegrationTest extends IntegrationTestSupport {
         for (IssueResult result : IssueResult.values()) {
             assertThat(registry.find("coupon.issue.results").tag("result", result.tag()).counter())
                     .as("%s 계량기가 없다", result.tag())
+                    .isNotNull();
+        }
+    }
+
+    /*
+     * 커밋 뒤 뒷정리가 깨진 것도 갈래마다 서 있어야 한다.
+     * 이 실패는 예외를 안 던지고 로그만 남기므로, 계량기가 없으면 얼마나 나는지 알 방법이 없다.
+     */
+    @Test
+    void 뒷정리_실패_갈래가_기동_때_등록된다() {
+        for (CouponSeqCommitter.Cleanup cleanup : CouponSeqCommitter.Cleanup.values()) {
+            assertThat(registry.find("coupon.seq.cleanup.failures").tag("op", cleanup.tag()).counter())
+                    .as("%s 계량기가 없다", cleanup.tag())
                     .isNotNull();
         }
     }
