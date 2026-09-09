@@ -84,7 +84,9 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
         워밍업한다();
 
         StringBuilder report = new StringBuilder("확정 표시 한 번의 지연 (마이크로초)\n\n");
-        report.append("배치   방식        p50      p90      p99      max\n");
+        report.append("전 = 명령 둘을 순차로 보낸다,  후 = 스크립트 하나로 보낸다.\n\n");
+        report.append("                        p50                        p90\n");
+        report.append("배치            전        후     배수        전        후     배수\n");
 
         long 묶은_p50_최소 = Long.MAX_VALUE;
         long 순차_p50_최소 = Long.MAX_VALUE;
@@ -99,8 +101,7 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
             }
             Arrays.sort(스크립트);
             Arrays.sort(순차);
-            report.append(줄("%,4d   스크립트  ", size, 스크립트));
-            report.append(줄("%,4d   순차      ", size, 순차));
+            report.append(비교_줄("%,4d      ".formatted(size), 순차, 스크립트));
             묶은_p50_최소 = Math.min(묶은_p50_최소, p(스크립트, 50));
             순차_p50_최소 = Math.min(순차_p50_최소, p(순차, 50));
         }
@@ -164,12 +165,6 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
         return batch;
     }
 
-    private static String 줄(String 앞, int size, long[] sorted) {
-        return 앞.formatted(size)
-                + "%,7d  %,7d  %,7d  %,7d%n".formatted(
-                        p(sorted, 50), p(sorted, 90), p(sorted, 99), sorted[sorted.length - 1]);
-    }
-
     private static long p(long[] sorted, int percentile) {
         int index = (int) Math.ceil(sorted.length * percentile / 100.0) - 1;
         return sorted[Math.max(0, index)];
@@ -195,7 +190,9 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
         }
 
         StringBuilder report = new StringBuilder("\n매핑 삭제와 번호 되돌리기 (마이크로초)\n\n");
-        report.append("배치   방식        p50      p90      p99      max\n");
+        report.append("전 = 명령을 하나씩 보낸다,  후 = 스크립트 하나로 보낸다.\n\n");
+        report.append("                              p50                        p90\n");
+        report.append("배치  경로              전        후     배수        전        후     배수\n");
 
         for (int size : BATCH_SIZES) {
             long[] 스크립트 = new long[ROUNDS];
@@ -213,8 +210,7 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
             }
             Arrays.sort(스크립트);
             Arrays.sort(순차);
-            report.append(줄("%,4d   삭제 스크립트", size, 스크립트));
-            report.append(줄("%,4d   삭제 순차    ", size, 순차));
+            report.append(비교_줄("%,4d  매핑 삭제  ".formatted(size), 순차, 스크립트));
         }
 
         long[] 되돌리기_스크립트 = new long[ROUNDS];
@@ -230,9 +226,8 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
         }
         Arrays.sort(되돌리기_스크립트);
         Arrays.sort(되돌리기_순차);
-        report.append(줄("   1   되돌 스크립트", 1, 되돌리기_스크립트));
-        report.append(줄("   1   되돌 순차    ", 1, 되돌리기_순차));
-        report.append("\n왕복  삭제 2 -> 1,  되돌리기 5 -> 1\n");
+        report.append(비교_줄("   1  번호 되돌리기", 되돌리기_순차, 되돌리기_스크립트));
+        report.append("\n왕복  매핑 삭제 2 -> 1,  번호 되돌리기 5 -> 1\n");
 
         System.out.println(report);
         Files.writeString(Path.of("build", "tmp", "coupon-seq-cleanup-latency.txt"), report.toString());
@@ -346,10 +341,10 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
             Arrays.sort(확정_후);
             Arrays.sort(되돌_전);
             Arrays.sort(되돌_후);
-            report.append(회분_줄(n, "확정 표시", 확정_전, 확정_후));
-            report.append(회분_줄(n, "되돌리기 ", 되돌_전, 되돌_후));
-            꼬리.append(최악_줄(n, "확정 표시", 확정_전, 확정_후));
-            꼬리.append(최악_줄(n, "되돌리기 ", 되돌_전, 되돌_후));
+            report.append(비교_줄("%,4d  확정 표시".formatted(n), 확정_전, 확정_후));
+            report.append(비교_줄("%,4d  되돌리기 ".formatted(n), 되돌_전, 되돌_후));
+            꼬리.append(최악_줄("%,4d  확정 표시".formatted(n), 확정_전, 확정_후));
+            꼬리.append(최악_줄("%,4d  되돌리기 ".formatted(n), 되돌_전, 되돌_후));
 
             마지막_확정_전 = p(확정_전, 50);
             마지막_확정_후 = p(확정_후, 50);
@@ -372,16 +367,16 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
         assertThat(마지막_되돌_후).isLessThan(마지막_되돌_전);
     }
 
-    private static String 회분_줄(int size, String label, long[] 전, long[] 후) {
-        return "%,4d  %s  %,8d  %,8d  %5.1f배  %,8d  %,8d  %5.1f배%n".formatted(size, label,
+    private static String 비교_줄(String label, long[] 전, long[] 후) {
+        return "%s  %,8d  %,8d  %5.1f배  %,8d  %,8d  %5.1f배%n".formatted(label,
                 p(전, 50), p(후, 50), 배수(p(전, 50), p(후, 50)),
                 p(전, 90), p(후, 90), 배수(p(전, 90), p(후, 90)));
     }
 
-    private static String 최악_줄(int size, String label, long[] 전, long[] 후) {
+    private static String 최악_줄(String label, long[] 전, long[] 후) {
         long a = 전[전.length - 1];
         long b = 후[후.length - 1];
-        return "%,4d  %s  %,8d  %,8d  %5.1f배%n".formatted(size, label, a, b, 배수(a, b));
+        return "%s  %,8d  %,8d  %5.1f배%n".formatted(label, a, b, 배수(a, b));
     }
 
     // 후가 더 느린 회차도 그대로 보이도록 1 미만도 자르지 않는다
