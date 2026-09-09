@@ -54,6 +54,12 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
     private static final int ROUNDS = 100;
     private static final int[] BATCH_SIZES = {1, 50, 500};
 
+    // 한 회분에 몰릴 수 있는 중복 해소 건수다. 마지막 값이 batch-size 와 같은 최악이다
+    private static final int[] 회분_중복_수 = {1, 10, 50, 500};
+
+    // 낱개 쪽이 회차마다 500 번을 도므로 반복을 앞의 시험들보다 낮춘다
+    private static final int 회분_반복 = 30;
+
     private static final Path REPORT = Path.of("build", "tmp", "coupon-seq-mark-committed-latency.txt");
 
     @Autowired
@@ -168,8 +174,9 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
     /*
      * 매핑 삭제와 번호 되돌리기도 같은 방식으로 잰다.
      *
-     * 되돌리기는 티켓마다 한 번이라 배치 크기가 늘 1 이다. 대신 왕복이 다섯이라 줄어드는 폭이
-     * 제일 크고, 그중 둘이 수명 물려주기다. 앱에서는 남은 시간을 읽어 상대 시각으로 다시 걸어야
+     * 되돌리기를 여기서 크기 1 로만 재는 이유는, 이 시험이 재는 것이 왕복 하나의 값이어서다.
+     * 한 회분에 여러 건이 몰릴 때 무엇이 달라지는지는 아래 셋째 시험이 따로 잰다.
+     * 되돌리기는 왕복이 다섯이라 줄어드는 폭이 제일 크고, 그중 둘이 수명 물려주기다. 앱에서는 남은 시간을 읽어 상대 시각으로 다시 걸어야
      * 했는데, 스크립트 안에서는 절대 시각을 그대로 옮길 수 있어 어긋남도 없어진다.
      */
     @Test
@@ -258,5 +265,114 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
             members.add(nextMember++);
         }
         return members;
+    }
+
+    /*
+     * 한 회분에 중복 해소가 여러 건 몰릴 때 묶어 보내는 것이 얼마를 아끼는지 잰다.
+     *
+     * 앞의 두 시험과 재는 축이 다르다. 그쪽은 같은 크기의 호출 하나를 순차 명령과 스크립트로
+     * 견주고, 이쪽은 크기 1 호출을 N 번 보내는 것과 크기 N 호출을 한 번 보내는 것을 견준다.
+     * 스크립트로 바꾼 뒤에도 이 둘은 남아 있던 차이라 따로 재야 한다.
+     *
+     * 두 경로를 나눠 재는 이유는 왕복 수가 달라서다. 확정 표시는 건마다 왕복 하나이고
+     * 번호 되돌리기는 건마다 왕복 하나이되 스크립트 안에서 명령 다섯을 편다.
+     *
+     * 확정 표시의 "후" 는 실제보다 비싸게 잡은 값이다. 운영에서는 커밋에 성공한 티켓들이
+     * 이미 보내는 호출에 얹히므로 늘어나는 것이 인자뿐이고, 여기서는 그 호출을 따로 세운다.
+     */
+    @Test
+    void 한_회분에_몰린_중복_해소를_묶으면_준다() throws IOException {
+        redisTemplate.opsForValue().set(COUNTER, "0");
+        redisTemplate.expire(COUNTER, java.time.Duration.ofMinutes(10));
+        for (int i = 0; i < WARMUP; i++) {
+            committer.markCommitted(COUPON_ID, Map.of(nextMember++, 1));
+            committer.returnAndRepairs(COUPON_ID, List.of(되돌릴_것들(1).get(0)));
+        }
+
+        StringBuilder report = new StringBuilder("\n한 회분에 몰린 중복 해소 (마이크로초)\n\n");
+        report.append("이 표의 한 줄은 호출 하나가 아니라 한 회분 전체의 뒷정리 시간이다.\n\n");
+        report.append("중복  경로            방식      p50       p90       p99       max\n");
+
+        long 마지막_확정_전 = 0;
+        long 마지막_확정_후 = 0;
+        long 마지막_되돌_전 = 0;
+        long 마지막_되돌_후 = 0;
+
+        for (int n : 회분_중복_수) {
+            long[] 확정_전 = new long[회분_반복];
+            long[] 확정_후 = new long[회분_반복];
+            long[] 되돌_전 = new long[회분_반복];
+            long[] 되돌_후 = new long[회분_반복];
+
+            for (int r = 0; r < 회분_반복; r++) {
+                List<Long> 하나씩 = 회원들(n);
+                long t0 = System.nanoTime();
+                for (Long member : 하나씩) {
+                    committer.markCommitted(COUPON_ID, Map.of(member, 1));
+                }
+                확정_전[r] = (System.nanoTime() - t0) / 1_000;
+
+                Map<Long, Integer> 한번에 = new HashMap<>(n);
+                for (Long member : 회원들(n)) {
+                    한번에.put(member, 1);
+                }
+                long t1 = System.nanoTime();
+                committer.markCommitted(COUPON_ID, 한번에);
+                확정_후[r] = (System.nanoTime() - t1) / 1_000;
+
+                List<CouponSeqCommitter.Repair> 낱개 = 되돌릴_것들(n);
+                long t2 = System.nanoTime();
+                for (CouponSeqCommitter.Repair repair : 낱개) {
+                    committer.returnAndRepairs(COUPON_ID, List.of(repair));
+                }
+                되돌_전[r] = (System.nanoTime() - t2) / 1_000;
+
+                List<CouponSeqCommitter.Repair> 묶음 = 되돌릴_것들(n);
+                long t3 = System.nanoTime();
+                committer.returnAndRepairs(COUPON_ID, 묶음);
+                되돌_후[r] = (System.nanoTime() - t3) / 1_000;
+            }
+
+            Arrays.sort(확정_전);
+            Arrays.sort(확정_후);
+            Arrays.sort(되돌_전);
+            Arrays.sort(되돌_후);
+            report.append(회분_줄("%,4d  확정 표시  티켓마다", n, 확정_전));
+            report.append(회분_줄("%,4d  확정 표시  한 회분  ", n, 확정_후));
+            report.append(회분_줄("%,4d  되돌리기   티켓마다", n, 되돌_전));
+            report.append(회분_줄("%,4d  되돌리기   한 회분  ", n, 되돌_후));
+            report.append("\n");
+
+            마지막_확정_전 = p(확정_전, 50);
+            마지막_확정_후 = p(확정_후, 50);
+            마지막_되돌_전 = p(되돌_전, 50);
+            마지막_되돌_후 = p(되돌_후, 50);
+        }
+
+        report.append("왕복  중복 N 건에 대해 확정 표시 N -> 1,  되돌리기 N -> 1\n");
+        report.append("중복 %,d 건에서 p50 이 확정 표시 %.1f 배, 되돌리기 %.1f 배 빨라진다\n"
+                .formatted(회분_중복_수[회분_중복_수.length - 1],
+                        마지막_확정_전 / (double) Math.max(1, 마지막_확정_후),
+                        마지막_되돌_전 / (double) Math.max(1, 마지막_되돌_후)));
+
+        System.out.println(report);
+        Files.writeString(Path.of("build", "tmp", "coupon-seq-batching-latency.txt"), report.toString());
+
+        assertThat(마지막_확정_후).isLessThan(마지막_확정_전);
+        assertThat(마지막_되돌_후).isLessThan(마지막_되돌_전);
+    }
+
+    private static String 회분_줄(String label, int size, long[] sorted) {
+        return "%s  %,8d  %,8d  %,8d  %,8d%n".formatted(label.formatted(size),
+                p(sorted, 50), p(sorted, 90), p(sorted, 99), sorted[sorted.length - 1]);
+    }
+
+    private List<CouponSeqCommitter.Repair> 되돌릴_것들(int size) {
+        List<CouponSeqCommitter.Repair> repairs = new java.util.ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            long member = nextMember++;
+            repairs.add(new CouponSeqCommitter.Repair(member, (int) member, (int) member + 1));
+        }
+        return repairs;
     }
 }
