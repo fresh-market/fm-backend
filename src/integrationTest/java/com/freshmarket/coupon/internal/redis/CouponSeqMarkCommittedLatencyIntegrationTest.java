@@ -57,8 +57,12 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
     // 한 회분에 몰릴 수 있는 중복 해소 건수다. 마지막 값이 batch-size 와 같은 최악이다
     private static final int[] 회분_중복_수 = {1, 10, 50, 500};
 
-    // 낱개 쪽이 회차마다 500 번을 도므로 반복을 앞의 시험들보다 낮춘다
-    private static final int 회분_반복 = 30;
+    /*
+     * 낱개 쪽이 회차마다 최대 500 번을 돌아 앞의 시험들보다 한 회차가 비싸다.
+     * 그래도 100 회를 도는 이유는 30 회에서는 p99 가 최댓값 한 건과 같아져 튄 값 하나가
+     * 그대로 표에 오르기 때문이다.
+     */
+    private static final int 회분_반복 = 100;
 
     private static final Path REPORT = Path.of("build", "tmp", "coupon-seq-mark-committed-latency.txt");
 
@@ -290,8 +294,13 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
         }
 
         StringBuilder report = new StringBuilder("\n한 회분에 몰린 중복 해소 (마이크로초)\n\n");
-        report.append("이 표의 한 줄은 호출 하나가 아니라 한 회분 전체의 뒷정리 시간이다.\n\n");
-        report.append("중복  경로            방식      p50       p90       p99       max\n");
+        report.append("한 줄이 호출 하나가 아니라 한 회분 전체의 뒷정리 시간이다.\n");
+        report.append("전 = 티켓마다 따로 보낸다,  후 = 한 회분을 한 번에 보낸다.\n\n");
+        report.append("                        p50                        p90\n");
+        report.append("중복  경로          전        후     배수        전        후     배수\n");
+
+        StringBuilder 꼬리 = new StringBuilder("\n최악 한 회차 (max, 마이크로초)\n\n");
+        꼬리.append("중복  경로          전        후     배수\n");
 
         long 마지막_확정_전 = 0;
         long 마지막_확정_후 = 0;
@@ -337,11 +346,10 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
             Arrays.sort(확정_후);
             Arrays.sort(되돌_전);
             Arrays.sort(되돌_후);
-            report.append(회분_줄("%,4d  확정 표시  티켓마다", n, 확정_전));
-            report.append(회분_줄("%,4d  확정 표시  한 회분  ", n, 확정_후));
-            report.append(회분_줄("%,4d  되돌리기   티켓마다", n, 되돌_전));
-            report.append(회분_줄("%,4d  되돌리기   한 회분  ", n, 되돌_후));
-            report.append("\n");
+            report.append(회분_줄(n, "확정 표시", 확정_전, 확정_후));
+            report.append(회분_줄(n, "되돌리기 ", 되돌_전, 되돌_후));
+            꼬리.append(최악_줄(n, "확정 표시", 확정_전, 확정_후));
+            꼬리.append(최악_줄(n, "되돌리기 ", 되돌_전, 되돌_후));
 
             마지막_확정_전 = p(확정_전, 50);
             마지막_확정_후 = p(확정_후, 50);
@@ -349,11 +357,13 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
             마지막_되돌_후 = p(되돌_후, 50);
         }
 
-        report.append("왕복  중복 N 건에 대해 확정 표시 N -> 1,  되돌리기 N -> 1\n");
-        report.append("중복 %,d 건에서 p50 이 확정 표시 %.1f 배, 되돌리기 %.1f 배 빨라진다\n"
-                .formatted(회분_중복_수[회분_중복_수.length - 1],
-                        마지막_확정_전 / (double) Math.max(1, 마지막_확정_후),
-                        마지막_되돌_전 / (double) Math.max(1, 마지막_되돌_후)));
+        report.append("\n왕복  중복 N 건에 대해 확정 표시 N -> 1,  되돌리기 N -> 1\n");
+        report.append("""
+                배수가 1 에 가까운 줄은 이 변경이 안 도움 되는 자리다.
+                거기서 비용도 안 든다는 것을 함께 보려고 중복 1 을 남겨 둔다.
+                꼬리는 %,d 회 중 최악 한 회차로 따로 본다. p90 이 그것까지는 안 보여 준다.
+                """.formatted(회분_반복));
+        report.append(꼬리);
 
         System.out.println(report);
         Files.writeString(Path.of("build", "tmp", "coupon-seq-batching-latency.txt"), report.toString());
@@ -362,9 +372,21 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
         assertThat(마지막_되돌_후).isLessThan(마지막_되돌_전);
     }
 
-    private static String 회분_줄(String label, int size, long[] sorted) {
-        return "%s  %,8d  %,8d  %,8d  %,8d%n".formatted(label.formatted(size),
-                p(sorted, 50), p(sorted, 90), p(sorted, 99), sorted[sorted.length - 1]);
+    private static String 회분_줄(int size, String label, long[] 전, long[] 후) {
+        return "%,4d  %s  %,8d  %,8d  %5.1f배  %,8d  %,8d  %5.1f배%n".formatted(size, label,
+                p(전, 50), p(후, 50), 배수(p(전, 50), p(후, 50)),
+                p(전, 90), p(후, 90), 배수(p(전, 90), p(후, 90)));
+    }
+
+    private static String 최악_줄(int size, String label, long[] 전, long[] 후) {
+        long a = 전[전.length - 1];
+        long b = 후[후.length - 1];
+        return "%,4d  %s  %,8d  %,8d  %5.1f배%n".formatted(size, label, a, b, 배수(a, b));
+    }
+
+    // 후가 더 느린 회차도 그대로 보이도록 1 미만도 자르지 않는다
+    private static double 배수(long 전, long 후) {
+        return 전 / (double) Math.max(1, 후);
     }
 
     private List<CouponSeqCommitter.Repair> 되돌릴_것들(int size) {
