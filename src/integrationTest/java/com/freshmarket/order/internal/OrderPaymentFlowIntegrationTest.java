@@ -19,8 +19,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /*
@@ -39,18 +37,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
  */
 @SpringBootTest
 class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
-
-    /*
-     * integrationTest 프로필에는 local 전용 MockPaymentGateway가 등록되지 않는다.
-     * 이 fake 빈이 이 테스트 컨텍스트의 유일한 PaymentGateway다.
-     */
-    @TestConfiguration
-    static class FakePaymentGatewayTestConfig {
-        @Bean
-        FakePaymentGatewayIntegrationTest fakePaymentGateway(Clock clock) {
-            return new FakePaymentGatewayIntegrationTest(clock);
-        }
-    }
 
     @Autowired
     private OrderCreateService orderCreateService;

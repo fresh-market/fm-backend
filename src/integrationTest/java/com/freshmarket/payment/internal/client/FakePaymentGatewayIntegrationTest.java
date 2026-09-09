@@ -10,10 +10,13 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
 
 /*
  * [2026-09-05 17:36 KST] 통합 테스트 전용 PG 대역이다. src/integrationTest에만 존재하며 프로덕션
- * 빈 그래프에는 올라가지 않는다 — MockPaymentGateway(개발용, 항상 승인만 반환)와는 목적이 다르다.
+ * integrationTest 프로필의 빈 그래프에만 올라간다 — MockPaymentGateway(개발용, 항상 승인만 반환)와는
+ * 목적이 다르다.
  *
  * willApprove/willReject/willTimeout/willLoseResponse로 시나리오를 미리 등록해두면, request()가
  * 호출될 때마다 등록한 순서대로 하나씩 소비하며 그대로 응답하거나 예외를 던진다. 등록된 시나리오가
@@ -36,6 +39,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * base 패키지가 아키텍처 테스트 전용 자리(PlacementIntegrationTest 클래스 주석 "베이스 패키지는
  * 아키텍처 테스트 자리")이고, 이 대역은 payment 도메인에 속하는 편이 맞기 때문이다.
  */
+@Component
+@Profile("integrationTest")
 public class FakePaymentGatewayIntegrationTest implements PaymentGateway {
 
     private final Clock clock;
