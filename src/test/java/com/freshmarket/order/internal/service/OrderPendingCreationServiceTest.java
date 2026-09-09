@@ -129,6 +129,19 @@ class OrderPendingCreationServiceTest {
     }
 
     @Test
+    void 기존_주문_조회는_같은_요청이면_기존_응답을_반환한다() {
+        OrderCreateRequest request = request();
+        Order existing = existingOrder("req-1", requestHash(MEMBER_ID, request));
+        ReflectionTestUtils.setField(existing, "id", 200L);
+        when(orderRepository.findByRequestId("req-1")).thenReturn(Optional.of(existing));
+
+        PendingOrderResult result = sut.findExistingOrderResult(MEMBER_ID, request).orElseThrow();
+
+        assertThat(result.newlyCreated()).isFalse();
+        assertThat(result.response().orderId()).isEqualTo(200L);
+    }
+
+    @Test
     void 같은_requestId가_다른_내용이면_예외를_던진다() {
         Order existing = existingOrder("req-1", "f".repeat(64));
         when(orderRepository.findByRequestId("req-1")).thenReturn(Optional.of(existing));
