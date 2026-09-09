@@ -179,7 +179,7 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
         for (int i = 0; i < WARMUP; i++) {
             committer.dropMappings(COUPON_ID, List.of(nextMember++));
             매핑을_순차로_지운다(List.of(nextMember++));
-            committer.returnAndRepair(COUPON_ID, nextMember++, 1, 2);
+            committer.returnAndRepairs(COUPON_ID, List.of(new CouponSeqCommitter.Repair(nextMember++, 1, 2)));
             번호를_순차로_되돌린다(nextMember++, 1, 2);
         }
 
@@ -210,7 +210,7 @@ class CouponSeqMarkCommittedLatencyIntegrationTest extends IntegrationTestSuppor
         long[] 되돌리기_순차 = new long[ROUNDS];
         for (int i = 0; i < ROUNDS; i++) {
             long t0 = System.nanoTime();
-            committer.returnAndRepair(COUPON_ID, nextMember++, 1, 2);
+            committer.returnAndRepairs(COUPON_ID, List.of(new CouponSeqCommitter.Repair(nextMember++, 1, 2)));
             되돌리기_스크립트[i] = (System.nanoTime() - t0) / 1_000;
 
             long t1 = System.nanoTime();

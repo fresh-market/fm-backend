@@ -120,9 +120,11 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
         IssueOutcome outcome = 결과를_기다린다(again);
 
         assertThat(outcome).isEqualTo(new IssueOutcome.AlreadyIssued(1));
-        assertThat(redisTemplate.opsForZSet().score(FREE, "7")).isEqualTo(7.0);
-        assertThat(redisTemplate.opsForHash().get(SEQ, "9101")).isEqualTo("1:1");
         assertThat(발급된_행_수()).isEqualTo(1);
+        뒷정리를_기다린다(() -> {
+            assertThat(redisTemplate.opsForZSet().score(FREE, "7")).isEqualTo(7.0);
+            assertThat(redisTemplate.opsForHash().get(SEQ, "9101")).isEqualTo("1:1");
+        });
     }
 
     /*
@@ -160,6 +162,40 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
             assertThat(redisTemplate.opsForZSet().score(FREE, "1")).isNull();
             assertThat(redisTemplate.opsForHash().get(SEQ, "9102")).isNull();
         });
+    }
+
+    /*
+     * 되돌릴 것이 여럿이어도 한 번에 처리한다.
+     *
+     * 이 경로는 Redis 가 매핑을 잃은 뒤에 돌아온 회원이 지나는데, 그런 회원은 한꺼번에 생긴다.
+     * 스크립트가 인자를 회원마다 세 개씩 받아 펴므로 실물로 확인해야 한다.
+     */
+    @Test
+    void 되돌릴_것이_여럿이어도_한_번에_처리한다() throws Exception {
+        for (long member : new long[] {9101L, 9102L, 9103L}) {
+            결과를_기다린다(순번을_받은_요청(member, (int) (member - 9100L)));
+            // 매핑을 잃은 상태를 만든다. 그 회원이 다시 오면 새 번호를 받는다
+            redisTemplate.opsForHash().delete(SEQ, String.valueOf(member));
+        }
+
+        List<IssueTicket> again = List.of(
+                순번을_받은_요청(9101L, 11), 순번을_받은_요청(9102L, 12), 순번을_받은_요청(9103L, 13));
+        for (IssueTicket ticket : again) {
+            assertThat(결과를_기다린다(ticket)).isInstanceOf(IssueOutcome.AlreadyIssued.class);
+        }
+
+        뒷정리를_기다린다(() -> {
+            // 못 쓴 번호 셋이 다시 내줄 자리에 담긴다
+            assertThat(redisTemplate.opsForZSet().score(FREE, "11")).isEqualTo(11.0);
+            assertThat(redisTemplate.opsForZSet().score(FREE, "12")).isEqualTo(12.0);
+            assertThat(redisTemplate.opsForZSet().score(FREE, "13")).isEqualTo(13.0);
+            // 매핑은 원래 갖고 있던 번호로 고쳐진다
+            assertThat(redisTemplate.opsForHash().entries(SEQ))
+                    .containsExactlyInAnyOrderEntriesOf(
+                            Map.of("9101", "1:1", "9102", "2:1", "9103", "3:1"));
+            assertThat(redisTemplate.opsForZSet().size(PENDING)).isZero();
+        });
+        assertThat(발급된_행_수()).isEqualTo(3);
     }
 
     /*
@@ -223,8 +259,10 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
 
         결과를_기다린다(순번을_받은_요청(9101L, 7));
 
-        assertThat(redisTemplate.opsForZSet().score(FREE, "7")).isEqualTo(7.0);
-        assertThat(redisTemplate.getExpire(FREE, TimeUnit.SECONDS)).isNotNull().isBetween(1L, 600L);
+        뒷정리를_기다린다(() -> {
+            assertThat(redisTemplate.opsForZSet().score(FREE, "7")).isEqualTo(7.0);
+            assertThat(redisTemplate.getExpire(FREE, TimeUnit.SECONDS)).isNotNull().isBetween(1L, 600L);
+        });
     }
 
     /*
@@ -245,8 +283,9 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
     }
 
     /*
-     * 순번 충돌의 뒷정리는 요청 스레드를 깨운 뒤에 돈다.
-     * 고치는 대상이 제3자라 응답 경로 위에 없기 때문이고, 그래서 future 가 끝났다고 끝난 것이 아니다.
+     * 중복 해소의 뒷정리는 요청 스레드를 깨운 뒤 배치 끝에서 한꺼번에 돈다.
+     * 응답은 DB 에서 읽은 순번으로 이미 정해져 있어 Redis 결과를 안 쓰기 때문이고,
+     * 그래서 future 가 끝났다고 Redis 까지 끝난 것이 아니다.
      */
     private void 뒷정리를_기다린다(ThrowingRunnable 검증) {
         Awaitility.await().atMost(Duration.ofSeconds(AWAIT_SECONDS)).untilAsserted(검증);
