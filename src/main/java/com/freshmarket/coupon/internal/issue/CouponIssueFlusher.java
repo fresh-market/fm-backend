@@ -265,6 +265,13 @@ public class CouponIssueFlusher implements SmartLifecycle {
 
     private void flushOneByOne(List<IssueTicket> batch) {
         List<IssueTicket> issued = new ArrayList<>(batch.size());
+        /*
+         * 중복 해소의 세 경로가 여기에 쌓인다. 셋 다 Redis 뒷정리일 뿐이고 그 티켓의 응답은
+         * DB 에서 읽은 순번으로 이미 정해져 있어서, 이 회분을 다 처리할 때까지 미뤄도 답이 안 바뀐다.
+         * 미루면 티켓마다 치던 것을 쿠폰마다 한 번으로 묶을 수 있다.
+         */
+        Map<Long, Map<Long, Integer>> marks = new HashMap<>();
+        Map<Long, List<CouponSeqCommitter.Repair>> repairs = new HashMap<>();
         List<IssueTicket> seqTaken = new ArrayList<>();
         for (IssueTicket ticket : batch) {
             try {
@@ -274,7 +281,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 });
                 issued.add(ticket);
             } catch (DuplicateKeyException e) {
-                resolveDuplicate(ticket, seqTaken);
+                resolveDuplicate(ticket, marks, repairs, seqTaken);
             } catch (DataAccessException e) {
                 /*
                  * 이 플러시 스레드는 방금 쓰기가 커밋됐는지 아닌지 모른다.
@@ -292,7 +299,8 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 ticket.complete(new IssueOutcome.Congested(IssueResult.WRITE_CIRCUIT));
             }
         }
-        completeIssued(issued);
+        completeIssued(issued, marks);
+        repairs.forEach(committer::returnAndRepairs);
         repairSeqTaken(seqTaken);
     }
 
@@ -300,7 +308,10 @@ public class CouponIssueFlusher implements SmartLifecycle {
      * 이 메서드는 어느 UNIQUE 제약에 걸린 것인지를 예외 메시지가 아니라 실제 행을 읽어서 가른다.
      * 메시지 형식은 드라이버와 서버 판에 따라 달라지지만, 그 회원의 행이 있느냐 없느냐는 안 달라진다.
      */
-    private void resolveDuplicate(IssueTicket ticket, List<IssueTicket> seqTaken) {
+    private void resolveDuplicate(IssueTicket ticket,
+                                  Map<Long, Map<Long, Integer>> marks,
+                                  Map<Long, List<CouponSeqCommitter.Repair>> repairs,
+                                  List<IssueTicket> seqTaken) {
         Optional<Integer> actualSeq;
         try {
             actualSeq = bulkRepository.findIssuedSeq(ticket.couponId(), ticket.memberId());
@@ -321,7 +332,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
              * 반납하면 남이 쓰는 번호를 내주게 되므로 표시만 마저 남긴다.
              */
             if (actual == ticket.issueSeq()) {
-                committer.markCommitted(ticket.couponId(), Map.of(ticket.memberId(), actual));
+                mark(marks, ticket.couponId(), ticket.memberId(), actual);
                 ticket.complete(new IssueOutcome.AlreadyIssued(actual));
                 return;
             }
@@ -330,14 +341,15 @@ public class CouponIssueFlusher implements SmartLifecycle {
              * 이 회원이 원래 갖고 있던 번호가 따로 있다. 이번에 받은 번호는 아무도 안 썼으므로 반납한다.
              * Redis 가 매핑을 잃은 뒤에 그 회원이 다시 왔을 때 이 경로로 온다.
              */
-            committer.returnAndRepair(ticket.couponId(), ticket.memberId(), ticket.issueSeq(), actual);
+            repairs.computeIfAbsent(ticket.couponId(), key -> new ArrayList<>())
+                    .add(new CouponSeqCommitter.Repair(ticket.memberId(), ticket.issueSeq(), actual));
             ticket.complete(new IssueOutcome.AlreadyIssued(actual));
             return;
         }
 
         /*
          * 그 회원의 행이 없으니 uk_mc_coupon_seq 에 걸린 것이다. 그 번호는 남이 쓰고 있어 반납하면 안 된다.
-         * 뒷정리는 배치 끝에서 한다. 이 티켓의 응답은 이미 정해졌고 남은 일이 제3자를 고치는 것이라
+         * 뒷정리는 이 회분을 다 처리한 뒤에 한다. 이 티켓의 응답은 이미 정해졌고 남은 일이 제3자를 고치는 것이라
          * 응답 경로 위에 없다 (docs/coupon/coupon.md 3장).
          */
         log.warn("event=COUPON_ISSUE_SEQ_TAKEN couponId={} memberId={} seq={}",
@@ -378,7 +390,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
         } catch (DataAccessException e) {
             /*
              * 주인을 못 찾았으면 아무것도 안 고친다. 이 티켓들의 응답은 이미 나갔고,
-             * 못 고친 주인은 재시도할 때 uk_mc_coupon_member 갈래가 표시를 마저 붙인다.
+             * 못 고친 주인은 재시도할 때 uk_mc_coupon_member 경로가 표시를 마저 붙인다.
              */
             log.warn("event=COUPON_SEQ_OWNER_LOOKUP_FAILED couponId={} size={}", couponId, seqs.size(), e);
             return;
@@ -397,23 +409,30 @@ public class CouponIssueFlusher implements SmartLifecycle {
      * 그 왕복을 아끼려고 두는 표시라 응답보다 앞에 있어야 뜻이 있다.
      */
     private void completeIssued(List<IssueTicket> issued) {
-        if (issued.isEmpty()) {
-            return;
+        completeIssued(issued, new HashMap<>());
+    }
+
+    /**
+     * 확정 표시를 붙이고 기다리던 요청 스레드를 깨운다.
+     *
+     * <p>커밋에 성공한 티켓과 <b>이미 자기 번호로 써 있던 회원</b>을 한 맵에 담아 쿠폰마다 한 번씩
+     * 친다. 둘이 하는 일이 같아서다. 앞엣것은 방금 행이 됐고 뒤엣것은 앞선 시도가 이미 썼는데
+     * 표시만 못 남긴 것인데, 남길 표시는 똑같이 {@code 회원 -> "순번:1"} 이다.
+     *
+     * <p>한 회분에 여러 쿠폰이 섞일 수 있어 쿠폰별로 묶는다.
+     */
+    private void completeIssued(List<IssueTicket> issued, Map<Long, Map<Long, Integer>> marks) {
+        for (IssueTicket ticket : issued) {
+            mark(marks, ticket.couponId(), ticket.memberId(), ticket.issueSeq());
         }
-        markCommitted(issued);
+        marks.forEach(committer::markCommitted);
         for (IssueTicket ticket : issued) {
             ticket.complete(new IssueOutcome.Issued(ticket.issueSeq()));
         }
     }
 
-    // 한 배치에 여러 쿠폰의 티켓이 섞일 수 있어, 이 메서드가 쿠폰별로 묶어 쿠폰마다 한 번씩 Redis 를 친다
-    private void markCommitted(List<IssueTicket> issued) {
-        Map<Long, Map<Long, Integer>> byCoupon = new HashMap<>();
-        for (IssueTicket ticket : issued) {
-            byCoupon.computeIfAbsent(ticket.couponId(), key -> new HashMap<>())
-                    .put(ticket.memberId(), ticket.issueSeq());
-        }
-        byCoupon.forEach(committer::markCommitted);
+    private static void mark(Map<Long, Map<Long, Integer>> marks, long couponId, long memberId, int seq) {
+        marks.computeIfAbsent(couponId, key -> new HashMap<>()).put(memberId, seq);
     }
 
     /*

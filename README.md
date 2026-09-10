@@ -470,7 +470,7 @@ commit-wait          800ms   큐에 넣은 뒤 커밋+확정까지의 상한
   ├ 배치 윈도우         20ms
   ├ connection-timeout 300ms   HikariCP 가 하한 250ms 를 강제한다
   ├ socketTimeout      300ms   실행과 커밋이 이 안에 있다
-  └ 확정 표시          100ms   예산 안이다. 파이프라인이라 왕복 하나다
+  └ 확정 표시          100ms   예산 안이다. 스크립트 하나라 왕복 하나다
                        -----
                        720ms  <  800ms      계층이 유지된다
                      100 x 2 + 720 = 920ms  ->  SLO 1초 안에 든다
@@ -484,7 +484,9 @@ commit-wait          800ms   큐에 넣은 뒤 커밋+확정까지의 상한
 
 **또 한 번은 세는 항목이 모자라서다.** 예전 산식은 가운데 둘만 세어 `600 < 800` 이라고 봤는데, **배치 윈도우 20ms 와 확정 표시가 예산 안이라는 것을 안 셌다.** 뒤엣것은 확정 표시를 요청 스레드를 깨우기 **전에** 붙이기 때문이고, 그때는 `HSET` 과 `ZREM` 을 순차로 쳐서 왕복이 둘이라 200ms 였다. **실제 합이 820ms 로 예산을 넘고 있었다.**
 
-**고친 자리는 그 왕복 둘이다.** 파이프라인으로 함께 보내 왕복이 하나가 됐다. 원자성은 필요 없다. 반쪽만 성공한 상태를 회수가 이미 다룬다.
+**고친 자리는 그 왕복 둘이다.** 스크립트 하나에 담아 왕복이 하나가 됐다.
+
+**파이프라인으로 묶었다가 되돌렸다.** Lettuce 는 공유 커넥션으로 파이프라인을 못 해서 스프링이 전용 커넥션을 따로 얻는데, 커넥션 풀이 없어 **호출마다 새 연결이 열린다.** 재 보니 빈 파이프라인 하나가 4.6밀리초였고 순차 왕복 둘보다 오히려 느렸다. 그 측정을 시험으로 남겼다.
 
 **정상 경로는 200~280ms 라 평상시에는 안 드러난다.** 위 합은 여러 값이 동시에 상한에 닿는 최악이다.
 
@@ -792,7 +794,8 @@ coupon.warmup:
 | [coupon/coupon.md](./docs/coupon/coupon.md) | **선착순 쿠폰 설계 전체** |
 | [coupon/requirement.md](./docs/coupon/requirement.md) | 주어진 요구사항 |
 | [coupon/coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md) | 발급이 쓰는 Redis 키 여섯, 그리고 언제 무엇이 바뀌나 |
-| [coupon/redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md) | Redis 키 재건 운영 절차 |
+| [coupon/coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md) | Lua 스크립트 넷이 무엇을 묶고 언제 도나 |
+| [coupon/redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md) | 재건이 무엇이고 어떤 순서로 도나 |
 | [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
 | [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |
 | [wiki](https://github.com/fresh-market/fm-backend/wiki) | 팀 문서, 문제 해결 공유 |
