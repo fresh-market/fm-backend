@@ -19,7 +19,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /*
@@ -44,7 +44,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 겹치면 uk_campaign_target_date_lot 이 뒤엣것을 거절해 데이터가 섞이지 않는다.
  * 인스턴스가 늘거나 재실행이 잦아지면 그때 ShedLock 등 분산 실행 제어를 도입한다.
  */
-@Component
+@Service
 @RequiredArgsConstructor
 public class CampaignTargetLotRebuildService {
 
