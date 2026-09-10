@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.freshmarket.stock.internal.dto.CampaignTargetLotCandidate;
@@ -12,6 +15,7 @@ import com.freshmarket.stock.internal.exception.StockErrorCode;
 import com.freshmarket.stock.internal.exception.StockException;
 import com.freshmarket.stock.internal.dto.LotDisposedQty;
 import com.freshmarket.stock.internal.entity.CampaignTargetLot;
+import com.freshmarket.stock.internal.repository.CampaignRebuildLockRepository;
 import com.freshmarket.stock.internal.repository.CampaignTargetLotRepository;
 import com.freshmarket.stock.internal.repository.StockLotQueryRepository;
 import com.freshmarket.stock.internal.repository.StockMovementRepository;
@@ -24,8 +28,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.InvalidDataAccessResourceUsageException;
 
 /*
  * 캠페인 대상 선정 로직(재고 하한, 확보재고 제외, 소진율 하위 10% 전체)을 검증한다.
@@ -45,6 +52,9 @@ class CampaignTargetLotRebuildServiceTest {
     @Mock
     private StockMovementRepository stockMovementRepository;
 
+    @Mock
+    private CampaignRebuildLockRepository campaignRebuildLockRepository;
+
     private CampaignTargetLotRebuildService batch;
 
     @BeforeEach
@@ -52,7 +62,8 @@ class CampaignTargetLotRebuildServiceTest {
         Clock clock = Clock.fixed(
                 TODAY.atStartOfDay(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
         batch = new CampaignTargetLotRebuildService(
-                stockLotQueryRepository, campaignTargetLotRepository, stockMovementRepository, clock);
+                stockLotQueryRepository, campaignTargetLotRepository, stockMovementRepository,
+                campaignRebuildLockRepository, clock);
     }
 
     // 폐기 이력이 없는 기본 상황. 폐기 교정을 따로 보는 테스트만 이 스텁을 덮어쓴다
@@ -153,26 +164,57 @@ class CampaignTargetLotRebuildServiceTest {
     }
 
     /*
-     * 확정이 도는 중에 또 들어오면 막는다.
+     * 잠금을 못 잡으면 확정을 시작하지 않는다.
      *
-     * 리포지토리 조회가 불리는 순간에 같은 서비스를 다시 부르는 것으로 "겹친 호출" 을 만든다.
-     * 실제로는 관리자가 버튼을 두 번 누르거나 자정 스케줄과 겹치는 상황이다.
+     * 다른 트랜잭션이 쥐고 있을 때 NOWAIT 가 내는 실패를 흉내낸다. 실제로는 관리자가 버튼을
+     * 두 번 누르거나, 자정 배치가 도는 중에 관리자 재실행이 들어온 상황이다.
      */
     @Test
-    void 확정이_도는_중에_또_부르면_막는다() {
-        when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt()))
-                .thenAnswer(invocation -> {
-                    assertThatThrownBy(() -> batch.rebuild())
-                            .isInstanceOf(StockException.class)
-                            .hasMessageContaining(
-                                    StockErrorCode.CAMPAIGN_REBUILD_IN_PROGRESS.getMessage());
-                    return List.of();
-                });
+    void 잠금을_못_잡으면_확정을_시작하지_않는다() {
+        doThrow(new CannotAcquireLockException("이미 잠겨 있다"))
+                .when(campaignRebuildLockRepository).lockForRebuild();
 
-        batch.rebuild();
+        assertThatThrownBy(() -> batch.rebuild())
+                .isInstanceOf(StockException.class)
+                .hasMessageContaining(StockErrorCode.CAMPAIGN_REBUILD_IN_PROGRESS.getMessage());
+
+        // 계산을 헛돌리지 않는 것이 잠금을 앞으로 옮긴 이유의 절반이다
+        verifyNoInteractions(stockLotQueryRepository, stockMovementRepository);
+        verifyNoInteractions(campaignTargetLotRepository);
     }
 
-    // 끝난 뒤에는 다시 부를 수 있어야 한다. 플래그가 안 내려가면 한 번 쓰고 못 쓴다
+    /*
+     * 잠금 경합이 아닌 DB 실패는 409 로 뭉개지 않는다.
+     * 표가 없는 상황이 "다른 데서 돌고 있음" 으로 보고되면 원인을 못 찾는다.
+     */
+    @Test
+    void 잠금_경합이_아닌_DB_실패는_그대로_올린다() {
+        doThrow(new InvalidDataAccessResourceUsageException("campaign_rebuild_lock 이 없다"))
+                .when(campaignRebuildLockRepository).lockForRebuild();
+
+        assertThatThrownBy(() -> batch.rebuild())
+                .isInstanceOf(InvalidDataAccessResourceUsageException.class)
+                .isNotInstanceOf(StockException.class);
+    }
+
+    // 잠금이 계산보다 먼저 나가야 의미가 있다. 순서가 뒤집히면 헛계산도 교착도 그대로 남는다
+    @Test
+    void 후보를_조회하기_전에_잠금부터_잡는다() {
+        when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt()))
+                .thenReturn(List.of());
+
+        batch.rebuild();
+
+        InOrder inOrder = inOrder(campaignRebuildLockRepository, stockLotQueryRepository);
+        inOrder.verify(campaignRebuildLockRepository).lockForRebuild();
+        inOrder.verify(stockLotQueryRepository).findCandidatesExpiringBetween(any(), any(), anyInt());
+    }
+
+    /*
+     * 끝난 뒤에는 다시 부를 수 있어야 한다.
+     * 잠금이 트랜잭션에 묶여 있어 푸는 코드가 없는데, 그래서 오히려 "안 풀려서 한 번 쓰고 못 쓴다"
+     * 가 생기지 않는다는 것을 잠가 둔다.
+     */
     @Test
     void 확정이_끝나면_다시_부를_수_있다() {
         when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt()))
