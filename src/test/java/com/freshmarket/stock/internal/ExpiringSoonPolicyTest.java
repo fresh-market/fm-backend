@@ -22,6 +22,12 @@ class ExpiringSoonPolicyTest {
      */
     private static final Instant 한국_자정_직후 = Instant.parse("2026-08-31T15:00:30Z");
 
+    /*
+     * 한국 오후 2시. UTC/뉴욕/서울이 모두 같은 날짜로 떨어지는 시각이라,
+     * 시간대가 달라도 결과가 같은지만 가려낸다.
+     */
+    private static final Instant 한국_오후_2시 = Instant.parse("2026-09-01T05:00:00Z");
+
     @Test
     void 호스트가_UTC_여도_한국_날짜를_준다() {
         Clock utcClock = Clock.fixed(한국_자정_직후, ZoneId.of("UTC"));
@@ -53,11 +59,9 @@ class ExpiringSoonPolicyTest {
     // 호스트 시간대가 무엇이든 같은 순간에는 같은 날짜여야 한다
     @Test
     void 호스트_시간대가_달라도_결과가_같다() {
-        Instant 같은_순간 = Instant.parse("2026-09-01T05:00:00Z");
-
-        LocalDate utc = ExpiringSoonPolicy.businessToday(Clock.fixed(같은_순간, ZoneId.of("UTC")));
-        LocalDate ny = ExpiringSoonPolicy.businessToday(Clock.fixed(같은_순간, ZoneId.of("America/New_York")));
-        LocalDate kst = ExpiringSoonPolicy.businessToday(Clock.fixed(같은_순간, ZoneId.of("Asia/Seoul")));
+        LocalDate utc = ExpiringSoonPolicy.businessToday(Clock.fixed(한국_오후_2시, ZoneId.of("UTC")));
+        LocalDate ny = ExpiringSoonPolicy.businessToday(Clock.fixed(한국_오후_2시, ZoneId.of("America/New_York")));
+        LocalDate kst = ExpiringSoonPolicy.businessToday(Clock.fixed(한국_오후_2시, ZoneId.of("Asia/Seoul")));
 
         assertThat(utc).isEqualTo(ny).isEqualTo(kst);
     }

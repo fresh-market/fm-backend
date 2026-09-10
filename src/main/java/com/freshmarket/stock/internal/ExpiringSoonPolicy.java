@@ -25,9 +25,11 @@ public final class ExpiringSoonPolicy {
      * 호스트 시간대를 따르는데, 이 기능의 "자정" 은 호스트가 아니라 한국 자정이다
      * (@Scheduled 의 zone 도 같은 값이다). 호스트가 UTC 면 둘이 아홉 시간 어긋난다.
      */
-    private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Seoul");
-
+    // @Scheduled 의 zone 속성이 문자열만 받는다. 문자열 쪽을 원본으로 두고 ZoneId 를 파생시켜
+    // 같은 값을 두 번 적지 않는다.
     public static final String BUSINESS_ZONE_ID = "Asia/Seoul";
+
+    private static final ZoneId BUSINESS_ZONE = ZoneId.of(BUSINESS_ZONE_ID);
 
     private ExpiringSoonPolicy() {
     }

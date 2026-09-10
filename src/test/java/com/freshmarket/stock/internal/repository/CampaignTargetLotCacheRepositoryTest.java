@@ -11,6 +11,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -134,48 +135,67 @@ class CampaignTargetLotCacheRepositoryTest {
      * 이것이 없으면 캐시가 가장 필요한 순간에 무력해진다 — 쿠폰 오픈 직후 캐시가 비어 있을 때
      * 들어온 요청이 전부 DB 로 내려간다(cache stampede).
      *
-     * loader 를 일부러 느리게 만든다. 즉시 반환하면 첫 요청이 담아두는 사이에 나머지가
-     * 도착해 경합 창이 안 열리고, 조회와 적재를 나눠 부르던 예전 방식도 통과해 버린다.
+     * 경합 창을 시계가 아니라 래치로 연다. loader 안에서 잠들면 잠든 시간이 곧 창의 길이가
+     * 되는데, 그 길이는 기계마다 다르게 먹힌다 — 느린 CI 에서는 창이 닫히기 전에 못 모이고
+     * 빠른 기계에서는 쓸데없이 오래 기다린다. 여기서는 첫 조회를 래치로 붙잡아 두어
+     * 나머지 열아홉이 도착할 때까지 창이 확실히 열려 있게 한다.
+     *
+     * 두 번째 조회가 들어오는지는 "안 들어옴" 을 기다려서 본다. 들어오면 그 자리에서 바로
+     * 실패하고, 안 들어오면 창을 다 기다린 뒤 통과한다. 조회와 적재를 나눠 부르던 예전
+     * 방식이면 열아홉이 그대로 loader 로 들어와 즉시 걸린다.
      */
     @Test
     void 같은_키가_동시에_미스해도_원본_조회는_한_번만_돈다() throws Exception {
         int threads = 20;
         AtomicInteger loaderCalls = new AtomicInteger();
-        CountDownLatch ready = new CountDownLatch(threads);
-        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch firstLoadEntered = new CountDownLatch(1);
+        CountDownLatch secondLoadEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirstLoad = new CountDownLatch(1);
+        CountDownLatch atCallSite = new CountDownLatch(threads);
         CountDownLatch done = new CountDownLatch(threads);
+
+        Supplier<CursorPageResponse<ExpiringSoonResponse>> loader = () -> {
+            if (loaderCalls.incrementAndGet() == 1) {
+                firstLoadEntered.countDown();
+            } else {
+                secondLoadEntered.countDown();
+            }
+            awaitQuietly(releaseFirstLoad);   // 원본 조회가 도는 동안 경합 창을 열어 둔다
+            return response("감귤");
+        };
 
         // ExecutorService 는 AutoCloseable 이다. close() 가 종료를 걸고 작업이 끝나기를 기다린다
         try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
             for (int i = 0; i < threads; i++) {
                 pool.execute(() -> {
-                    ready.countDown();
                     try {
-                        start.await();
-                        repository.getOrLoad(TODAY, VERSION, null, null, 20, () -> {
-                            loaderCalls.incrementAndGet();
-                            sleepQuietly();          // 느린 DB 조회를 흉내낸다
-                            return response("감귤");
-                        });
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
+                        atCallSite.countDown();
+                        repository.getOrLoad(TODAY, VERSION, null, null, 20, loader);
                     } finally {
                         done.countDown();
                     }
                 });
             }
 
-            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
-            start.countDown();
+            assertThat(firstLoadEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(atCallSite.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // 창이 열려 있는 동안 두 번째 조회가 들어오면 stampede 다
+            assertThat(secondLoadEntered.await(300, TimeUnit.MILLISECONDS)).isFalse();
+
+            releaseFirstLoad.countDown();
             assertThat(done.await(10, TimeUnit.SECONDS)).isTrue();
         }
 
         assertThat(loaderCalls.get()).isEqualTo(1);
     }
 
-    private static void sleepQuietly() {
+    // 래치를 기다린다. Supplier 안에서 부르므로 검사 예외를 밖으로 낼 수 없다
+    private static void awaitQuietly(CountDownLatch latch) {
         try {
-            Thread.sleep(200);
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("경합 창이 열린 채로 시간이 다 됐다");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
