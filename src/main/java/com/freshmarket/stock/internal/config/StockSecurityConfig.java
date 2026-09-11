@@ -32,12 +32,13 @@ class StockSecurityConfig {
     SecurityFilterChain stockSecurityFilterChain(HttpSecurity http, ApiSecurityDefaults defaults) throws Exception {
         return defaults.apply(http)
                 .securityMatcher("/v1/admin/products/*/options/*/lots", "/v1/admin/products/*/lots",
-                        "/v1/admin/lots:expire", "/v1/products:expiringSoon")
+                        "/v1/admin/lots:expire", "/v1/admin/campaigns/**", "/v1/products:expiringSoon")
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(GET, "/v1/products:expiringSoon").permitAll()
-                        // 로트 입고/조회/만료 처리는 관리자만 호출한다(SUPER_ADMIN도 RoleHierarchy로 포함됨)
+                        // 로트 입고/조회/만료 처리와 캠페인 대상 조회·재확정은 관리자만 호출한다
+                        // (SUPER_ADMIN도 RoleHierarchy로 포함됨)
                         .requestMatchers("/v1/admin/products/*/options/*/lots", "/v1/admin/products/*/lots",
-                                "/v1/admin/lots:expire")
+                                "/v1/admin/lots:expire", "/v1/admin/campaigns/**")
                         .hasRole(ADMIN_ROLE)
 
                         .anyRequest().authenticated())
