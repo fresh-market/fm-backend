@@ -66,7 +66,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
     /*
      * 재건이 큐를 훑는 동안 켜진다.
      * 이것이 없으면 훑는 사이에 플러시가 같은 티켓을 DB 로 내려, 재건이 확정된 매핑을 미확정으로
-     * 덮는다. 그러면 회수가 그 번호를 남에게 넘겨 같은 번호가 두 번 나간다 (coupon.md 10장).
+     * 덮는다. 그러면 회수가 그 번호를 남에게 넘겨 같은 번호가 두 번 나간다 (coupon.md 9장).
      */
     private volatile boolean paused;
 
@@ -196,7 +196,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 }
                 /*
                  * 재건이 도는지 배치마다 한 번 본다. 요청당이 아니라 배치당이라 값이 싸다.
-                 * 이 확인이 없으면 요청을 못 받는 인스턴스가 자기 큐를 영영 안 올린다 (coupon.md 10장).
+                 * 이 확인이 없으면 요청을 못 받는 인스턴스가 자기 큐를 영영 안 올린다 (coupon.md 9장).
                  */
                 rebuildSignal.getObject().checkAfterFlush(couponId);
             } catch (InterruptedException e) {

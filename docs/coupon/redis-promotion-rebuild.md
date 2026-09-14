@@ -350,10 +350,10 @@ counter >= MAX(issue_seq)
 ## 9. 이 문서가 다루지 않는 것
 
 ```
-왜 그렇게 설계했나            coupon.md 10장
+왜 그렇게 설계했나            coupon.md 9장
 키가 무엇을 담나              coupon-redis-keys.md
 스크립트가 무엇을 묶나         coupon-redis-scripts.md
-Redis 가 죽었을 때의 응답      coupon.md 9장
+Redis 가 죽었을 때의 응답      coupon.md 8장
 정합성 검증                   coupon.md 11장
 ```
 

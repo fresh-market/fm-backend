@@ -104,7 +104,7 @@ COUPON_WARMUP_DONE sent=3000 ok=3000 writeRows=5000 elapsedMs=15034
 ### 성능이 아니라 손실을 줄이는 값이다
 
 **이 값은 p99 를 바꾸지 않는다. 바꾸는 것은 앱이 급사했을 때 잃는 건수의 상한이다**
-([coupon.md](coupon.md) 8장).
+([coupon.md](coupon.md) 7장).
 
 ```
 20,000 -> 2,000    성능은 그대로,  급사 때 잃는 상한이 10분의 1

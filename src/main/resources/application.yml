@@ -291,7 +291,7 @@ resilience4j:
       kakaoUnlink:
         base-config: kakao-low-traffic
 
-      # 선착순 발급이 쓰는 회로 둘이다. 값의 근거는 docs/coupon/coupon.md 9장에 있다.
+      # 선착순 발급이 쓰는 회로 둘이다. 값의 근거는 docs/coupon/coupon.md 8장에 있다.
       #
       # 창을 시간 기준으로 두는 것이 이 설정의 요점이다. 건수 기준이면 유입이 빠를수록 판정
       # 근거의 시간 폭이 좁아진다. 초당 2천이면 100건이 50밀리초 어치라, GC 정지 하나가 창을

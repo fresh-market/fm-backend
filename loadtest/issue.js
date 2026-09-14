@@ -103,7 +103,7 @@ const connectFailed = new Counter('coupon_connect_failed');
  */
 const gatewayFailed = new Counter('coupon_gateway_failed');
 /*
- * SLO 가 재는 응답만 담는 지연이다. coupon.md 8장이 모집단을 이렇게 정했다.
+ * SLO 가 재는 응답만 담는 지연이다. coupon.md 7장이 모집단을 이렇게 정했다.
  *
  *   대상   발급(200)과 소진(409, 410).  서버가 판정을 끝낸 응답이다
  *   제외   혼잡(503).  요청 예산에서 잘린 값이라 넣으면 예산을 재는 셈이 된다
@@ -135,7 +135,7 @@ export const options = {
   },
   thresholds: {
     /*
-     * coupon.md 8장의 합격 기준을 그대로 옮긴 것이다.
+     * coupon.md 7장의 합격 기준을 그대로 옮긴 것이다.
      * "요구 부하를 걸었을 때 처리된 발급 응답의 p99 가 1초 이하다."
      *
      * 전에는 p(95)<2000 이었다. 분위수도 임계도 SLO 보다 느슨해서, 이 임계를 통과해도
