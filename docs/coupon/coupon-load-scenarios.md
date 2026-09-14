@@ -197,7 +197,6 @@ W-on    reset (기본값)
 | F-1 | 앱 컨테이너 급사 | `docker kill`. SIGKILL 이라 큐가 안 비워진다 |
 | F-2 | 앱 급사 + 캐시 페일오버 | 위와 아래를 함께 |
 | F-3 | 캐시 Multi-AZ 페일오버 | `aws elasticache test-failover` |
-| F-4 | DB Multi-AZ 페일오버 | `aws rds reboot-db-instance --force-failover` |
 
 **주입 시점은 발급의 절반 지점이다.** 재고 10,000 이 30초면 소진되므로 램프가 끝날 때는
 이미 팔 것이 없다.
