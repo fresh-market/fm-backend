@@ -167,8 +167,31 @@ spring:
 coupon:
   issue:
     # 커밋되지 않은 순번을 소진 시점에 회수하는 기준.
-    # 요청 예산보다 길어야 아직 살아 있는 요청의 번호를 안 뺏는다
-    reclaim-after: 60s
+    #
+    # 진짜 하한은 요청 예산이 아니라 Redis 다운타임이다.
+    #
+    # 전에는 "요청 예산(800ms)보다 길어야 한다" 만 적어 두었다. 그 근거만 보면 10초도
+    # 12배 여유라 넉넉해 보인다. 실제로 그렇게 내렸다가 망가뜨렸다 (2026-09-14 회차).
+    #
+    # 회수가 pending 을 뒤져 오래된 항목을 버려진 것으로 보는데, 확정 표시가 붙은 번호는
+    # 건너뛴다. 그 표시를 붙이는 markCommitted 도 Redis 호출이라, Redis 가 죽어 있는 동안
+    # DB 에 잘 써진 티켓도 표시를 못 받고 pending 에 남는다. 그 항목들은 다운타임 내내
+    # 나이를 먹고, Redis 가 돌아오면 한꺼번에 회수 대상이 된다. 이미 DB 에 있는 번호를
+    # 남에게 주므로 uk_mc_coupon_seq 와 uk_mc_coupon_member 에 걸린다.
+    #
+    #   reclaim-after 60s   already-issued   0건,  gap  11
+    #   reclaim-after 10s   already-issued 476건,  gap 591
+    #
+    # 그래서 아래 합보다 커야 한다.
+    #
+    #   ElastiCache Multi-AZ 페일오버   20~21초   test-failover 실측 2회
+    #   회로 반열림 대기                 3초       waitDurationInOpenState
+    #   밀린 markCommitted 처리          미측정
+    #
+    # 30 은 그 합에 붙인 값이고 여유가 얇다. test-failover 는 통제된 경로라 20초에 끝나지만
+    # 노드가 실제로 죽거나 AZ 장애면 더 걸린다. 그때는 위 10초 회차와 같은 일이 난다.
+    # 값을 더 내리려면 "장애 중 pending 항목이 표시를 받기까지 걸린 시간" 을 먼저 재야 한다.
+    reclaim-after: 30s
 
     # 첫 항목을 꺼낸 뒤 이만큼 더 모으고 플러시한다. 둘 중 먼저 오는 것에서 끊는다.
     #
@@ -227,7 +250,7 @@ coupon:
     #   SLO      redis.timeout 100 x 2 + 800 = 1,000ms  <=  8장의 p99 1초
     #   계층     800  >  connection-timeout 300 + socketTimeout 300 = 600
     #
-    # reclaim-after(60s) 보다 짧아야 한다. 아직 응답을 기다리는 요청의 번호를 회수가 남에게
+    # reclaim-after(30s) 보다 짧아야 한다. 아직 응답을 기다리는 요청의 번호를 회수가 남에게
     # 주면 같은 순번이 두 사람에게 나가고 uk_mc_coupon_seq 에 걸린다.
     # CouponIssueProperties 가 그 순서를 생성자에서 강제한다.
     #

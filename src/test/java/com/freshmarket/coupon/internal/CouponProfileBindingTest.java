@@ -40,7 +40,7 @@ class CouponProfileBindingTest {
             assertThat(properties.flushThreads()).isEqualTo(1);
             assertThat(properties.commitWait()).isEqualTo(Duration.ofMillis(800));
             assertThat(properties.couponCacheTtl()).isEqualTo(Duration.ofSeconds(5));
-            assertThat(properties.reclaimAfter()).isEqualTo(Duration.ofSeconds(60));
+            assertThat(properties.reclaimAfter()).isEqualTo(Duration.ofSeconds(30));
         });
     }
 
