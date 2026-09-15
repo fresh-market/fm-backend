@@ -16,7 +16,8 @@ import org.springframework.stereotype.Component;
 /*
  * [2026-09-05 17:36 KST] 통합 테스트 전용 PG 대역이다. src/integrationTest에만 존재하며 프로덕션
  * integrationTest 프로필의 빈 그래프에만 올라간다 — MockPaymentGateway(개발용, 항상 승인만 반환)와는
- * 목적이 다르다.
+ * 목적이 다르다. Spring singleton으로 재사용되므로 시나리오 큐·호출 횟수를 다루는 공개 메서드는 모두
+ * 동기화한다. 따라서 병렬 호출에서도 시나리오 소비 순서와 reset()의 원자성이 보장된다.
  *
  * willApprove/willReject/willTimeout/willLoseResponse로 시나리오를 미리 등록해두면, request()가
  * 호출될 때마다 등록한 순서대로 하나씩 소비하며 그대로 응답하거나 예외를 던진다. 등록된 시나리오가
@@ -54,57 +55,57 @@ public class FakePaymentGatewayIntegrationTest implements PaymentGateway {
     }
 
     @Override
-    public PaymentGatewayApproval request(PaymentRequest request) {
+    public synchronized PaymentGatewayApproval request(PaymentRequest request) {
         callCount.incrementAndGet();
         Scenario scenario = scenarios.poll();
         return (scenario == null ? Scenario.approve() : scenario).resolve(clock);
     }
 
     @Override
-    public PaymentGatewayInquiryResult inquire(Long orderId) {
+    public synchronized PaymentGatewayInquiryResult inquire(Long orderId) {
         inquireCallCount.incrementAndGet();
         InquiryScenario scenario = inquiryScenarios.poll();
         return (scenario == null ? InquiryScenario.stillProcessing() : scenario).resolve(clock);
     }
 
-    public int callCount() {
+    public synchronized int callCount() {
         return callCount.get();
     }
 
-    public int inquireCallCount() {
+    public synchronized int inquireCallCount() {
         return inquireCallCount.get();
     }
 
-    public void willApprove() {
+    public synchronized void willApprove() {
         scenarios.add(Scenario.approve());
     }
 
-    public void willReject(String reason) {
+    public synchronized void willReject(String reason) {
         scenarios.add(Scenario.reject(reason));
     }
 
-    public void willTimeout() {
+    public synchronized void willTimeout() {
         scenarios.add(Scenario.timeout());
     }
 
-    public void willLoseResponse() {
+    public synchronized void willLoseResponse() {
         scenarios.add(Scenario.loseResponse());
     }
 
-    public void willInquireApprove() {
+    public synchronized void willInquireApprove() {
         inquiryScenarios.add(InquiryScenario.approve());
     }
 
-    public void willInquireReject(String reason) {
+    public synchronized void willInquireReject(String reason) {
         inquiryScenarios.add(InquiryScenario.reject(reason));
     }
 
-    public void willInquireStillProcessing() {
+    public synchronized void willInquireStillProcessing() {
         inquiryScenarios.add(InquiryScenario.stillProcessing());
     }
 
     // 테스트 간 상태가 새지 않도록 시나리오 큐와 호출 횟수를 초기화한다. 빈으로 재사용할 때 @BeforeEach에서 부른다.
-    public void reset() {
+    public synchronized void reset() {
         scenarios.clear();
         inquiryScenarios.clear();
         callCount.set(0);
