@@ -370,7 +370,7 @@ flowchart TB
 
 > 키 넷이 각각 무엇을 담고 언제 값이 들고 나는지는 [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md), 스크립트 넷이 무엇을 묶는지는 [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md), 큐와 플러시가 어떻게 도는지는 [coupon-v4.md](./docs/coupon/coupon-v4.md) 에 있다.
 
-### 5.5 설계의 절반인 응답 다섯 가지
+### 5.5 응답 코드 설계
 
 | 응답 | 상태 | 왜 이렇게 나누나 |
 |---|---|---|
