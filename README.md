@@ -257,35 +257,47 @@ flowchart TB
 
     ALB -->|"POST /v1/coupons/*/issues<br/>리스너 규칙 priority 15"| TGC["coupon 대상 그룹"]
     ALB -->|"그 밖의 모든 경로"| TGA["app 대상 그룹"]
-
-    TGA --> ASGA["평상시 ASG<br/>t3.small  min 1 / max 3<br/>prod 프로필"]
+    TGA --> ASGA["평상시 ASG<br/>t3.small  min 1 / max 3"]
 
     subgraph COUPON["선착순 전용 ASG (t3.small, min 0 / max 3, prod+coupon 프로필)"]
-        direction TB
-        TGC --> APP1["앱 인스턴스"]
-        APP1 --- DESC["요청 스레드는 가상<br/>플러시 스레드는 플랫폼 1<br/>HikariCP 풀 2"]
-    end
-
-    subgraph AZ["2 AZ (ap-northeast-2a, 2c)"]
         direction LR
-        CACHE[("ElastiCache Valkey 9.0<br/>primary + replica<br/>자동 페일오버")]
-        RDS[("RDS MySQL 8.4 Multi-AZ<br/>primary + standby<br/>동기 복제")]
+        subgraph I1["인스턴스 1"]
+            direction TB
+            V1["요청 스레드 (가상)"] --> Q1[["인스턴스 큐<br/>capacity 20,000"]]
+            Q1 --> F1["플러시 스레드 1 (플랫폼)"]
+        end
+        subgraph I2["인스턴스 2"]
+            direction TB
+            V2["요청 스레드 (가상)"] --> Q2[["인스턴스 큐"]]
+            Q2 --> F2["플러시 스레드 1"]
+        end
+        subgraph I3["인스턴스 3"]
+            direction TB
+            V3["요청 스레드 (가상)"] --> Q3[["인스턴스 큐"]]
+            Q3 --> F3["플러시 스레드 1"]
+        end
     end
+    TGC --> I1 & I2 & I3
 
-    BATCH["배치 EC2 (단독)<br/>만료 / 이벤트 종료 / 정합성 검증"]
-    MON["모니터링 EC2 (단독)<br/>Prometheus, Grafana, Loki"]
-    LT["부하 시험 EC2<br/>m7i.xlarge, 시험 때만"]
-    CW["CloudWatch -> SNS"]
+    CACHE[("ElastiCache Valkey 9.0<br/>primary + replica, 자동 페일오버<br/>counter / seq / pending / free")]
+    RDS[("RDS MySQL 8.4 Multi-AZ<br/>primary + standby, 동기 복제<br/>member_coupon")]
 
-    APP1 -->|"순번 확보<br/>Lua 한 번, 100ms"| CACHE
-    APP1 -->|"배치 INSERT<br/>플러시 스레드 1"| RDS
+    V1 & V2 & V3 -->|"순번 확보<br/>Lua 한 번, 100ms"| CACHE
+    F1 & F2 & F3 -->|"Bulk INSERT<br/>20ms 마다 또는 500건마다<br/>HikariCP 풀 2"| RDS
     ASGA --> RDS
     ASGA --> CACHE
-    BATCH --> RDS
-    LT -.->|"k6"| ALB
-    APP1 -.-> MON
+
+    BATCH["배치 EC2 (단독)<br/>만료 / 이벤트 종료 / 정합성 검증"] --> RDS
+    MON["모니터링 EC2 (단독)<br/>Prometheus, Grafana, Loki"]
+    LT["부하 시험 EC2<br/>m7i.xlarge, 시험 때만"] -.->|"k6"| ALB
+
+    I1 & I2 & I3 -.->|"지표, 로그"| MON
     BATCH -.-> MON
-    MON -.-> CW
+    MON -->|"Alertmanager<br/>Webhook"| SLACK["Slack<br/>#alerts-critical, #alerts-warning"]
+    CW["CloudWatch 알람<br/>RDS 이벤트 구독"] --> SNS["SNS 주제 (critical)"]
+    SNS --> MAIL["이메일"]
+    RDS -.-> CW
+    CACHE -.-> CW
 
     style COUPON fill:#fff8e1,stroke:#d39e00
     style CACHE fill:#f3e5f5,stroke:#7b1fa2
@@ -297,6 +309,12 @@ flowchart TB
 **이벤트 구간에는 캐시 등급이 올라간다.** 평상시 Valkey 는 조회 캐시라 죽으면 원본 조회로 강등하지만, 이벤트 중에는 **순번의 판정 주체**라 2노드에 자동 페일오버를 둔다.
 
 **전용 인스턴스는 설정이 정반대다.** 풀을 2로 조이고 헬스체크를 느슨하게 한다. 한 그룹에 두면 어느 한쪽 기준으로 맞출 수밖에 없다.
+
+**큐는 인스턴스마다 하나씩이고 공유하지 않는다.** 요청 스레드가 티켓을 자기 인스턴스의 큐에 넣고 자면, 그 인스턴스의 플러시 스레드 하나가 **20ms 마다 또는 500건이 차면** 끊어서 한 번에 `INSERT` 한다. 인스턴스가 셋이면 DB 가 받는 것은 **초당 커넥션 2개짜리 묶음 쓰기 셋**이다.
+
+**이래서 요청이 2만이어도 커넥션 수요가 안 는다.** 커넥션을 쓰는 것은 플러시 스레드뿐이고 그 수가 인스턴스 수에 묶여 있다.
+
+**알림은 두 갈래다.** 모니터링 인스턴스의 Alertmanager 가 Slack 으로 보내고, CloudWatch 알람과 RDS 이벤트 구독은 SNS 를 거쳐 이메일로 간다.
 
 ### 5.1 버전이 바뀌어도 변하지 않는 다섯
 
