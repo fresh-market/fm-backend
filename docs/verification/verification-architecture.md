@@ -105,8 +105,56 @@ docs/verification/                 v-commit.md    Claude 편의 진입점
   세 저장소 공용
 ```
 
-**판정 기준은 셋에서 오지만 판정 대상은 backend 코드 하나다.**
-`anchors.yml`이 backend 에만 있기 때문이다. Terraform 이 생기면 infra 에도 만든다.
+```mermaid
+flowchart TB
+    subgraph COMMON["fresh-market/.github  (common)"]
+        direction TB
+        CD["docs/software-quality/<br/>qa-*.md  217건<br/>얼마나 잘 하는가"]
+        CI["llm-verify/items.yml  217"]
+        CG["llm-verify/gen_items.py  생성기"]
+        CR["llm-verify/run.py  실행기"]
+        CK["known-conflicts.yml"]
+        CW["workflows/llm-verify.yml  본체"]
+        CS["llm-verify/verify.sh  G-LOCAL 본체"]
+    end
+
+    subgraph BE["fresh-market/fm-backend"]
+        direction TB
+        BD["docs/code-architecture/<br/>*-guideline.md  250건<br/>어떻게 쓰는가"]
+        BI["llm-verify/items.yml  250"]
+        BA["llm-verify/anchors.yml  규칙 11"]
+        BW["workflows/pr-gate.yml  호출자"]
+        BV["verify.sh  진입점"]
+        BC[".claude/commands/v-commit.md"]
+    end
+
+    subgraph INFRA["fresh-market/fm-infra"]
+        direction TB
+        ID["docs/system-design/  확정값의 근거<br/>docs/infra-review/*-guideline.md  100건"]
+        II["llm-verify/items.yml  100"]
+    end
+
+    CD -->|"gen_items.py"| CI
+    BD -->|"gen_items.py"| BI
+    ID -->|"gen_items.py"| II
+    CI --> BA
+    BI --> BA
+    II --> BA
+    BA --> CR
+    CW --> CR
+    BW -->|"호출"| CW
+    BV --> CS
+    BC -.-> BV
+    CS --> CR
+
+    style BA fill:#fff3cd,stroke:#d39e00
+    style CR fill:#d1ecf1,stroke:#0c5460
+```
+
+**생성기와 실행기는 common 에 하나만 둔다.** 셋으로 복제하면 갈라진다.
+
+**판정 기준은 셋에서 오지만 판정 대상은 backend 코드 하나다.** `anchors.yml` 이 backend 에만
+있기 때문이다. Terraform 이 생기면 infra 에도 만든다.
 
 각자 자기 문서에서 자기 `items.yml`을 만들고, 자기 `registry-check.yml`이 둘의 일치를 지킨다.
 **생성기와 실행기는 common 에 하나만 둔다.** 셋으로 복제하면 갈라진다.

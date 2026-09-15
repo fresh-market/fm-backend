@@ -248,6 +248,81 @@ ALB 리스너 규칙 (priority 15)
 
 **이 장은 무엇을 왜 그렇게 정했는지만 적는다.** 키 구조와 스크립트와 설정값은 [`docs/coupon/`](./docs/coupon/) 이 갖는다. **값이 바뀔 때 고칠 자리를 하나로 두려는 것이다.**
 
+### 5.0 구성
+
+```mermaid
+flowchart LR
+    subgraph APP["앱 인스턴스 (선착순 전용 ASG)"]
+        direction TB
+        subgraph REQP["요청 경로 (가상 스레드)"]
+            CTL["CouponIssueController"]
+            SVC["CouponIssueService"]
+            CACHE["CouponCache<br/>쿠폰 스냅샷"]
+            ALLOC["CouponSeqAllocator<br/>순번 확보"]
+        end
+        subgraph WRITEP["쓰기 경로 (플랫폼 스레드 1)"]
+            QUEUE["CouponIssueQueue<br/>queue-capacity 20000"]
+            FLUSH["CouponIssueFlusher<br/>batch-window 20ms / size 500"]
+            COMMIT["CouponSeqCommitter<br/>확정 표시와 반납"]
+        end
+        subgraph CIRC["회로"]
+            C1["couponSeq<br/>지표 전용"]
+            C2["couponWrite"]
+        end
+        subgraph BATCH["배치 (단독 인스턴스)"]
+            B1["만료"]
+            B2["이벤트 종료"]
+            B3["정합성 검증"]
+        end
+        REBUILD["CouponSeqRebuilder<br/>+ Trigger, Contributor"]
+        WARM["CouponWarmupRunner<br/>+ CouponWriteWarmup"]
+    end
+
+    subgraph REDIS["Valkey (이벤트 중 Critical)"]
+        direction TB
+        K1["counter  마지막 발행 번호"]
+        K2["seq  회원 -> 순번, 확정 표시"]
+        K3["pending  미확정 순번 -> 준 시각"]
+        K4["free  안 쓰인 것이 확인된 번호"]
+        K5["rebuild, rebuild:queued"]
+        LUA["Lua 스크립트 넷"]
+    end
+
+    subgraph DB["RDS MySQL (Multi-AZ)"]
+        direction TB
+        T1["coupon  정책과 수량"]
+        T2["member_coupon  발급 한 건<br/>uk_mc_coupon_member, uk_mc_coupon_seq, chk_mc_issue_seq"]
+        T3["member_coupon_status_history"]
+    end
+
+    CTL --> SVC
+    SVC --> CACHE
+    SVC --> ALLOC
+    SVC --> QUEUE
+    QUEUE --> FLUSH
+    FLUSH --> COMMIT
+    ALLOC -.->|"EVALSHA"| LUA
+    COMMIT -.-> LUA
+    REBUILD -.-> LUA
+    LUA --- K1 & K2 & K3 & K4
+    REBUILD -.-> K5
+    FLUSH -->|"배치 INSERT"| T2
+    CACHE -.->|"이벤트 열 때 한 번"| T1
+    B3 --> T2 & T3
+    C1 -.->|"감싼다"| ALLOC
+    C2 -.->|"감싼다"| FLUSH
+
+    style ALLOC fill:#fff3cd,stroke:#d39e00
+    style LUA fill:#fff3cd,stroke:#d39e00
+    style T2 fill:#d1ecf1,stroke:#0c5460
+```
+
+**요청 경로와 쓰기 경로가 큐로만 이어진다.** 요청 스레드는 트랜잭션을 안 열고, DB 를 쓰는 것은 플러시 스레드 하나다.
+
+**Lua 스크립트가 Redis 키 넷의 유일한 입구다.** 앱이 키를 직접 안 만진다.
+
+**정확성은 `member_coupon` 의 제약 셋이 쥔다.** 위쪽 구현이 무엇이든 그 아래로는 못 내려간다.
+
 ### 5.1 버전이 바뀌어도 변하지 않는 다섯
 
 | | 지켜야 할 것 | 어긋나면 |
