@@ -665,7 +665,7 @@ coupon.warmup:
 
 | | 맡은 영역 |
 |---|---|
-| devjohnpark | 선착순 쿠폰 / 인프라 / 공통 모듈 / 검증 시스템 |
+| devjohnpark | 선착순 쿠폰 / 인프라 / 공통 모듈 / 코드 검증 시스템 |
 | muzimzz | 회원 / 인증 / 주문 / 결제 / 장바구니 |
 | jaeungchoi | 상품 / 옵션 / 상품 이미지 / 재고 |
 | gyudongjeong | 관리자 계정 / 인증 / 감사 로그 |
