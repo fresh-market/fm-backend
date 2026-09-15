@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * 셋 다 바꿀 수 있는 시점이 제한된다. 약속한 이벤트를 관리자가 도중에 흔들지 못하게 하려는
  * 것이고, 그 규칙이 서 있어야 앱이 자격 확인을 캐시할 수 있다
- * (docs/coupon/coupon.md 3장 "이벤트가 시작되면 조건이 고정된다").
+ * (docs/coupon/coupon.md 3장 "이벤트가 시작되면 고정되는 조건").
  */
 @RestController
 class AdminCouponEventController {
