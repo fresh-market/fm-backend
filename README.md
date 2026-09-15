@@ -386,11 +386,7 @@ flowchart TB
 
 ### 5.6 장애를 대비한 설계
 
-**대체 경로를 새로 만들지 않는다.** 그 코드는 평상시에 안 돌아 **정작 필요한 날 처음 실행된다.** 대신 팀은 이미 도는 경로가 장애도 받게 만들었다. 재시도와 조건부 UPDATE 와 유니크 제약처럼 늘 실행되는 것들이다.
-
-**그래서 넷을 나눠 볼 수 있다.**
-
-| | 진행 중이던 발급 | 앱이 하는 일 | 순번 처리 |
+| 죽은 것 | 진행 중이던 발급 | 앱이 하는 일 | 순번 처리 |
 |---|---|---|---|
 | **앱 인스턴스 급사** | **응답도 못 간 채 큐째로 사라진다** | 상태를 안 들고 있어 ASG 교체가 곧 복구다 | 재시도시 같은 번호로 발급 / 60초 뒤 회수 |
 | **Redis 사망**<br/>primary + replica | **전부 완료된다** | 대체 발급기 없이 새 요청만 혼잡(503)으로 끊는다 | 복구 뒤 재건이 `free` 를 채운다 |
@@ -411,7 +407,7 @@ flowchart TB
 
 **4. 앱과 Redis 가 함께 죽어도 새 장치가 필요 없다.** 앱 사망은 회수가 소진 시점에 풀고 Redis 사망은 재건이 채우는데, **훅이 각각 따로 있어 서로를 안 기다린다.** 실제로 그 조합을 주입해 쟀고 재고를 다 내보냈다(6.5).
 
-> 구성 요소별 상세는 [coupon.md 8장](./docs/coupon/coupon.md), 재건 절차는 [redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md), 회로를 어디에 거는지는 [coupon-failure.md](./docs/coupon/coupon-failure.md) 에 있다.
+> 대체 경로를 새로 만들지 않는다는 원칙은 [failure-response.md](./docs/incident/failure-response.md), 구성 요소별 상세는 [coupon.md 8장](./docs/coupon/coupon.md), 재건 절차는 [redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md), 회로를 어디에 거는지는 [coupon-failure.md](./docs/coupon/coupon-failure.md) 에 있다.
 
 ### 5.7 SLO 에서 역산한 타임아웃 계층
 
