@@ -259,7 +259,7 @@ flowchart TB
         VT["요청 스레드 (VT)"] --> Q1[["인스턴스 큐<br/>capacity 20,000"]]
         Q1 --> F1["플러시 스레드 1 (플랫폼)<br/>발급 중 커넥션 1개"]
     end
-    ALB -->|"POST /v1/coupons/*/issues<br/>리스너 규칙 priority 15"| VT
+    ALB -->|"POST /v1/coupons/*/issues"| VT
 
     CACHE[("Valkey 9.0<br/>primary + replica<br/>counter / seq / pending / free")]
     RDS[("MySQL 8.4 Multi-AZ<br/>primary + standby<br/>member_coupon")]
