@@ -109,5 +109,5 @@ chore/    빌드, 설정, 의존성
 
 ## 참고 자료
 
-* 검증 도구 사용법: [verification/verification-guide.md](./verification/verification-guide.md)
-* 코드 리뷰 점검 항목: [code-architecture/CODEREVIEW.md](./code-architecture/CODEREVIEW.md)
+* 검증 도구 사용법: [verification/verification-guide.md](../verification/verification-guide.md)
+* 코드 리뷰 점검 항목: [code-architecture/CODEREVIEW.md](../code-architecture/CODEREVIEW.md)

@@ -26,7 +26,7 @@ import org.springframework.test.context.TestPropertySource;
  * 이 시간이 곧 장애 시간이다. 카운터가 서기 전까지 모든 요청이 혼잡으로 끊기므로, 재건이 오래
  * 걸리면 Redis 가 돌아온 뒤에도 그만큼 발급이 멈춰 있다.
  *
- * 기여 대기는 0 에 가깝게 둔다. 그 값은 남을 기다리는 고정 시간이라 이 시험이 정할 것이 아니고,
+ * 큐 수집 대기는 0 에 가깝게 둔다. 그 값은 남을 기다리는 고정 시간이라 이 시험이 정할 것이 아니고,
  * 여기서 재려는 것은 읽고 계산하고 쓰는 데 걸리는 시간이다. 운영 값 3초는 여기에 그대로 더해진다.
  */
 @SpringBootTest
@@ -80,7 +80,7 @@ class CouponSeqRebuildLatencyIntegrationTest extends IntegrationTestSupport {
         assertThat(redisTemplate.opsForHash().size(seq())).isEqualTo(발급행 + 큐에_떠_있는_수);
 
         String report = """
-                재건 지연 (기여 대기 제외)
+                재건 지연 (큐 수집 대기 제외)
 
                 발급행       %,d
                 큐에 떠 있음  %,d
