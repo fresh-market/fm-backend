@@ -251,37 +251,30 @@ ALB 리스너 규칙 (priority 15)
 
 ```mermaid
 flowchart TB
-    U["사용자 20,000"] --> R53["Route53"]
-    R53 --> ALB["Application Load Balancer<br/>2 AZ"]
+    U["사용자 20,000"] --> R53["Route53"] --> ALB["ALB<br/>2 AZ"]
+    ALB -->|"그 밖의 모든 경로"| ASGA["평상시 ASG<br/>t3.small 1~3대"]
 
-    ALB -->|"POST /v1/coupons/*/issues<br/>리스너 규칙 priority 15"| TGC["coupon 대상 그룹"]
-    ALB -->|"그 밖의 모든 경로"| TGA["app 대상 그룹"]
-    TGA --> ASGA["평상시 ASG<br/>t3.small  min 1 / max 3"]
-
-    subgraph COUPON["선착순 전용 ASG 의 앱 인스턴스 (t3.small, min 0 / max 3, 대수만큼 같은 구조)"]
+    subgraph COUPON["선착순 전용 ASG (t3.small 0~3대, 1대만 그린다)"]
         direction TB
         VT["요청 스레드 (VT)"] --> Q1[["인스턴스 큐<br/>capacity 20,000"]]
-        Q1 --> F1["플러시 스레드 1 (플랫폼)<br/>발급 중에 쓰는 커넥션 1개"]
+        Q1 --> F1["플러시 스레드 1 (플랫폼)<br/>발급 중 커넥션 1개"]
     end
-    TGC --> VT
+    ALB -->|"POST /v1/coupons/*/issues<br/>리스너 규칙 priority 15"| VT
 
-    CACHE[("ElastiCache Valkey 9.0<br/>primary + replica, 자동 페일오버<br/>counter / seq / pending / free")]
-    RDS[("RDS MySQL 8.4 Multi-AZ<br/>primary + standby, 동기 복제<br/>member_coupon")]
+    CACHE[("Valkey 9.0<br/>primary + replica<br/>counter / seq / pending / free")]
+    RDS[("MySQL 8.4 Multi-AZ<br/>primary + standby<br/>member_coupon")]
 
     VT -->|"순번 확보<br/>Lua 한 번, 100ms"| CACHE
-    F1 -->|"Bulk INSERT<br/>20ms 마다 또는 500건마다"| RDS
-    ASGA --> RDS
-    ASGA --> CACHE
+    F1 -->|"Bulk INSERT<br/>20ms 또는 500건"| RDS
+    ASGA --> RDS & CACHE
 
-    BATCH["배치 EC2 (단독)<br/>만료 / 이벤트 종료 / 정합성 검증"] --> RDS
-    MON["모니터링 EC2 (단독)<br/>Prometheus, Grafana, Loki"]
-    LT["부하 시험 EC2<br/>m7i.xlarge, 시험 때만"] -.->|"k6"| ALB
+    BATCH["배치 EC2<br/>만료 / 종료 / 검증"] --> RDS
+    MON["모니터링 EC2<br/>Prometheus, Grafana, Loki"]
+    LT["부하 시험 EC2<br/>m7i.xlarge"] -.->|"k6"| ALB
 
-    COUPON -.->|"지표, 로그"| MON
-    BATCH -.-> MON
+    COUPON & BATCH -.->|"지표, 로그"| MON
     MON --> AM["Alertmanager"] --> SLACK["Slack"]
-    ALB & RDS & MON -.-> CW["CloudWatch"]
-    CW --> SNS["SNS"]
+    ALB & RDS & MON -.-> CW["CloudWatch"] --> SNS["SNS"]
 
     style COUPON fill:#fff8e1,stroke:#d39e00
     style CACHE fill:#f3e5f5,stroke:#7b1fa2
@@ -452,7 +445,7 @@ flowchart TB
     CTL --> SVC["CouponConsistencyService"]
     SVC --> REPO["CouponConsistencyRepository<br/>집계 전용, JPA 안 쓴다"]
 
-    REPO --> T1[("member_coupon  발급 한 건")]
+    REPO --> T1[("member_coupon  발급 이력 300만 건")]
     REPO --> T2[("member_coupon_status_history  상태 전이")]
     REPO --> T3[("coupon  issued_quantity, total_quantity")]
 
@@ -475,7 +468,7 @@ flowchart TB
 
 **배치 프로필만 `socketTimeout` 이 300초다.** 두 표를 통째로 훑는 한 문장이 전역값 10초를 넘기기 때문이다.
 
-**검증이 상태를 들고 있으면 안 된다.** 앱은 매번 처음부터 전부 훑고 중간 결과를 저장하지 않는다. 그래야 같은 데이터로 재실행했을 때 같은 결과가 나온다.
+**검증이 상태를 들고 있으면 안 된다.** 앱은 매번 300만 건을 처음부터 전부 훑고 중간 결과를 저장하지 않는다. 그래야 같은 데이터로 재실행했을 때 같은 결과가 나온다.
 
 > 검증 항목과 어긋남의 모양은 [coupon.md 10장](./docs/coupon/coupon.md) 에 있다.
 
