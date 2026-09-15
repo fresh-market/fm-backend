@@ -75,7 +75,7 @@ public class PendingOrderExpirationService {
         try {
             orderExpirationTransactionService.expireIfStillPending(orderId);
         } catch (RuntimeException e) {
-            log.error("event=ORDER_EXPIRATION_FAILED orderId={}", orderId, e);
+            log.warn("event=ORDER_EXPIRATION_FAILED_RETRY_SCHEDULED orderId={}", orderId, e);
         }
     }
 }

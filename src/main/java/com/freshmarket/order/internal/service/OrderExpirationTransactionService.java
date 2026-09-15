@@ -34,7 +34,7 @@ public class OrderExpirationTransactionService {
     private final OrderItemRepository orderItemRepository;
     private final StockApi stockApi;
 
-    @Transactional
+    @Transactional(timeout = 5)
     public void expireIfStillPending(Long orderId) {
         Order order = orderRepository.findByIdForUpdate(orderId)
                 .orElseThrow(() -> {
