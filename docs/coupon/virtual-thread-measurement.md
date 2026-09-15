@@ -8,7 +8,7 @@
 ## 잰 조건
 
 ```
-기계      노트북 한 대.  k6 와 JVM 과 MySQL 과 Valkey 가 같은 CPU 를 다툰다
+기계      노트북 한 대.  k6 와 JVM 과 MySQL 과 Valkey(Redis) 가 같은 CPU 를 다툰다
 부하      VU 20,000 / 재고 10,000.  요구 조건 그대로다
 설정      회차 9 의 로컬 진단값.  Redis timeout 500ms, 요청 예산 30초, 순번 회로 METRICS_ONLY
 변수      spring.threads.virtual.enabled 하나
@@ -72,7 +72,7 @@ DB    발급행 8,446 / 최대순번 10,000 / 결번 1,554
 **앱 관점에서는 실패가 없었다.** 앱이 발급으로 센 8,446 건은 전부 행이 됐고, 순번을 못 받은
 2,448 건은 애초에 번호를 안 태웠으니 결번이 아니다. 그런데 결번은 1,554 개다.
 
-결번을 낼 수 있는 갈래 셋(`congested-db-failed`, `congested-aborted`, `congested-write-circuit`)이
+결번을 낼 수 있는 경우 셋(`congested-db-failed`, `congested-aborted`, `congested-write-circuit`)이
 그 회차에 모두 0 이었다. **1,554 개는 응답이 아예 나가지 못한 요청들이고, 앱은 그 요청을 실패로
 세지 않았거나 아예 모른다.** 순번을 받은 뒤 클라이언트 연결이 끊긴 자리다.
 

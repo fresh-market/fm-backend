@@ -68,18 +68,18 @@ LLM 판정(G-PR)은 지적만 하고 막지 않는다. 읽고 판단은 한다.
 
 | 무엇을 만들 때 | 볼 문서 |
 |---|---|
-| 어느 도메인에 넣을지 | [`domain-map.md`](./code-architecture/domain-map.md) |
-| 엔티티 | [`entity-creation-guideline.md`](./code-architecture/entity-creation-guideline.md), [`base-entity-guideline.md`](./code-architecture/base-entity-guideline.md) |
-| 레포지토리, 쿼리 | [`jpa-rdb-guideline.md`](./code-architecture/jpa-rdb-guideline.md) |
-| 컨트롤러, DTO | [`api-design-guideline.md`](./code-architecture/api-design-guideline.md) |
-| 패키지 배치 | [`domain-package-boundary-guideline.md`](./code-architecture/domain-package-boundary-guideline.md) |
-| 테스트 | [`unit-testing-guideline.md`](./code-architecture/unit-testing-guideline.md) |
+| 어느 도메인에 넣을지 | [`domain-map.md`](../code-architecture/domain-map.md) |
+| 엔티티 | [`entity-creation-guideline.md`](../code-architecture/entity-creation-guideline.md), [`base-entity-guideline.md`](../code-architecture/base-entity-guideline.md) |
+| 레포지토리, 쿼리 | [`jpa-rdb-guideline.md`](../code-architecture/jpa-rdb-guideline.md) |
+| 컨트롤러, DTO | [`api-design-guideline.md`](../code-architecture/api-design-guideline.md) |
+| 패키지 배치 | [`domain-package-boundary-guideline.md`](../code-architecture/domain-package-boundary-guideline.md) |
+| 테스트 | [`unit-testing-guideline.md`](../code-architecture/unit-testing-guideline.md) |
 | 테스트를 어디에 둘지 | 단위 `src/test/java`, 통합 `src/integrationTest/java` |
-| 식별자 | [`identifier-strategy-guideline.md`](./code-architecture/identifier-strategy-guideline.md) |
+| 식별자 | [`identifier-strategy-guideline.md`](../code-architecture/identifier-strategy-guideline.md) |
 
 **각 문서에는 짝이 되는 `-rationale.md` 가 있다.** 규칙은 guideline, 왜 그런지는 rationale 이다.
 
-[`domain-map.md`](./code-architecture/domain-map.md) 는 13개 도메인과 층을 정해 둔 것이다. **호출은 아래로만 하고 같은 층끼리는 부르지 않는다.**
+[`domain-map.md`](../code-architecture/domain-map.md) 는 13개 도메인과 층을 정해 둔 것이다. **호출은 아래로만 하고 같은 층끼리는 부르지 않는다.**
 `ArchitectureTest` 가 빌드에서 강제하므로 어기면 `./gradlew check` 가 실패한다.
 
 ## 문서 작성
@@ -92,8 +92,8 @@ LLM 판정(G-PR)은 지적만 하고 막지 않는다. 읽고 판단은 한다.
 
 ## 참고 자료
 
-* API 명세: [api/README.md](./api/README.md)
+* API 명세: [api/README.md](../api/README.md)
 * 설정 파일과 로컬 DB: [configuration.md](./configuration.md)
-* 검증 도구 사용법: [verification/verification-guide.md](./verification/verification-guide.md)
-* 코드 리뷰 점검 항목: [code-architecture/CODEREVIEW.md](./code-architecture/CODEREVIEW.md)
-* 빌드 게이트 기준: [code-architecture/build-gate-guideline.md](./code-architecture/build-gate-guideline.md)
+* 검증 도구 사용법: [verification/verification-guide.md](../verification/verification-guide.md)
+* 코드 리뷰 점검 항목: [code-architecture/CODEREVIEW.md](../code-architecture/CODEREVIEW.md)
+* 빌드 게이트 기준: [code-architecture/build-gate-guideline.md](../code-architecture/build-gate-guideline.md)

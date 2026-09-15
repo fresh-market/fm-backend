@@ -207,7 +207,7 @@ dependencies {
 
     /*
      * 통합 테스트는 인메모리 DB 를 쓰지 않는다.
-     * 운영과 같은 mysql:8.4 를 Testcontainers 로 띄운다 (tech-stack.md 2장).
+     * 운영과 같은 mysql:8.4 를 Testcontainers 로 띄운다 (docs/project/tech-stack.md 2장).
      */
     /*
      * Boot 4 는 @DataJpaTest 와 @AutoConfigureTestDatabase 를 각각
@@ -305,7 +305,7 @@ tasks.register('integrationTest', Test) {
 
 jacoco {
     /*
-     * tech-stack.md 는 0.8.16 이라 적었으나 그 버전은 배포된 적이 없다.
+     * docs/project/tech-stack.md 는 0.8.16 이라 적었으나 그 버전은 배포된 적이 없다.
      * 최신이 0.8.15 다.
      */
     toolVersion = '0.8.15'
