@@ -165,7 +165,6 @@ com.freshmarket
 ├── product/                    65 파일. 도메인 하나가 어떻게 생겼나
 │   ├── ProductApi.java             공개 계약. 다른 도메인은 이것만 본다
 │   ├── ProductOptionInfo.java      계약이 주고받는 값. 엔티티는 안 나간다
-│   ├── OptionAvailabilityChangedEvent.java
 │   └── internal/
 │       ├── controller/             상품, 카테고리, 관리자 상품/카테고리/이미지
 │       ├── service/                ProductService, CategoryService, ProductOptionAvailabilityService ...
