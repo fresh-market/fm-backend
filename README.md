@@ -399,10 +399,6 @@ flowchart TB
 
 성능 측정과 별개로, 요구사항이 **스스로 검증할 수단**을 요구한다.
 
-```
-POST /v1/admin/coupons/{couponId}:verifyConsistency
-```
-
 ```mermaid
 flowchart TB
     ADMIN["관리자"] -->|"POST /v1/admin/coupons/{couponId}:verifyConsistency"| CTL["AdminCouponConsistencyController"]
@@ -410,8 +406,8 @@ flowchart TB
     CTL --> SVC["CouponConsistencyService"]
     SVC --> REPO["CouponConsistencyRepository<br/>집계 전용, JPA 안 쓴다"]
 
-    REPO --> T1[("member_coupon  300만 행")]
-    REPO --> T2[("member_coupon_status_history  420만 행")]
+    REPO --> T1[("member_coupon  발급 한 건")]
+    REPO --> T2[("member_coupon_status_history  상태 전이")]
     REPO --> T3[("coupon  issued_quantity, total_quantity")]
 
     SVC --> CHK{"다섯을 본다"}
@@ -433,7 +429,7 @@ flowchart TB
 
 **배치 프로필만 `socketTimeout` 이 300초다.** 두 표를 통째로 훑는 한 문장이 전역값 10초를 넘기기 때문이다.
 
-**검증이 상태를 들고 있으면 안 된다.** 앱은 매번 300만 건을 처음부터 훑고 중간 결과를 저장하지 않는다. 그래야 같은 데이터로 재실행했을 때 같은 결과가 나온다.
+**검증이 상태를 들고 있으면 안 된다.** 앱은 매번 처음부터 전부 훑고 중간 결과를 저장하지 않는다. 그래야 같은 데이터로 재실행했을 때 같은 결과가 나온다.
 
 > 검증 항목과 어긋남의 모양은 [coupon.md 10장](./docs/coupon/coupon.md) 에 있다.
 
