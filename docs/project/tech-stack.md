@@ -10,7 +10,7 @@
 `fresh-market/fm-infra` 의 [기술 스택 확정 문서](https://github.com/fresh-market/fm-infra/blob/main/docs/system-design/%EB%B0%B1%EC%97%94%EB%93%9C%EA%B3%B5%ED%86%B5_%EA%B8%B0%EC%88%A0%EC%8A%A4%ED%83%9D_%ED%99%95%EC%A0%95%EB%AC%B8%EC%84%9C.md) 2.3절이 갖는다.
 
 빌드 게이트(커버리지, 정적 분석)는 점검 항목과 근거를 따로 두었다.
-[build-gate-guideline.md](./code-architecture/build-gate-guideline.md), [build-gate-rationale.md](./code-architecture/build-gate-rationale.md)
+[build-gate-guideline.md](../code-architecture/build-gate-guideline.md), [build-gate-rationale.md](../code-architecture/build-gate-rationale.md)
 
 ---
 
@@ -177,7 +177,7 @@ Q클래스 생성은 빌드 도구와 Gradle 구성에 걸리는 문제라 BOM �
 * **API 명세가 테스트를 거치지 않는다.** 테스트가 하나도 없어도 Swagger 는 완성된다
 
 마지막 항목 때문에 **커버리지 게이트는 API 명세와 무관한 별개 규율이다.**
-"통합 테스트가 없으면 명세가 비어서 병합이 막힌다" 는 구조는 성립하지 않는다. 병합을 막는 것은 [build-gate-guideline.md](./code-architecture/build-gate-guideline.md) 의 service 패키지 커버리지다.
+"통합 테스트가 없으면 명세가 비어서 병합이 막힌다" 는 구조는 성립하지 않는다. 병합을 막는 것은 [build-gate-guideline.md](../code-architecture/build-gate-guideline.md) 의 service 패키지 커버리지다.
 
 #### BOM 밖이라 버전을 직접 고정한다
 

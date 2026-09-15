@@ -16,7 +16,7 @@ cd backend
 ./gradlew bootRun      # compose.yaml 의 MySQL 과 Valkey 를 자동으로 띄운다
 ```
 
-**처음 작업한다면 [docs/project-guideline.md](./docs/project-guideline.md) 부터 본다.** 작업 흐름과 병합을 막는 조건이 거기에 있다.
+**처음 작업한다면 [docs/project/project-guideline.md](./docs/project/project-guideline.md) 부터 본다.** 작업 흐름과 병합을 막는 조건이 거기에 있다.
 
 | | |
 |---|---|
@@ -744,10 +744,10 @@ api-contract migration  app-config test         archunit        build
 
 | | |
 |---|---|
-| [project-guideline.md](./docs/project-guideline.md) | 작업 흐름, 병합을 막는 조건 |
-| [git-convention.md](./docs/git-convention.md) | 브랜치와 커밋 규칙 |
-| [tech-stack.md](./docs/tech-stack.md) | 라이브러리와 선정 근거 |
-| [configuration.md](./docs/configuration.md) | 설정 파일과 로컬 DB |
+| [project-guideline.md](./docs/project/project-guideline.md) | 작업 흐름, 병합을 막는 조건 |
+| [git-convention.md](./docs/project/git-convention.md) | 브랜치와 커밋 규칙 |
+| [tech-stack.md](./docs/project/tech-stack.md) | 라이브러리와 선정 근거 |
+| [configuration.md](./docs/project/configuration.md) | 설정 파일과 로컬 DB |
 | [resource-budget.md](./docs/resource-budget.md) | 인스턴스별 커넥션과 스레드 예산 |
 | [api/README.md](./docs/api/README.md) | API 명세 (72개 기능) |
 | [code-architecture/domain-map.md](./docs/code-architecture/domain-map.md) | 13개 도메인과 층 |

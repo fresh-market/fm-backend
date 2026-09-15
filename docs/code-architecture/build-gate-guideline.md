@@ -112,5 +112,5 @@ push 전에 `./gradlew check`로 확인한다. CI에서 처음 알면 이미 PR�
 ## 3. 관련 문서
 
 * 설계 근거: [build-gate-rationale.md](./build-gate-rationale.md)
-* 기술 스택: [tech-stack.md](../tech-stack.md)
+* 기술 스택: [tech-stack.md](../project/tech-stack.md)
 * 인프라 제약: `fresh-market/fm-infra` 의 `docs/infra-review/code-guideline.md`
