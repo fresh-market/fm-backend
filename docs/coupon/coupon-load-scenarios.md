@@ -87,7 +87,7 @@ tune.sh reset
 |---|---|
 | 이유 | **워밍업은 이미 켜져 있는데 아무도 그 값을 측정한 적이 없고**, 요청 3,000 과 쓰기 5,000행도 논증으로 잡은 시작값이라 끄고 재 봐야 그 값이 버는 몫이 나온다 |
 | 바꾸는 것 | `coupon.warmup.enabled` |
-| 보는 것 | p99, 발급 TPS, 혼잡, 첫 1분의 지연 곡선 |
+| 보는 것 | p99, 발급 TPS, 혼잡(503), 첫 1분의 지연 곡선 |
 | 회차 | W-off 2회, W-on 2회 |
 
 ```
@@ -276,10 +276,10 @@ p99            round 태그로 가른 query_range 의 최댓값
 `05 부하 시험` 대시보드에 **발급 처리율(TPS)** 패널을 넣었다.
 
 ```
-발급/초        rate(k6_coupon_issued_total[30s])
-도착/초        rate(k6_http_reqs_total[30s])
-소진 응답/초    rate(k6_coupon_sold_out_final_total[30s])
-혼잡 거절/초    rate(k6_coupon_congested_total[30s])
+발급/초            rate(k6_coupon_issued_total[30s])
+도착/초            rate(k6_http_reqs_total[30s])
+소진(410)/초       rate(k6_coupon_sold_out_final_total[30s])
+혼잡(503)/초       rate(k6_coupon_congested_total[30s])
 ```
 
 **도착과 발급이 붙어 있으면 흘리지 않고 받아 낸 것이고, 벌어지면 그만큼 거절하거나 밀린
