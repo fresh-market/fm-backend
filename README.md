@@ -293,11 +293,8 @@ flowchart TB
 
     I1 & I2 & I3 -.->|"지표, 로그"| MON
     BATCH -.-> MON
-    MON -->|"Alertmanager<br/>Webhook"| SLACK["Slack<br/>#alerts-critical, #alerts-warning"]
-    CW["CloudWatch 알람<br/>RDS 이벤트 구독"] --> SNS["SNS 주제 (critical)"]
-    SNS --> MAIL["이메일"]
-    RDS -.-> CW
-    CACHE -.-> CW
+    MON --> AM["Alertmanager"] --> SLACK["Slack"]
+    CW["CloudWatch"] --> SNS["SNS"]
 
     style COUPON fill:#fff8e1,stroke:#d39e00
     style CACHE fill:#f3e5f5,stroke:#7b1fa2
@@ -314,7 +311,7 @@ flowchart TB
 
 **이래서 요청이 2만이어도 커넥션 수요가 안 는다.** 커넥션을 쓰는 것은 플러시 스레드뿐이고 그 수가 인스턴스 수에 묶여 있다.
 
-**알림은 두 갈래다.** 모니터링 인스턴스의 Alertmanager 가 Slack 으로 보내고, CloudWatch 알람과 RDS 이벤트 구독은 SNS 를 거쳐 이메일로 간다.
+**알림은 두 갈래다.** 앱이 내는 지표는 Alertmanager 가 Slack 으로 보내고, **모니터링이 죽어도 알아야 하는 것**은 CloudWatch 가 SNS 로 보낸다. 가르는 기준이 그 한 줄이다.
 
 ### 5.1 버전이 바뀌어도 변하지 않는 다섯
 
