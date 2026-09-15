@@ -651,6 +651,95 @@ coupon.warmup:
 
 ---
 
+## 7. 코드 리뷰 검증 시스템
+
+**팀은 코드 리뷰를 사람의 기억에 맡기지 않는다.** 가이드 문서에 적어 둔 점검 항목을 기계가 읽는 목록으로 뽑고, 바뀐 파일에 걸리는 것만 골라 LLM 에게 판정시킨다.
+
+```mermaid
+flowchart TB
+    subgraph SRC["1층  가이드 문서 (사람이 쓴다. 판정 기준의 원본)"]
+        direction LR
+        DC["common<br/>qa-*.md  217건"]
+        DB["backend<br/>*-guideline.md  276건"]
+        DI["infra<br/>infra-review/*.md  120건"]
+    end
+
+    subgraph REG["2층  레지스트리 (기계가 읽는다. 문서의 파생물)"]
+        direction LR
+        IC["items.yml  217"]
+        IB["items.yml  276"]
+        II["items.yml  120"]
+    end
+
+    DC -->|"gen_items.py"| IC
+    DB -->|"gen_items.py"| IB
+    DI -->|"gen_items.py"| II
+    CHK["registry-check.yml<br/>문서와 레지스트리가 어긋나면 막는다"] -.-> REG
+
+    DIFF[/"바뀐 파일"/] --> ANC
+    REG --> ANC["3층  anchors.yml<br/>규칙 11개<br/>여기만 사람이 관리한다"]
+    ANC -->|"활성 항목"| RUN["4층  run.py<br/>범위 산출, 입력 수집<br/>LLM 을 갈아 끼워 부른다"]
+
+    BUILD["G-BUILD  Gradle, SonarQube<br/>결정론적이라 여기만 차단한다"] -->|"통과해야 LLM 이 돈다"| RUN
+
+    RUN --> S1["1단계  backend 276건<br/>항상 돈다"]
+    S1 -->|"응답이 온전할 때만"| S2["2단계  common + infra<br/>건너뛰면 UNJUDGED 로 남는다"]
+
+    S1 --> J{"항목별 판정"}
+    S2 --> J
+    J --> GL["G-LOCAL  개발자 로컬<br/>docs/llm-review/ 에 커밋되어 남는다"]
+    AG["갈아 끼우는 자리<br/>로컬은 --agent 로 CLI 를 준다 (codex exec, gemini -p, ...)<br/>CI 는 CODEX_AUTH_JSON, 없으면 OPENAI_API_KEY"] -.-> RUN
+    J --> GP["G-PR  CI 자동<br/>PR 코멘트. 안 남는다"]
+
+    style AG fill:#e7e9ee,stroke:#5d6675
+    style BUILD fill:#f8d7da,stroke:#842029
+    style ANC fill:#fff3cd,stroke:#d39e00
+    style J fill:#fff3cd,stroke:#d39e00
+    style GL fill:#d4edda,stroke:#155724
+    style GP fill:#d4edda,stroke:#155724
+```
+
+### 7.1 문서가 원본이고 레지스트리는 파생물
+
+| 저장소 | 판정 기준 | 항목 | 무엇을 다루나 |
+|---|---|---:|---|
+| common | `qa-*.md` | 217 | 품질 속성 |
+| backend | `*-guideline.md` | 276 | 코드 관용과 패턴 |
+| infra | `infra-review/*-guideline.md` | 120 | 인프라 제약 |
+
+**`gen_items.py` 가 문서에서 목록을 뽑는다.** 사람이 목록을 손으로 고치면 문서와 어긋나므로, `registry-check.yml` 이 둘의 일치를 CI 에서 지킨다. **판정 기준은 셋에서 오지만 판정 대상은 backend 코드 하나다.**
+
+### 7.2 바뀐 파일이 볼 항목을 정한다
+
+**전부를 매번 보면 LLM 이 한 번에 못 삼킨다.** 그래서 `anchors.yml` 이 바뀐 파일의 모양을 보고 켤 항목을 고른다.
+
+```
+controller   service    entity     repository   external-client
+api-contract migration  app-config test         archunit        build
+```
+
+**이 열한 개만 생성물이 아니다.** 어떤 파일이 어떤 항목을 켜는지는 사람이 정하는 판단이라 팀이 손으로 관리한다.
+
+### 7.3 게이트 셋 중 하나만 차단한다
+
+| 게이트 | 무엇이 도나 | 막나 | 결과가 어디 남나 |
+|---|---|---|---|
+| **G-BUILD** | Gradle, SonarQube | **막는다** | - |
+| G-PR | LLM 판정. develop 을 향한 PR 에서만 | 안 막는다 | PR 코멘트. 안 남는다 |
+| G-LOCAL | 위 전부 | 안 막는다 | `docs/llm-review/` 에 커밋되어 남는다 |
+
+**LLM 은 갈아 끼운다.** 로컬은 `./verify.sh --agent "codex exec"` 처럼 CLI 를 주고, CI 는 `CODEX_AUTH_JSON` 으로 돌다가 없으면 API 키로 떨어진다.
+
+**판정은 두 단계로 나눠 부른다.** 1단계가 backend 항목을 보고, 그 응답이 온전할 때만 2단계가 common 과 infra 를 본다. 건너뛴 항목은 `UNJUDGED` 로 남아 **통과와 구분된다.**
+
+### 7.4 LLM 게이트를 차단으로 안 두는 이유
+
+**팀은 이 게이트의 재현율을 안 쟀다.** 놓치는 비율을 모르는 채로 막으면, 통과가 "문제가 없다" 가 아니라 "이번엔 못 찾았다" 인데도 사람이 통과를 믿게 된다.
+
+**그래서 결정론적인 것만 막는다.** G-BUILD 는 같은 입력에 같은 답을 내므로 오탐이 없고, LLM 게이트는 읽을거리로만 둔다. **판정을 믿을 만큼 재기 전까지는 이 배치를 안 바꾼다.**
+
+---
+
 ## 문서 위키
 
 | | |
