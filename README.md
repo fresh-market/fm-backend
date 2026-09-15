@@ -163,17 +163,19 @@ L0   member  product  admin                                        아무것도 
 
 ```
 com.freshmarket
-├── coupon/                     76 파일. 이 프로젝트의 본론
-│   ├── CouponApi.java              공개 계약. 다른 도메인은 이것만 본다
+├── product/                    65 파일. 도메인 하나가 어떻게 생겼나
+│   ├── ProductApi.java             공개 계약. 다른 도메인은 이것만 본다
+│   ├── ProductOptionInfo.java      계약이 주고받는 값. 엔티티는 안 나간다
+│   ├── OptionAvailabilityChangedEvent.java
 │   └── internal/
-│       ├── controller/             발급, 쿠폰함, 발급 현황, 관리자
-│       ├── service/                CouponIssueService, CouponEventService, CouponConsistencyService ...
-│       ├── redis/                  CouponSeqAllocator / Committer / Initializer / Rebuilder / Contributor
-│       ├── issue/                  CouponIssueQueue, CouponIssueFlusher, CouponWriteCircuit
-│       ├── batch/                  만료, 이벤트 종료, 정합성 검증 스케줄러
-│       ├── warmup/                 CouponWarmupRunner (7장)
-│       ├── cache/  audit/  entity/  repository/  dto/  exception/  config/
-├── product/  member/  stock/  order/  payment/  cart/  admin/
+│       ├── controller/             상품, 카테고리, 관리자 상품/카테고리/이미지
+│       ├── service/                ProductService, CategoryService, ProductOptionAvailabilityService ...
+│       ├── batch/                  옵션 판매상태 동기화, 미확정 이미지 정리
+│       ├── client/                 ImageStorageClient, S3ImageStorageClient
+│       ├── entity/                 Product, ProductOption, ProductImage, Category ...
+│       ├── repository/             ProductQueryRepository 등 6개
+│       └── config/  dto/  exception/
+├── coupon/  member/  stock/  order/  payment/  cart/  admin/
 ├── common/                     응답 봉투, 예외 계층, 인증 필터, 커서 페이지네이션
 └── config/
 ```
