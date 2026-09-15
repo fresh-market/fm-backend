@@ -4,14 +4,14 @@
 [../incident/failure-response.md](../incident/failure-response.md) 에 있고, 여기는 발급 경로만 적는다.
 
 ```
-1. 회로를 어디에 거나          couponSeq 와 couponWrite 를 왜 나눴나
-2. 회로가 발급을 막은 적이 있다
+1. 둘로 나눈 회로                    couponSeq 와 couponWrite 를 왜 나눴나
+2. 재고를 지키지 않고 발급을 막은 회로   오진이 진짜 장애를 만든 일
 3. 무엇이 죽으면 진행 중인 발급이 어떻게 되나
 4. 장애 주입과 계측
 ```
 
-**이 문서는 값을 안 갖는다.** 회차별 값은 [coupon-load-rounds.md](coupon-load-rounds.md),
-설정값은 `application-coupon.yml` 의 주석이 갖는다.
+**여기 적은 수치는 장애의 크기를 말하는 것만이다.** 회차별 값은
+[coupon-load-rounds.md](coupon-load-rounds.md), 설정값은 `application-coupon.yml` 의 주석이 갖는다.
 
 ---
 
@@ -88,8 +88,24 @@ couponWrite  DB 쓰기 실패를 센다
 **반납 경로가 끊겨도 별도 배치가 필요 없다.** 앱 사망은 회수가 소진 시점에 풀고,
 Redis 사망은 재건이 채운다. **각각 훅이 있다.**
 
+### 재건이 끝날 때까지 멈추는 발급
+
+**카운터가 서기 전까지 앱이 모든 요청을 거절한다.** 그래서 재건에 걸리는 시간이 곧 장애 시간이다.
+
+```
+기여 대기    3,000 ms   각 인스턴스가 자기 큐를 올리기를 기다리는 고정 시간
+읽고 쓰기      427 ms   DB 를 읽고 네 키를 세운다
+합계        약 3.4초
+```
+
+**대부분이 고정 대기라 코드를 빠르게 해도 별로 안 줄어든다.** 줄이려면 그 대기 값을 건드려야
+하는데, 짧게 잡으면 큐를 아직 못 올린 인스턴스의 티켓이 빠진 채로 키가 선다.
+
+**감지 시간은 여기에 안 들어 있다.** 요청이 도는 중에는 첫 거절이 곧 신호라 사실상 즉시지만,
+트래픽이 뜸한 구간에 페일오버가 나면 그만큼 늦어진다.
+
 > 경우별 상세와 RDB 사망 때 앱이 번호를 반납하지 않는 이유는 [coupon.md 8장](coupon.md),
-> 재건 절차는 [redis-promotion-rebuild.md](redis-promotion-rebuild.md) 에 있다.
+> 재건 절차와 실측 근거는 [redis-promotion-rebuild.md](redis-promotion-rebuild.md) 에 있다.
 
 ## 4. 장애 주입과 계측
 
