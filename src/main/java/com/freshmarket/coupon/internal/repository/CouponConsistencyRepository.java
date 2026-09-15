@@ -107,9 +107,9 @@ public class CouponConsistencyRepository {
             """;
 
     /*
-     * 구멍이 있는지부터 가볍게 물을 때 쓴다. MAX() 하나만 집계하므로 findIssueSeqs()처럼
+     * 결번이 있는지부터 가볍게 물을 때 쓴다. MAX() 하나만 집계하므로 findIssueSeqs()처럼
      * 순번을 전부 애플리케이션 메모리로 끌어오지 않는다. totalQuantity 에 상한이 없어 관리자가
-     * 아주 큰 수량의 한정 쿠폰을 만들 수 있으므로, "구멍 없음"이 정상인 대부분의 호출에서
+     * 아주 큰 수량의 한정 쿠폰을 만들 수 있으므로, "결번 없음"이 정상인 대부분의 호출에서
      * 이 가벼운 조회만으로 끝내는 것이 중요하다.
      */
     private static final String MAX_ISSUE_SEQ_SQL = """
@@ -165,7 +165,7 @@ public class CouponConsistencyRepository {
                 rs.getLong("actual")));
     }
 
-    /** 한정 쿠폰마다 가장 큰 순번과 실제 발급 행 수를 읽는다. 구멍 수는 둘의 차다. */
+    /** 한정 쿠폰마다 가장 큰 순번과 실제 발급 행 수를 읽는다. 결번 수는 둘의 차다. */
     public List<CouponSeqSpan> findSeqSpans() {
         return jdbcTemplate.query(SEQ_SPANS_SQL, (rs, rowNum) -> new CouponSeqSpan(
                 rs.getLong(COLUMN_COUPON_ID), rs.getInt("max_seq"), rs.getLong("issued")));

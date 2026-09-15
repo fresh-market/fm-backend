@@ -50,9 +50,9 @@ class CouponConsistencyFindingTest {
         assertThat(counted.mismatched()).isFalse();
     }
 
-    // 번호는 나갔는데 행이 안 들어간 만큼 벌어진다. 구멍 수가 곧 어긋남이다
+    // 번호는 나갔는데 행이 안 들어간 만큼 벌어진다. 결번 수가 곧 어긋남이다
     @Test
-    void 가장_큰_순번과_행_수의_차가_구멍이다() {
+    void 가장_큰_순번과_행_수의_차가_결번이다() {
         CouponSeqSpan span = new CouponSeqSpan(1L, 10_000, 9_997);
 
         assertThat(span.gap()).isEqualTo(3);
@@ -60,7 +60,7 @@ class CouponConsistencyFindingTest {
     }
 
     @Test
-    void 빠짐없이_들어갔으면_구멍이_없다() {
+    void 빠짐없이_들어갔으면_결번이_없다() {
         CouponSeqSpan span = new CouponSeqSpan(1L, 10_000, 10_000);
 
         assertThat(span.hasGap()).isFalse();

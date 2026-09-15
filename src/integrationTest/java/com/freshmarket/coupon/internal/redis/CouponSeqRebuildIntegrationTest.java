@@ -59,7 +59,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
 
     /*
      * 이 시험이 재건의 전부를 한 번에 본다.
-     * 발급 행을 1, 2, 4 로 심어 3 번이 구멍이 되게 했다. 그 구멍이 free 로 살아나야 재고가
+     * 발급 행을 1, 2, 4 로 심어 3 번이 결번이 되게 했다. 그 결번이 free 로 살아나야 재고가
      * 덜 팔리지 않는다.
      */
     @Test

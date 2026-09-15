@@ -104,7 +104,7 @@ class CouponSeqRebuildTriggerTest {
      * 플러시 뒤 확인이 Redis 실패를 삼키는지 본다.
      *
      * 안 삼키면 플러시 루프의 바깥 catch 가 방금 성공한 배치를 실패로 처리한다. Redis 가 죽어도
-     * 큐에 든 발급은 끝까지 간다는 성질(coupon.md 9장)이 이 한 줄에 걸려 있다.
+     * 큐에 든 발급은 끝까지 간다는 성질(coupon.md 8장)이 이 한 줄에 걸려 있다.
      */
     @Test
     void 플러시_뒤_확인은_Redis_실패를_삼킨다() {

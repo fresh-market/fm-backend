@@ -59,9 +59,9 @@ class CouponConsistencyServiceTest {
         CouponIssueCount 어긋난_쿠폰 = new CouponIssueCount(2L, 900, 1000, 997);
         when(couponConsistencyRepository.findIssueCounts())
                 .thenReturn(List.of(new CouponIssueCount(1L, 1000, 1000, 1000), 어긋난_쿠폰));
-        CouponSeqSpan 구멍난_쿠폰 = new CouponSeqSpan(2L, 1000, 997);
+        CouponSeqSpan 결번난_쿠폰 = new CouponSeqSpan(2L, 1000, 997);
         when(couponConsistencyRepository.findSeqSpans())
-                .thenReturn(List.of(new CouponSeqSpan(1L, 1000, 1000), 구멍난_쿠폰));
+                .thenReturn(List.of(new CouponSeqSpan(1L, 1000, 1000), 결번난_쿠폰));
         when(couponConsistencyRepository.findDuplicateIssues())
                 .thenReturn(List.of(new DuplicateIssue(3L, 77L, 2)));
         when(couponConsistencyRepository.countStatusHistoryMismatches()).thenReturn(5L);
@@ -73,7 +73,7 @@ class CouponConsistencyServiceTest {
         // then
         assertThat(report.clean()).isFalse();
         assertThat(report.stock()).containsExactly(어긋난_쿠폰);
-        assertThat(report.seqGaps()).containsExactly(구멍난_쿠폰);
+        assertThat(report.seqGaps()).containsExactly(결번난_쿠폰);
         assertThat(report.duplicates()).hasSize(1);
         assertThat(report.statusHistoryMismatches()).isEqualTo(5);
         assertThat(report.issuesWithoutHistory()).isEqualTo(11);
@@ -91,7 +91,7 @@ class CouponConsistencyServiceTest {
                 .isEqualTo(CouponErrorCode.COUPON_NOT_FOUND);
     }
 
-    // 개수(actual)와 최댓값(maxSeq)이 같으면 구멍이 없다는 뜻이라 findIssueSeqs까지는 안 부른다
+    // 개수(actual)와 최댓값(maxSeq)이 같으면 결번이 없다는 뜻이라 findIssueSeqs까지는 안 부른다
     @Test
     void 쿠폰_하나만_검증할_때_전부_어긋나지_않았으면_일치한다() {
         // given
@@ -111,9 +111,9 @@ class CouponConsistencyServiceTest {
         assertThat(response.consistent()).isTrue();
     }
 
-    // 순번 없이 나간 무제한 쿠폰. findMaxIssueSeq가 비어 있으니 구멍을 물을 대상이 아니다
+    // 순번 없이 나간 무제한 쿠폰. findMaxIssueSeq가 비어 있으니 결번을 물을 대상이 아니다
     @Test
-    void 쿠폰_하나만_검증할_때_무제한_쿠폰은_순번_구멍이_없다() {
+    void 쿠폰_하나만_검증할_때_무제한_쿠폰은_순번_결번이_없다() {
         // given
         when(couponConsistencyRepository.findIssueCount(2L))
                 .thenReturn(Optional.of(new CouponIssueCount(2L, 50, null, 50)));
@@ -145,7 +145,7 @@ class CouponConsistencyServiceTest {
 
     // actual(3)이 maxSeq(4)와 달라야 findIssueSeqs로 전체를 읽고, seq가 [1,2,4]면 3이 빈 자리로 잡힌다
     @Test
-    void 쿠폰_하나만_검증할_때_순번에_구멍이_있으면_그_번호를_찾는다() {
+    void 쿠폰_하나만_검증할_때_순번에_결번이_있으면_그_번호를_찾는다() {
         // given
         when(couponConsistencyRepository.findIssueCount(4L))
                 .thenReturn(Optional.of(new CouponIssueCount(4L, 4, 10, 3)));

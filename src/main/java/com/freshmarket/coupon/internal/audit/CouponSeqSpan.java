@@ -9,7 +9,7 @@ package com.freshmarket.coupon.internal.audit;
 public record CouponSeqSpan(long couponId, int maxSeq, long issued) {
 
     /**
-     * 순번의 구멍 수다. {@code docs/coupon/coupon.md} 3장의 식을 그대로 쓴다.
+     * 순번의 결번 수다. {@code docs/coupon/coupon.md} 3장의 식을 그대로 쓴다.
      *
      * <p>Redis 가 번호를 내줬는데 그 행이 안 들어간 만큼 벌어진다. 번호는 소모됐고 발급은 없다.
      *

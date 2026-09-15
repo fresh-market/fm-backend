@@ -97,7 +97,7 @@ class SeedDummyDataScriptIntegrationTest extends IntegrationTestSupport {
     // 한정 쿠폰은 순번이 1..total_quantity 로 빠짐없이 들어가야 순번 연속성 검증의 대상이 된다
     @Test
     void 한정_쿠폰의_순번이_연속이다() {
-        Integer 구멍 = count("""
+        Integer 결번 = count("""
                 SELECT COALESCE(SUM(gap), 0) FROM (
                     SELECT MAX(mc.issue_seq) - COUNT(*) AS gap
                       FROM member_coupon mc
@@ -106,7 +106,7 @@ class SeedDummyDataScriptIntegrationTest extends IntegrationTestSupport {
                      GROUP BY mc.coupon_id) g
                 """);
 
-        assertThat(구멍).isZero();
+        assertThat(결번).isZero();
     }
 
     // 무제한 쿠폰은 issue_limit 과 issue_seq 가 둘 다 NULL 이어야 chk_mc_issue_seq 를 지난다

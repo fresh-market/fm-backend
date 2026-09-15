@@ -14,7 +14,7 @@ import org.springframework.stereotype.Repository;
  *
  * <p>한 번에 다 가져오는 것이 맞다. 재고가 만 장이라 행 수의 상한이 그 값이고, 이 조회는
  * 이벤트당 많아야 몇 번 도는 복구 경로다. 쪼개 읽으면 그 사이에 들어온 쓰기 때문에 순번이
- * 이가 빠진 것처럼 보여, 없는 구멍을 만들어 낸다.
+ * 이가 빠진 것처럼 보여, 없는 결번을 만들어 낸다.
  */
 @Repository
 @RequiredArgsConstructor
