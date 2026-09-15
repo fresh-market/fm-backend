@@ -10,7 +10,7 @@ import java.util.List;
  * ({@code docs/coupon/coupon.md} 11장).
  *
  * @param stock                   재고 세 값이 어긋난 쿠폰
- * @param seqGaps                 순번에 구멍이 있는 쿠폰
+ * @param seqGaps                 순번에 결번이 있는 쿠폰
  * @param duplicates              한 회원이 둘 이상 받은 쿠폰
  * @param statusHistoryMismatches 마지막 전이가 현재 상태와 다른 발급분 수
  * @param issuesWithoutHistory    이력이 한 줄도 없는 발급분 수

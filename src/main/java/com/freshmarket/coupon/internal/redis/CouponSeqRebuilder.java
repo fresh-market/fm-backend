@@ -42,7 +42,7 @@ import org.springframework.stereotype.Component;
  * </pre>
  *
  * <p><b>카운터는 세지 않고 최댓값을 본다.</b> 스크립트가 {@code INCR} 을 먼저 하고 그 결과를
- * 주므로 이 키는 마지막으로 나간 번호다. 개수로 더하면 두 방향으로 깨진다. 구멍은 DB 에도 큐에도
+ * 주므로 이 키는 마지막으로 나간 번호다. 개수로 더하면 두 방향으로 깨진다. 결번은 DB 에도 큐에도
  * 없어 모자라게 세고, {@code free} 재사용은 {@code INCR} 없이 번호가 나가 넘치게 센다. 넘치면
  * 카운터가 총량을 지나가는데 {@code free} 경로는 상한 검사를 안 지나므로,
  * <b>반드시 실패할 번호를 만들어 낸다.</b>
@@ -125,7 +125,7 @@ public class CouponSeqRebuilder {
      *
      * <p><b>큐를 DB 보다 먼저 읽는다.</b> 티켓은 큐에서 DB 로만 가고 반대로는 안 간다. 큐를
      * 먼저 읽으면 그사이 넘어간 티켓이 양쪽에 다 잡히지만, DB 를 먼저 읽으면 <b>어디에도 안
-     * 잡혀 구멍이 된다.</b>
+     * 잡혀 결번이 된다.</b>
      */
     private void lead(long couponId, Coupon coupon) throws InterruptedException {
         log.warn("event=COUPON_SEQ_REBUILD_STARTED couponId={} contributeWaitMillis={}",

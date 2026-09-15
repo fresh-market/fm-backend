@@ -64,7 +64,7 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
              *
              * 삼키지 않으면 플러시 루프의 바깥 catch 가 그 배치를 실패로 처리한다. 사용자 응답은
              * 이미 완료돼 안 바뀌지만, DB 에 잘 쓴 배치마다 오류 로그가 찍혀 정말 실패한 배치를
-             * 가린다. Redis 가 죽어도 큐에 든 발급은 끝까지 간다는 성질(coupon.md 9장)이 여기서
+             * 가린다. Redis 가 죽어도 큐에 든 발급은 끝까지 간다는 성질(coupon.md 8장)이 여기서
              * 깨지면 안 된다.
              */
             log.debug("event=COUPON_SEQ_REBUILD_CHECK_FAILED couponId={}", couponId, e);

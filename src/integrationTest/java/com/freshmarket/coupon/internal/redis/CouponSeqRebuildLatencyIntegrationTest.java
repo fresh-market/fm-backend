@@ -41,7 +41,7 @@ class CouponSeqRebuildLatencyIntegrationTest extends IntegrationTestSupport {
 
     /*
      * 열 명 중 하나는 번호만 받고 사라진 것으로 둔다.
-     * 구멍이 곧 free 에 들어갈 항목 수라, 이것이 0 이면 쓰기 비용을 과소평가한다.
+     * 결번이 곧 free 에 들어갈 항목 수라, 이것이 0 이면 쓰기 비용을 과소평가한다.
      * 로컬 회차 13 에서 1만 중 1,554 였으므로 그 언저리다.
      */
     private static final int GAP_EVERY = 10;
@@ -84,7 +84,7 @@ class CouponSeqRebuildLatencyIntegrationTest extends IntegrationTestSupport {
 
                 발급행       %,d
                 큐에 떠 있음  %,d
-                구멍         %,d
+                결번         %,d
                 걸린 시간    %,d ms
                 """.formatted(발급행, 큐에_떠_있는_수,
                 redisTemplate.opsForZSet().zCard(free()), elapsedMillis);
@@ -100,7 +100,7 @@ class CouponSeqRebuildLatencyIntegrationTest extends IntegrationTestSupport {
     private int 큐를_흉내_낸다(int count) {
         Map<String, String> queued = new HashMap<>(count);
         for (int i = 0; i < count; i++) {
-            // 구멍으로 비워 둔 번호 중 앞쪽을 큐가 쥐고 있는 것으로 둔다
+            // 결번으로 비워 둔 번호 중 앞쪽을 큐가 쥐고 있는 것으로 둔다
             int seq = (i + 1) * GAP_EVERY;
             queued.put(String.valueOf(FIRST_MEMBER_ID + TOTAL_QUANTITY + i), String.valueOf(seq));
         }
