@@ -294,7 +294,8 @@ flowchart TB
     I1 & I2 & I3 -.->|"지표, 로그"| MON
     BATCH -.-> MON
     MON --> AM["Alertmanager"] --> SLACK["Slack"]
-    CW["CloudWatch"] --> SNS["SNS"]
+    ALB & RDS & MON -.-> CW["CloudWatch"]
+    CW --> SNS["SNS"]
 
     style COUPON fill:#fff8e1,stroke:#d39e00
     style CACHE fill:#f3e5f5,stroke:#7b1fa2
