@@ -29,6 +29,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -227,40 +228,53 @@ class CampaignTargetLotRebuildConcurrencyIntegrationTest extends IntegrationTest
     }
 
     /*
+     * 겹쳐 부른 한 갈래를 돌린다. 둘이 같은 관문에서 출발해 동시에 확정을 시도한다.
+     *
+     * 실패를 모아서 돌려주는 이유가 있다. 워커 스레드에서 단정하면 그 실패가 시험 스레드까지
+     * 올라오지 않아 조용히 통과한다.
+     */
+    private List<RuntimeException> rebuildConcurrently() throws InterruptedException {
+        List<RuntimeException> failures = Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch bothReady = new CountDownLatch(2);
+        CountDownLatch done = new CountDownLatch(2);
+
+        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+            pool.execute(rebuildOnce(bothReady, done, failures));
+            pool.execute(rebuildOnce(bothReady, done, failures));
+            assertThat(done.await(30, TimeUnit.SECONDS)).isTrue();
+        }
+        return failures;
+    }
+
+    private Runnable rebuildOnce(CountDownLatch bothReady, CountDownLatch done,
+            List<RuntimeException> failures) {
+        return () -> {
+            bothReady.countDown();
+            awaitQuietly(bothReady);
+            try {
+                rebuildService.rebuild();
+            } catch (RuntimeException e) {
+                failures.add(e);
+            } finally {
+                done.countDown();
+            }
+        };
+    }
+
+    /*
      * 예전 재현과 같은 모양으로 겹쳐 부른다. 그때는 한쪽이 데드락으로 떨어졌다.
      *
      * 지금은 둘 중 하나만 나올 수 있다 — 나란히 통과하거나(앞 회차가 이미 끝났다),
      * 한쪽이 409 로 떨어지거나. 어느 쪽이든 데드락은 나오지 않는다.
      *
-     * 어느 갈래를 타는지가 타이밍에 달려 있어 회차를 여러 번 돌린다. 단정이 두 갈래에서 모두
-     * 성립하므로 어느 쪽으로 갈리든 시험이 깜빡이지 않는다.
+     * 어느 갈래를 타는지가 타이밍에 달려 있어 여러 번 돌린다. 반복을 시험 본문의 for 문이 아니라
+     * @RepeatedTest 에 맡긴다 — 본문에 로직이 들어가면 시험 자체에 버그가 생길 수 있고(UT-3-04),
+     * 회차마다 @AfterEach 가 돌아 앞 회차의 확정본이 다음 회차에 섞이지 않는 이점도 따라온다.
+     * 단정이 두 갈래에서 모두 성립하므로 어느 쪽으로 갈리든 시험이 깜빡이지 않는다.
      */
-    @Test
+    @RepeatedTest(5)
     void 겹쳐_불러도_더_이상_데드락이_나지_않는다() throws Exception {
-        int rounds = 5;
-        List<RuntimeException> failures = Collections.synchronizedList(new ArrayList<>());
-
-        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
-            for (int i = 0; i < rounds; i++) {
-                CountDownLatch bothReady = new CountDownLatch(2);
-                CountDownLatch done = new CountDownLatch(2);
-
-                for (int j = 0; j < 2; j++) {
-                    pool.execute(() -> {
-                        bothReady.countDown();
-                        awaitQuietly(bothReady);
-                        try {
-                            rebuildService.rebuild();
-                        } catch (RuntimeException e) {
-                            failures.add(e);
-                        } finally {
-                            done.countDown();
-                        }
-                    });
-                }
-                assertThat(done.await(30, TimeUnit.SECONDS)).isTrue();
-            }
-        }
+        List<RuntimeException> failures = rebuildConcurrently();
 
         // 떨어진 것이 있다면 전부 "지금 돌고 있다"(409) 여야 한다. 데드락은 한 건도 없어야 한다
         assertThat(failures).allSatisfy(failure -> assertThat(failure)

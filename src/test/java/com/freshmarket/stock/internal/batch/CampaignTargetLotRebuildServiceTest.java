@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -28,7 +27,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.CannotAcquireLockException;
@@ -184,6 +182,16 @@ class CampaignTargetLotRebuildServiceTest {
     }
 
     /*
+     * 잠금이 계산보다 먼저 나가는지는 여기서 InOrder 로 보지 않는다. 호출 순서는 구현 세부라
+     * 순서만 잡아 두면 리팩터링마다 깨진다 (UT-1-02, UT-2-02 — 위 deleteByTargetDate 와 같은 판단).
+     *
+     * 순서가 뒤집히면 어차피 관찰 가능한 결과가 달라져 다른 시험이 잡는다. 바로 위 시험의
+     * verifyNoInteractions 가 "잠금이 나중이면 조회가 이미 돌았을 것" 을 걸러내고,
+     * CampaignTargetLotRebuildConcurrencyIntegrationTest 의 "잠금을 못 잡으면 기존 확정본을
+     * 지우지도 않는다" 가 심어 둔 행이 살아남는 것으로 같은 것을 DB 에서 확인한다.
+     */
+
+    /*
      * 잠금 경합이 아닌 DB 실패는 409 로 뭉개지 않는다.
      * 표가 없는 상황이 "다른 데서 돌고 있음" 으로 보고되면 원인을 못 찾는다.
      */
@@ -195,19 +203,6 @@ class CampaignTargetLotRebuildServiceTest {
         assertThatThrownBy(() -> batch.rebuild())
                 .isInstanceOf(InvalidDataAccessResourceUsageException.class)
                 .isNotInstanceOf(StockException.class);
-    }
-
-    // 잠금이 계산보다 먼저 나가야 의미가 있다. 순서가 뒤집히면 헛계산도 교착도 그대로 남는다
-    @Test
-    void 후보를_조회하기_전에_잠금부터_잡는다() {
-        when(stockLotQueryRepository.findCandidatesExpiringBetween(any(), any(), anyInt()))
-                .thenReturn(List.of());
-
-        batch.rebuild();
-
-        InOrder inOrder = inOrder(campaignRebuildLockRepository, stockLotQueryRepository);
-        inOrder.verify(campaignRebuildLockRepository).lockForRebuild();
-        inOrder.verify(stockLotQueryRepository).findCandidatesExpiringBetween(any(), any(), anyInt());
     }
 
     /*
