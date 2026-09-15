@@ -47,6 +47,12 @@ public class Payment extends BaseMutableTimeEntity {
     @Column(name = "paid_at")
     private LocalDateTime paidAt;
 
+    @Column(name = "reconciliation_attempt_count", nullable = false)
+    private int reconciliationAttemptCount;
+
+    @Column(name = "reconciliation_isolated", nullable = false)
+    private boolean reconciliationIsolated;
+
     private Payment(Long orderId, PaymentMethod method, int amount) {
         if (orderId == null) {
             throw new IllegalArgumentException("orderId 는 필수다");
@@ -127,6 +133,29 @@ public class Payment extends BaseMutableTimeEntity {
 
     public boolean isUnknown() {
         return status == PaymentStatus.UNKNOWN;
+    }
+
+    public boolean isReconciliationCandidate() {
+        return (isPending() || isUnknown()) && !reconciliationIsolated;
+    }
+
+    /*
+     * PG 재확인이 결론에 이르지 못했을 때만 호출한다. 확정된 PAID/FAILED는 더 이상 대사 대상이
+     * 아니므로 횟수를 초기화할 필요가 없고, 격리된 결제는 운영자가 별도로 확인한다.
+     */
+    public boolean recordUnresolvedReconciliationAttempt(int maxAttempts) {
+        if (maxAttempts < 1) {
+            throw new IllegalArgumentException("maxAttempts 는 1 이상이어야 합니다.");
+        }
+        if (!isReconciliationCandidate()) {
+            return false;
+        }
+        reconciliationAttemptCount++;
+        if (reconciliationAttemptCount >= maxAttempts) {
+            reconciliationIsolated = true;
+            return true;
+        }
+        return false;
     }
 
     public boolean matches(PaymentRequest request) {

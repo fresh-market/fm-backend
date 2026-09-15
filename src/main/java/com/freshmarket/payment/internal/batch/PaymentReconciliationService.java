@@ -7,6 +7,7 @@ import com.freshmarket.payment.internal.client.PaymentGatewayApproval;
 import com.freshmarket.payment.internal.client.PaymentGatewayInquiryResult;
 import com.freshmarket.payment.internal.entity.Payment;
 import com.freshmarket.payment.internal.repository.PaymentRepository;
+import com.freshmarket.payment.internal.service.PaymentReconciliationAttemptService;
 import com.freshmarket.payment.internal.service.PaymentService;
 import java.time.Clock;
 import java.time.Duration;
@@ -48,21 +49,24 @@ import org.springframework.stereotype.Service;
 public class PaymentReconciliationService {
 
     private static final int PAGE_SIZE = 100;
+    private static final int MAX_RECONCILIATION_ATTEMPTS = 3;
 
     private final PaymentRepository paymentRepository;
     private final PaymentGateway paymentGateway;
     private final PaymentService paymentService;
+    private final PaymentReconciliationAttemptService attemptService;
     private final Clock clock;
     private final Duration unknownGracePeriod;
     private final Duration pendingGracePeriod;
 
     public PaymentReconciliationService(PaymentRepository paymentRepository, PaymentGateway paymentGateway,
-            PaymentService paymentService, Clock clock,
+            PaymentService paymentService, PaymentReconciliationAttemptService attemptService, Clock clock,
             @Value("${payment.reconciliation.grace-minutes:5}") long unknownGraceMinutes,
             @Value("${payment.reconciliation.pending-grace-minutes:30}") long pendingGraceMinutes) {
         this.paymentRepository = paymentRepository;
         this.paymentGateway = paymentGateway;
         this.paymentService = paymentService;
+        this.attemptService = attemptService;
         this.clock = clock;
         this.unknownGracePeriod = Duration.ofMinutes(unknownGraceMinutes);
         this.pendingGracePeriod = Duration.ofMinutes(pendingGraceMinutes);
@@ -86,7 +90,7 @@ public class PaymentReconciliationService {
         List<Payment> page;
         Pageable pageable = PageRequest.of(0, PAGE_SIZE);
         do {
-            page = paymentRepository.findByStatusAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
+            page = paymentRepository.findByStatusAndReconciliationIsolatedFalseAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
                     status, afterId, cutoff, pageable);
             for (Payment payment : page) {
                 reconcileOne(payment);
@@ -105,8 +109,7 @@ public class PaymentReconciliationService {
         try {
             result = paymentGateway.inquire(payment.getOrderId());
         } catch (RuntimeException e) {
-            log.warn("event=PAYMENT_RECONCILIATION_INQUIRE_FAILED paymentId={} orderId={}",
-                    payment.getId(), payment.getOrderId(), e);
+            recordUnresolvedAttempt(payment, "INQUIRE_FAILED", e);
             return;
         }
 
@@ -123,17 +126,30 @@ public class PaymentReconciliationService {
                     log.info("event=PAYMENT_RECONCILIATION_RESOLVED paymentId={} orderId={} status={}",
                             payment.getId(), payment.getOrderId(), reconciled.status());
                 }
-                case STILL_PROCESSING -> log.info(
-                        "event=PAYMENT_RECONCILIATION_STILL_UNRESOLVED paymentId={} orderId={} status={}",
-                        payment.getId(), payment.getOrderId(), payment.getStatus());
+                case STILL_PROCESSING -> recordUnresolvedAttempt(payment, "STILL_PROCESSING", null);
             }
         } catch (RuntimeException e) {
             /*
              * 한 결제의 DB 상태 전이 또는 결과 outbox 저장이 실패해도 그 행만 다음 주기에 재시도한다.
              * 바깥 커서 루프까지 예외를 전파하면 뒤에 있는 결제도 이번 주기에 확인하지 못한다.
              */
-            log.error("event=PAYMENT_RECONCILIATION_RESOLVE_FAILED paymentId={} orderId={}",
-                    payment.getId(), payment.getOrderId(), e);
+            recordUnresolvedAttempt(payment, "RESOLVE_FAILED", e);
+        }
+    }
+
+    private void recordUnresolvedAttempt(Payment payment, String reason, RuntimeException cause) {
+        boolean isolated = attemptService.recordUnresolvedAttempt(payment.getId(), MAX_RECONCILIATION_ATTEMPTS);
+        if (isolated) {
+            log.error("event=PAYMENT_RECONCILIATION_ISOLATED paymentId={} orderId={} reason={} attempts={}",
+                    payment.getId(), payment.getOrderId(), reason, MAX_RECONCILIATION_ATTEMPTS, cause);
+            return;
+        }
+        if (cause == null) {
+            log.info("event=PAYMENT_RECONCILIATION_STILL_UNRESOLVED paymentId={} orderId={} status={}",
+                    payment.getId(), payment.getOrderId(), payment.getStatus());
+        } else {
+            log.warn("event=PAYMENT_RECONCILIATION_RETRY_SCHEDULED paymentId={} orderId={} reason={}",
+                    payment.getId(), payment.getOrderId(), reason, cause);
         }
     }
 }

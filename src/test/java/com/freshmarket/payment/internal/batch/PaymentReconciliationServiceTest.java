@@ -13,6 +13,7 @@ import com.freshmarket.payment.internal.client.PaymentGateway;
 import com.freshmarket.payment.internal.client.PaymentGatewayInquiryResult;
 import com.freshmarket.payment.internal.entity.Payment;
 import com.freshmarket.payment.internal.repository.PaymentRepository;
+import com.freshmarket.payment.internal.service.PaymentReconciliationAttemptService;
 import com.freshmarket.payment.internal.service.PaymentService;
 import java.time.Clock;
 import java.time.Instant;
@@ -37,12 +38,15 @@ class PaymentReconciliationServiceTest {
     @Mock
     private PaymentService paymentService;
 
+    @Mock
+    private PaymentReconciliationAttemptService attemptService;
+
     @Test
     void 한_결제의_확정_실패가_뒤_결제의_재확인을_막지_않는다() {
         Payment first = unknownPayment(10L, 100L);
         Payment second = unknownPayment(20L, 200L);
         LocalDateTime paidAt = LocalDateTime.of(2026, 9, 6, 10, 0);
-        when(paymentRepository.findByStatusAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
+        when(paymentRepository.findByStatusAndReconciliationIsolatedFalseAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
                 eq(PaymentStatus.UNKNOWN), anyLong(), any(), any()))
                 .thenReturn(List.of(first, second), List.of());
         when(paymentGateway.inquire(100L)).thenReturn(PaymentGatewayInquiryResult.approved("pg_100", paidAt));
@@ -53,7 +57,8 @@ class PaymentReconciliationServiceTest {
                 .thenReturn(new PaymentResult(20L, 200L, PaymentMethod.CARD, 25_800,
                         PaymentStatus.FAILED, null, null));
         PaymentReconciliationService sut = new PaymentReconciliationService(paymentRepository, paymentGateway,
-                paymentService, Clock.fixed(Instant.parse("2026-09-06T11:00:00Z"), ZoneOffset.UTC), 5, 30);
+                paymentService, attemptService,
+                Clock.fixed(Instant.parse("2026-09-06T11:00:00Z"), ZoneOffset.UTC), 5, 30);
 
         sut.reconcileUnknownPayments();
 

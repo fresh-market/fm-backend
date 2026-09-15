@@ -46,6 +46,6 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
      * 중복/누락 없이 다음 페이지로 넘어간다. updatedAt이 그 상태로 전이된 시점이라, 그 시점 기준으로
      * (상태별로 다른) 유예 시간이 지난 것만 대상으로 삼는다.
      */
-    List<Payment> findByStatusAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
+    List<Payment> findByStatusAndReconciliationIsolatedFalseAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
             PaymentStatus status, Long afterId, LocalDateTime cutoff, Pageable pageable);
 }
