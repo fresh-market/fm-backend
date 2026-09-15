@@ -238,13 +238,13 @@ kakao:
 # 카카오 OIDC 외부 API(로그인 토큰교환/로그아웃/unlink) 서킷브레이커.
 # 인스턴스를 API별로 나눈다 — 하나가 막혀도 다른 API까지 같이 막히지 않는다.
 # config는 트래픽 양에 따라 두 종류로 나눈다 — 값만 공유할 뿐 상태(open/closed)는
-# 인스턴스별로 독립이다. 이름을 하나로 합치지 않는 한 세 서킷은 절대 같이 안 열린다.
+# 인스턴스별로 독립이다. 이름을 하나로 합치지 않는 한 세 서킷은 절대 같이 OPEN 이 안 된다.
 #
 # (2026-08-27, PR 리뷰 P1) 원래 셋 다 kakao-common(60초/최소 5회) 하나를 같이 썼는데,
 # login은 트래픽이 꾸준해 60초에 5회가 쉽게 채워지지만 unlink는 10분 배치, logout은
 # 사용자 행동 기반이라 60초 윈도우에 5통이 쌓이는 일 자체가 드물다 — 그러면 5xx가
 # 반복돼도 minimumNumberOfCalls를 못 채워 failureRateThreshold가 영원히 계산 안 되고
-# 서킷이 열리지 않는다. 그래서 unlink/logout은 windows를 5분으로 늘리고
+# 서킷이 OPEN 이 안 된다. 그래서 unlink/logout은 windows를 5분으로 늘리고
 # minimumNumberOfCalls를 3으로 낮춘 kakao-low-traffic을 따로 쓴다.
 resilience4j:
   circuitbreaker:
@@ -295,7 +295,7 @@ resilience4j:
       #
       # 창을 시간 기준으로 두는 것이 이 설정의 요점이다. 건수 기준이면 유입이 빠를수록 판정
       # 근거의 시간 폭이 좁아진다. 초당 2천이면 100건이 50밀리초 어치라, GC 정지 하나가 창을
-      # 통째로 덮어 회로가 열린다. 실제로 그렇게 무너졌다 (2026-08-30 부하 시험, 최대 정지
+      # 통째로 덮어 회로가 OPEN 이 된다. 실제로 그렇게 무너졌다 (2026-08-30 부하 시험, 최대 정지
       # 330밀리초, 느린 호출 비율 100%, 발급 7,281건에서 295건으로). 10초 창이면 3% 라 묻힌다.
       couponSeq:
         slidingWindowType: TIME_BASED
@@ -318,7 +318,7 @@ resilience4j:
         #
         # Redis 가 진짜 죽으면 타임아웃에서 실패로 확정되어 위 failureRateThreshold 가 잡는다.
         slowCallRateThreshold: 100
-        # 문턱은 50ms 로 남겨 둔다. 이 값으로는 회로가 안 열리지만, slow_call_rate 지표가
+        # 문턱은 50ms 로 남겨 둔다. 이 값으로는 회로가 OPEN 이 안 되지만, slow_call_rate 지표가
         # 계속 나와 "지금 이 인스턴스가 데워졌나" 를 보는 데 쓸 수 있다. 데워지면 0%,
         # 차가우면 69% 였다.
         slowCallDurationThreshold: 50ms
@@ -333,7 +333,7 @@ resilience4j:
         registerHealthIndicator: false
         eventConsumerBufferSize: 100
 
-      # DB 쓰기 회로다. DB 가 죽어도 Redis 는 멀쩡해 위 회로가 안 열리기 때문에 따로 둔다.
+      # DB 쓰기 회로다. DB 가 죽어도 Redis 는 멀쩡해 위 회로가 OPEN 이 안 되기 때문에 따로 둔다.
       couponWrite:
         slidingWindowType: TIME_BASED
         slidingWindowSize: 10
@@ -357,9 +357,9 @@ resilience4j:
         eventConsumerBufferSize: 100
         # 무엇을 실패로 세느냐가 이 회로의 요점이다. 여기 적힌 것만 센다.
         #
-        # DuplicateKeyException 을 세면 이벤트가 정상일 때 회로가 열린다. 재시도와 매핑 유실로
+        # DuplicateKeyException 을 세면 이벤트가 정상일 때 회로가 OPEN 이 된다. 재시도와 매핑 유실로
         # 중복이 꾸준히 나오는 것이 이 설계의 정상 동작이기 때문이다. BadSqlGrammarException 도
-        # 안 센다. 그것은 버그이고, 세면 회로가 열린 뒤 영영 안 닫힌다.
+        # 안 센다. 그것은 버그이고, 세면 회로가 OPEN 이 된 뒤 영영 CLOSED 로 안 돌아간다.
         #
         # 스프링의 TransientDataAccessException 만으로는 부족하다. 커넥션을 못 얻은 실패를
         # 스프링은 비일시적으로 분류하는데, Multi-AZ 페일오버는 60~120초 뒤에 끝나므로 여기서는
