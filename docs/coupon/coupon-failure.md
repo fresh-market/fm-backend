@@ -7,7 +7,7 @@
 1. 회로를 어디에 거나          couponSeq 와 couponWrite 를 왜 나눴나
 2. 회로가 이벤트를 망가뜨린 적이 있다
 3. 무엇이 죽으면 진행 중인 발급이 어떻게 되나
-4. 장애를 실제로 넣어 재 봤다
+4. 장애를 실제로 넣어 계측했다
 ```
 
 **이 문서는 값을 안 갖는다.** 회차별 값은 [coupon-load-rounds.md](coupon-load-rounds.md),
@@ -91,7 +91,7 @@ Redis 사망은 재건이 채운다. **각각 훅이 있다.**
 > 경우별 상세와 RDB 사망 때 앱이 번호를 반납하지 않는 이유는 [coupon.md 8장](coupon.md),
 > 재건 절차는 [redis-promotion-rebuild.md](redis-promotion-rebuild.md) 에 있다.
 
-## 4. 장애를 실제로 넣어 재 봤다
+## 4. 장애를 실제로 넣어 계측했다
 
 **팀은 AWS 에 인프라를 올려 가장 좋은 구성에 장애를 넣었다.** 앱 급사(SIGKILL),
 캐시 Multi-AZ 페일오버, 둘을 겹친 것 셋이다.
