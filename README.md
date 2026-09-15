@@ -259,31 +259,18 @@ flowchart TB
     ALB -->|"그 밖의 모든 경로"| TGA["app 대상 그룹"]
     TGA --> ASGA["평상시 ASG<br/>t3.small  min 1 / max 3"]
 
-    subgraph COUPON["선착순 전용 ASG (t3.small, min 0 / max 3, prod+coupon 프로필)"]
-        direction LR
-        subgraph I1["인스턴스 1"]
-            direction TB
-            V1["요청 스레드 (가상)"] --> Q1[["인스턴스 큐<br/>capacity 20,000"]]
-            Q1 --> F1["플러시 스레드 1 (플랫폼)"]
-        end
-        subgraph I2["인스턴스 2"]
-            direction TB
-            V2["요청 스레드 (가상)"] --> Q2[["인스턴스 큐"]]
-            Q2 --> F2["플러시 스레드 1"]
-        end
-        subgraph I3["인스턴스 3"]
-            direction TB
-            V3["요청 스레드 (가상)"] --> Q3[["인스턴스 큐"]]
-            Q3 --> F3["플러시 스레드 1"]
-        end
+    subgraph COUPON["선착순 전용 ASG 의 앱 인스턴스 (t3.small, min 0 / max 3, 대수만큼 같은 구조)"]
+        direction TB
+        VT["요청 스레드 (VT)"] --> Q1[["인스턴스 큐<br/>capacity 20,000"]]
+        Q1 --> F1["플러시 스레드 1 (플랫폼)<br/>HikariCP 풀 2"]
     end
-    TGC --> I1 & I2 & I3
+    TGC --> VT
 
     CACHE[("ElastiCache Valkey 9.0<br/>primary + replica, 자동 페일오버<br/>counter / seq / pending / free")]
     RDS[("RDS MySQL 8.4 Multi-AZ<br/>primary + standby, 동기 복제<br/>member_coupon")]
 
-    V1 & V2 & V3 -->|"순번 확보<br/>Lua 한 번, 100ms"| CACHE
-    F1 & F2 & F3 -->|"Bulk INSERT<br/>20ms 마다 또는 500건마다<br/>HikariCP 풀 2"| RDS
+    VT -->|"순번 확보<br/>Lua 한 번, 100ms"| CACHE
+    F1 -->|"Bulk INSERT<br/>20ms 마다 또는 500건마다"| RDS
     ASGA --> RDS
     ASGA --> CACHE
 
@@ -291,7 +278,7 @@ flowchart TB
     MON["모니터링 EC2 (단독)<br/>Prometheus, Grafana, Loki"]
     LT["부하 시험 EC2<br/>m7i.xlarge, 시험 때만"] -.->|"k6"| ALB
 
-    I1 & I2 & I3 -.->|"지표, 로그"| MON
+    COUPON -.->|"지표, 로그"| MON
     BATCH -.-> MON
     MON --> AM["Alertmanager"] --> SLACK["Slack"]
     ALB & RDS & MON -.-> CW["CloudWatch"]
