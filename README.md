@@ -261,8 +261,16 @@ flowchart TB
 
     subgraph COUPON["선착순 전용 ASG 의 앱 인스턴스 (t3.small, min 0 / max 3, 대수만큼 같은 구조)"]
         direction TB
-        VT["요청 스레드 (VT)"] --> Q1[["인스턴스 큐<br/>capacity 20,000"]]
-        Q1 --> F1["플러시 스레드 1 (플랫폼)<br/>커넥션 풀 2<br/>플러시 1 + 캐시 적재 1"]
+        VT["요청 스레드 (VT)<br/>트랜잭션을 안 연다"]
+        SNAP["쿠폰 스냅샷 캐시<br/>이벤트가 열릴 때 한 번 채운다"]
+        Q1[["인스턴스 큐<br/>capacity 20,000"]]
+        F1["플러시 스레드 1 (플랫폼)"]
+        POOL{{"HikariCP 풀 2<br/>플러시 1 + 캐시 적재 1"}}
+        VT -->|"자격 확인"| SNAP
+        VT --> Q1
+        Q1 --> F1
+        F1 -->|"Bulk INSERT<br/>20ms 마다 또는 500건마다"| POOL
+        SNAP -.->|"이벤트 개시에 한 번"| POOL
     end
     TGC --> VT
 
@@ -270,7 +278,7 @@ flowchart TB
     RDS[("RDS MySQL 8.4 Multi-AZ<br/>primary + standby, 동기 복제<br/>member_coupon")]
 
     VT -->|"순번 확보<br/>Lua 한 번, 100ms"| CACHE
-    F1 -->|"Bulk INSERT<br/>20ms 마다 또는 500건마다"| RDS
+    POOL --> RDS
     ASGA --> RDS
     ASGA --> CACHE
 
@@ -285,6 +293,7 @@ flowchart TB
     CW --> SNS["SNS"]
 
     style COUPON fill:#fff8e1,stroke:#d39e00
+    style POOL fill:#fff3cd,stroke:#d39e00
     style CACHE fill:#f3e5f5,stroke:#7b1fa2
     style RDS fill:#e1f5fe,stroke:#0277bd
 ```
