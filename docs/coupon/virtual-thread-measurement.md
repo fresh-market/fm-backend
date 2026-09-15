@@ -8,7 +8,7 @@
 ## 잰 조건
 
 ```
-기계      노트북 한 대.  k6 와 JVM 과 MySQL 과 Valkey 가 같은 CPU 를 다툰다
+기계      노트북 한 대.  k6 와 JVM 과 MySQL 과 Valkey(Redis) 가 같은 CPU 를 다툰다
 부하      VU 20,000 / 재고 10,000.  요구 조건 그대로다
 설정      회차 9 의 로컬 진단값.  Redis timeout 500ms, 요청 예산 30초, 순번 회로 METRICS_ONLY
 변수      spring.threads.virtual.enabled 하나

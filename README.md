@@ -7,7 +7,7 @@
   ->  초과 발급 0건 / 1인 1매 / 번호 유실 0 / p99 0.247초        2026-08-31, AWS 실측
 ```
 
-Java 21 / Spring Boot 4.0.5 / MySQL 8.4 / Valkey 9.0 / AWS (Terraform)
+Java 21 / Spring Boot 4.0.5 / MySQL 8.4 / Valkey(Redis) 9.0 / AWS (Terraform)
 기간 2026-07-31 ~ 2026-08-31, 5명
 
 ```bash
