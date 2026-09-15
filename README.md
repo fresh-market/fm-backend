@@ -297,7 +297,7 @@ flowchart TB
 
 > 겹치는 구간과 1로 못 내리는 근거는 [resource-budget.md](./docs/resource-budget.md) 에 있다.
 
-**알림은 두 갈래다.** 앱이 내는 지표는 Alertmanager 가 Slack 으로 보내고, **모니터링이 죽어도 알아야 하는 것**은 CloudWatch 가 SNS 로 보낸다. 가르는 기준이 그 한 줄이다.
+**알림은 두 경우다.** 앱이 내는 지표는 Alertmanager 가 Slack 으로 보내고, **모니터링이 죽어도 알아야 하는 것**은 CloudWatch 가 SNS 로 보낸다. 가르는 기준이 그 한 줄이다.
 
 ### 5.1 버전과 v4 채택
 
