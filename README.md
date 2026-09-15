@@ -285,6 +285,32 @@ ALB 리스너 규칙 (priority 15)
 4. 응답        커밋과 Redis 확정 표시가 끝난 뒤
 ```
 
+```mermaid
+flowchart TB
+    REQ["요청 스레드 (가상)"] --> CACHE{"자격 확인<br/>쿠폰 스냅샷 캐시"}
+    CACHE -->|"기간, 등급 미달"| E4xx["400 / 403"]
+    CACHE --> SLOT{"큐 자리가 있나"}
+    SLOT -->|"없다"| C503["503 혼잡<br/>재고는 남아 있다"]
+    SLOT --> LUA{{"순번 확보 Lua 한 번<br/>counter, seq, free, pending"}}
+
+    LUA -->|"counter 가 없다"| REBUILD["-2 거절<br/>재건을 깨운다"]
+    LUA -->|"확정 표시가 붙은 회원"| DUP["200 이미 발급<br/>DB 를 안 친다"]
+    LUA -->|"소진, pending 이 비었다"| G410["410 최종 소진"]
+    LUA -->|"소진, pending 이 남았다"| G409["409 소진<br/>번호가 돌아올 수 있다"]
+    LUA -->|"번호를 받았다"| Q[("인스턴스 큐<br/>seq, memberId, future")]
+
+    REQ -.->|"큐에 넣고 잔다"| Q
+    Q --> FLUSH["플러시 스레드 (플랫폼)<br/>batch-window 20ms 또는 batch-size 500"]
+    FLUSH --> INS["배치 INSERT + COMMIT<br/>여기서 1인 1매가 최종 판정된다"]
+    INS --> MARK["markCommitted<br/>seq 에 확정 표시, pending 에서 제거"]
+    MARK --> OK["200 발급<br/>요청 스레드를 깨운다"]
+    INS -->|"유니크 제약 위반"| REPAIR["반납과 매핑 수리<br/>free 로 돌리거나 주인을 되살린다"]
+
+    style LUA fill:#fff3cd,stroke:#d39e00
+    style INS fill:#d1ecf1,stroke:#0c5460
+    style OK fill:#d4edda,stroke:#155724
+```
+
 **요청과 응답은 끝까지 동기다.** 뒤 버전들이 요청을 묶어 쓰지만 그것은 **묶어서 쓰되 커밋까지 기다리는 것**이지 나중에 쓰는 것이 아니다. 그래서 **앱이 발급됐다고 답한 요청은 반드시 행이 있다.**
 
 **요청 스레드는 트랜잭션을 안 연다.** 큐에 티켓을 넣고 자며, DB 를 쓰는 것은 플러시 스레드뿐이다. **요청이 2만이어도 커넥션 수요가 안 느는 것이 이 설계의 요점이다.**

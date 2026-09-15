@@ -34,6 +34,44 @@
           run.py, llm-verify.yml, pr-gate.yml
 ```
 
+```mermaid
+flowchart TB
+    subgraph L1["1층  가이드 문서 (사람이 쓴다)"]
+        D1["qa-*.md<br/>common 217건"]
+        D2["*-guideline.md<br/>backend 250건"]
+        D3["*-guideline.md<br/>infra 100건"]
+    end
+
+    subgraph L2["2층  레지스트리 (기계가 읽는다)"]
+        I1["items.yml"]
+        I2["items.yml"]
+        I3["items.yml"]
+    end
+
+    L3["3층  앵커 규칙<br/>anchors.yml<br/>바뀐 파일 -> 켤 항목"]
+    L4["4층  실행기<br/>run.py"]
+    OUT["PR 코멘트<br/>VIOLATION / OK / NOT_APPLICABLE"]
+
+    D1 -->|"gen_items.py"| I1
+    D2 -->|"gen_items.py"| I2
+    D3 -->|"gen_items.py"| I3
+    I1 --> L3
+    I2 --> L3
+    I3 --> L3
+    L3 --> L4
+    L4 --> OUT
+
+    RC["registry-check.yml<br/>문서와 items.yml 의 일치를 지킨다"] -.-> I1
+    RC -.-> I2
+    RC -.-> I3
+
+    style L3 fill:#fff3cd,stroke:#d39e00
+    style L4 fill:#d1ecf1,stroke:#0c5460
+    style OUT fill:#d4edda,stroke:#155724
+```
+
+**판정 기준은 저장소 셋에서 오지만 판정 대상은 backend 코드 하나다.** `anchors.yml` 이 backend 에만 있기 때문이다.
+
 **아래층은 위층을 모른다.** `run.py`는 항목이 무슨 뜻인지 모르고 ID 와 제목만 넘긴다.
 `anchors.yml`은 항목 본문을 모르고 접두사와 장 번호만 안다.
 
@@ -137,6 +175,26 @@ LLM 판정 -> VIOLATION / OK / NOT_APPLICABLE / ...
         |  defers_to 억제, 신규와 기존 분리
         v
 PR 코멘트
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Doc as qa-security-guideline.md
+    participant Gen as gen_items.py
+    participant Reg as items.yml
+    participant Anc as anchors.yml
+    participant Run as run.py
+    participant LLM as LLM
+    participant PR as PR 코멘트
+
+    Doc->>Gen: "[코드] SEC-1-01 소유권을 검증하는가"
+    Gen->>Reg: id, doc, ch, level, ci_stage, domains
+    Note over Anc: 바뀐 파일이 internal/service/*.java 다
+    Anc->>Run: service 규칙이 SEC 1장을 켠다
+    Run->>LLM: 활성 항목 + 판정 기준 본문 + 앵커 파일
+    LLM->>Run: VIOLATION / OK / NOT_APPLICABLE
+    Run->>PR: defers_to 억제, 신규와 기존 분리
 ```
 
 **문서의 한 줄이 판정 한 건이 된다.** 중간에 사람이 옮겨 적는 곳이 없다.
