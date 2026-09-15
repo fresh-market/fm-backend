@@ -6,6 +6,7 @@ import com.freshmarket.common.response.CursorPageResponse;
 import com.freshmarket.common.response.PageCursor;
 import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.ProductOptionInfo;
+import com.freshmarket.stock.internal.ExpiringSoonPolicy;
 import com.freshmarket.stock.internal.dto.ExpiringSoonResponse;
 import com.freshmarket.stock.internal.entity.CampaignTargetLot;
 import com.freshmarket.stock.internal.repository.CampaignTargetLotCacheRepository;
@@ -14,7 +15,6 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -50,25 +50,27 @@ public class ExpiringSoonService {
     private final Clock clock;
 
     /*
-     * 확정본이라 하루 종일 값이 같아 캐시를 앞에 둔다. 캐시에 없으면 그대로 DB 에서 구하고
-     * 그 결과를 채워둔다 — 캐시는 없어도 동작에 지장이 없는 층이다.
+     * 확정본이라 하루 종일 값이 같아 캐시를 앞에 둔다. 캐시가 없으면 DB 에서 구해 채우는 것을
+     * 캐시 쪽이 한 번에 처리한다 — 조회와 적재를 나눠 부르면 같은 키가 동시에 미스했을 때
+     * 요청 수만큼 DB 로 내려간다(getOrLoad 주석 참고).
+     *
+     * 캐시 키에 확정본 버전을 함께 넣는다. 관리자가 재실행하면 그날 행이 새로 만들어져
+     * 버전이 바뀌고, 키가 달라져 옛 응답을 다시 내보내지 않는다. 로컬 캐시라 인스턴스별로
+     * 비울 방법이 없어 무효화 대신 키를 가르는 쪽을 택했다.
+     *
+     * 버전 조회가 요청마다 한 번 는다. 인덱스만 읽는 집계라, 캐시가 없을 때 치던
+     * 3~4 쿼리와 ProductApi 호출에 비하면 값이 싸다.
      */
     public CursorPageResponse<ExpiringSoonResponse> getExpiringSoonProducts(
             Long categoryId, String pageToken, int pageSize) {
 
         int effectivePageSize = pageSize > 0 ? pageSize : DEFAULT_PAGE_SIZE;
-        LocalDate today = LocalDate.now(clock);
+        LocalDate today = ExpiringSoonPolicy.businessToday(clock);
+        Long version = campaignTargetLotRepository.findConfirmedVersion(today);
 
-        Optional<CursorPageResponse<ExpiringSoonResponse>> cached =
-                campaignTargetLotCacheRepository.find(today, categoryId, pageToken, effectivePageSize);
-        if (cached.isPresent()) {
-            return cached.get();
-        }
-
-        CursorPageResponse<ExpiringSoonResponse> response =
-                loadFromDatabase(today, categoryId, pageToken, effectivePageSize);
-        campaignTargetLotCacheRepository.put(today, categoryId, pageToken, effectivePageSize, response);
-        return response;
+        return campaignTargetLotCacheRepository.getOrLoad(
+                today, version, categoryId, pageToken, effectivePageSize,
+                () -> loadFromDatabase(today, categoryId, pageToken, effectivePageSize));
     }
 
     private CursorPageResponse<ExpiringSoonResponse> loadFromDatabase(
