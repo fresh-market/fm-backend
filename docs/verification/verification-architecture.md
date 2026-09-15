@@ -34,44 +34,6 @@
           run.py, llm-verify.yml, pr-gate.yml
 ```
 
-```mermaid
-flowchart TB
-    subgraph L1["1층  가이드 문서 (사람이 쓴다)"]
-        D1["qa-*.md<br/>common 217건"]
-        D2["*-guideline.md<br/>backend 250건"]
-        D3["*-guideline.md<br/>infra 100건"]
-    end
-
-    subgraph L2["2층  레지스트리 (기계가 읽는다)"]
-        I1["items.yml"]
-        I2["items.yml"]
-        I3["items.yml"]
-    end
-
-    L3["3층  앵커 규칙<br/>anchors.yml<br/>바뀐 파일 -> 켤 항목"]
-    L4["4층  실행기<br/>run.py"]
-    OUT["PR 코멘트<br/>VIOLATION / OK / NOT_APPLICABLE"]
-
-    D1 -->|"gen_items.py"| I1
-    D2 -->|"gen_items.py"| I2
-    D3 -->|"gen_items.py"| I3
-    I1 --> L3
-    I2 --> L3
-    I3 --> L3
-    L3 --> L4
-    L4 --> OUT
-
-    RC["registry-check.yml<br/>문서와 items.yml 의 일치를 지킨다"] -.-> I1
-    RC -.-> I2
-    RC -.-> I3
-
-    style L3 fill:#fff3cd,stroke:#d39e00
-    style L4 fill:#d1ecf1,stroke:#0c5460
-    style OUT fill:#d4edda,stroke:#155724
-```
-
-**판정 기준은 저장소 셋에서 오지만 판정 대상은 backend 코드 하나다.** `anchors.yml` 이 backend 에만 있기 때문이다.
-
 **아래층은 위층을 모른다.** `run.py`는 항목이 무슨 뜻인지 모르고 ID 와 제목만 넘긴다.
 `anchors.yml`은 항목 본문을 모르고 접두사와 장 번호만 안다.
 
@@ -105,56 +67,8 @@ docs/verification/                 v-commit.md    Claude 편의 진입점
   세 저장소 공용
 ```
 
-```mermaid
-flowchart TB
-    subgraph COMMON["fresh-market/.github  (common)"]
-        direction TB
-        CD["docs/software-quality/<br/>qa-*.md  217건<br/>얼마나 잘 하는가"]
-        CI["llm-verify/items.yml  217"]
-        CG["llm-verify/gen_items.py  생성기"]
-        CR["llm-verify/run.py  실행기"]
-        CK["known-conflicts.yml"]
-        CW["workflows/llm-verify.yml  본체"]
-        CS["llm-verify/verify.sh  G-LOCAL 본체"]
-    end
-
-    subgraph BE["fresh-market/fm-backend"]
-        direction TB
-        BD["docs/code-architecture/<br/>*-guideline.md  250건<br/>어떻게 쓰는가"]
-        BI["llm-verify/items.yml  250"]
-        BA["llm-verify/anchors.yml  규칙 11"]
-        BW["workflows/pr-gate.yml  호출자"]
-        BV["verify.sh  진입점"]
-        BC[".claude/commands/v-commit.md"]
-    end
-
-    subgraph INFRA["fresh-market/fm-infra"]
-        direction TB
-        ID["docs/system-design/  확정값의 근거<br/>docs/infra-review/*-guideline.md  100건"]
-        II["llm-verify/items.yml  100"]
-    end
-
-    CD -->|"gen_items.py"| CI
-    BD -->|"gen_items.py"| BI
-    ID -->|"gen_items.py"| II
-    CI --> BA
-    BI --> BA
-    II --> BA
-    BA --> CR
-    CW --> CR
-    BW -->|"호출"| CW
-    BV --> CS
-    BC -.-> BV
-    CS --> CR
-
-    style BA fill:#fff3cd,stroke:#d39e00
-    style CR fill:#d1ecf1,stroke:#0c5460
-```
-
-**생성기와 실행기는 common 에 하나만 둔다.** 셋으로 복제하면 갈라진다.
-
-**판정 기준은 셋에서 오지만 판정 대상은 backend 코드 하나다.** `anchors.yml` 이 backend 에만
-있기 때문이다. Terraform 이 생기면 infra 에도 만든다.
+**판정 기준은 셋에서 오지만 판정 대상은 backend 코드 하나다.**
+`anchors.yml`이 backend 에만 있기 때문이다. Terraform 이 생기면 infra 에도 만든다.
 
 각자 자기 문서에서 자기 `items.yml`을 만들고, 자기 `registry-check.yml`이 둘의 일치를 지킨다.
 **생성기와 실행기는 common 에 하나만 둔다.** 셋으로 복제하면 갈라진다.
@@ -223,26 +137,6 @@ LLM 판정 -> VIOLATION / OK / NOT_APPLICABLE / ...
         |  defers_to 억제, 신규와 기존 분리
         v
 PR 코멘트
-```
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Doc as qa-security-guideline.md
-    participant Gen as gen_items.py
-    participant Reg as items.yml
-    participant Anc as anchors.yml
-    participant Run as run.py
-    participant LLM as LLM
-    participant PR as PR 코멘트
-
-    Doc->>Gen: "[코드] SEC-1-01 소유권을 검증하는가"
-    Gen->>Reg: id, doc, ch, level, ci_stage, domains
-    Note over Anc: 바뀐 파일이 internal/service/*.java 다
-    Anc->>Run: service 규칙이 SEC 1장을 켠다
-    Run->>LLM: 활성 항목 + 판정 기준 본문 + 앵커 파일
-    LLM->>Run: VIOLATION / OK / NOT_APPLICABLE
-    Run->>PR: defers_to 억제, 신규와 기존 분리
 ```
 
 **문서의 한 줄이 판정 한 건이 된다.** 중간에 사람이 옮겨 적는 곳이 없다.

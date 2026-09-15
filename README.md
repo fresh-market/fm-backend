@@ -251,77 +251,52 @@ ALB 리스너 규칙 (priority 15)
 ### 5.0 구성
 
 ```mermaid
-flowchart LR
-    subgraph APP["앱 인스턴스 (선착순 전용 ASG)"]
+flowchart TB
+    U["사용자 20,000"] --> R53["Route53"]
+    R53 --> ALB["Application Load Balancer<br/>2 AZ"]
+
+    ALB -->|"POST /v1/coupons/*/issues<br/>리스너 규칙 priority 15"| TGC["coupon 대상 그룹"]
+    ALB -->|"그 밖의 모든 경로"| TGA["app 대상 그룹"]
+
+    TGA --> ASGA["평상시 ASG<br/>t3.small  min 1 / max 3<br/>prod 프로필"]
+
+    subgraph COUPON["선착순 전용 ASG (t3.small, min 0 / max 3, prod+coupon 프로필)"]
         direction TB
-        subgraph REQP["요청 경로 (가상 스레드)"]
-            CTL["CouponIssueController"]
-            SVC["CouponIssueService"]
-            CACHE["CouponCache<br/>쿠폰 스냅샷"]
-            ALLOC["CouponSeqAllocator<br/>순번 확보"]
-        end
-        subgraph WRITEP["쓰기 경로 (플랫폼 스레드 1)"]
-            QUEUE["CouponIssueQueue<br/>queue-capacity 20000"]
-            FLUSH["CouponIssueFlusher<br/>batch-window 20ms / size 500"]
-            COMMIT["CouponSeqCommitter<br/>확정 표시와 반납"]
-        end
-        subgraph CIRC["회로"]
-            C1["couponSeq<br/>지표 전용"]
-            C2["couponWrite"]
-        end
-        subgraph BATCH["배치 (단독 인스턴스)"]
-            B1["만료"]
-            B2["이벤트 종료"]
-            B3["정합성 검증"]
-        end
-        REBUILD["CouponSeqRebuilder<br/>+ Trigger, Contributor"]
-        WARM["CouponWarmupRunner<br/>+ CouponWriteWarmup"]
+        TGC --> APP1["앱 인스턴스"]
+        APP1 --- DESC["요청 스레드는 가상<br/>플러시 스레드는 플랫폼 1<br/>HikariCP 풀 2"]
     end
 
-    subgraph REDIS["Valkey (이벤트 중 Critical)"]
-        direction TB
-        K1["counter  마지막 발행 번호"]
-        K2["seq  회원 -> 순번, 확정 표시"]
-        K3["pending  미확정 순번 -> 준 시각"]
-        K4["free  안 쓰인 것이 확인된 번호"]
-        K5["rebuild, rebuild:queued"]
-        LUA["Lua 스크립트 넷"]
+    subgraph AZ["2 AZ (ap-northeast-2a, 2c)"]
+        direction LR
+        CACHE[("ElastiCache Valkey 9.0<br/>primary + replica<br/>자동 페일오버")]
+        RDS[("RDS MySQL 8.4 Multi-AZ<br/>primary + standby<br/>동기 복제")]
     end
 
-    subgraph DB["RDS MySQL (Multi-AZ)"]
-        direction TB
-        T1["coupon  정책과 수량"]
-        T2["member_coupon  발급 한 건<br/>uk_mc_coupon_member, uk_mc_coupon_seq, chk_mc_issue_seq"]
-        T3["member_coupon_status_history"]
-    end
+    BATCH["배치 EC2 (단독)<br/>만료 / 이벤트 종료 / 정합성 검증"]
+    MON["모니터링 EC2 (단독)<br/>Prometheus, Grafana, Loki"]
+    LT["부하 시험 EC2<br/>m7i.xlarge, 시험 때만"]
+    CW["CloudWatch -> SNS"]
 
-    CTL --> SVC
-    SVC --> CACHE
-    SVC --> ALLOC
-    SVC --> QUEUE
-    QUEUE --> FLUSH
-    FLUSH --> COMMIT
-    ALLOC -.->|"EVALSHA"| LUA
-    COMMIT -.-> LUA
-    REBUILD -.-> LUA
-    LUA --- K1 & K2 & K3 & K4
-    REBUILD -.-> K5
-    FLUSH -->|"배치 INSERT"| T2
-    CACHE -.->|"이벤트 열 때 한 번"| T1
-    B3 --> T2 & T3
-    C1 -.->|"감싼다"| ALLOC
-    C2 -.->|"감싼다"| FLUSH
+    APP1 -->|"순번 확보<br/>Lua 한 번, 100ms"| CACHE
+    APP1 -->|"배치 INSERT<br/>플러시 스레드 1"| RDS
+    ASGA --> RDS
+    ASGA --> CACHE
+    BATCH --> RDS
+    LT -.->|"k6"| ALB
+    APP1 -.-> MON
+    BATCH -.-> MON
+    MON -.-> CW
 
-    style ALLOC fill:#fff3cd,stroke:#d39e00
-    style LUA fill:#fff3cd,stroke:#d39e00
-    style T2 fill:#d1ecf1,stroke:#0c5460
+    style COUPON fill:#fff8e1,stroke:#d39e00
+    style CACHE fill:#f3e5f5,stroke:#7b1fa2
+    style RDS fill:#e1f5fe,stroke:#0277bd
 ```
 
-**요청 경로와 쓰기 경로가 큐로만 이어진다.** 요청 스레드는 트랜잭션을 안 열고, DB 를 쓰는 것은 플러시 스레드 하나다.
+**선착순만 ASG 를 갈라 놓은 것이 이 인프라의 요점이다.** 평상시 앱과 인스턴스가 겹치지 않아 **다른 기능의 성능에 영향이 없고, 잰 수치가 오직 발급 경로의 것이 된다**(4장).
 
-**Lua 스크립트가 Redis 키 넷의 유일한 입구다.** 앱이 키를 직접 안 만진다.
+**이벤트 구간에는 캐시 등급이 올라간다.** 평상시 Valkey 는 조회 캐시라 죽으면 원본 조회로 강등하지만, 이벤트 중에는 **순번의 판정 주체**라 2노드에 자동 페일오버를 둔다.
 
-**정확성은 `member_coupon` 의 제약 셋이 쥔다.** 위쪽 구현이 무엇이든 그 아래로는 못 내려간다.
+**전용 인스턴스는 설정이 정반대다.** 풀을 2로 조이고 헬스체크를 느슨하게 한다. 한 그룹에 두면 어느 한쪽 기준으로 맞출 수밖에 없다.
 
 ### 5.1 버전이 바뀌어도 변하지 않는 다섯
 
@@ -358,32 +333,6 @@ flowchart LR
 2. 순번 확보   Lua 스크립트 한 번                   <- 동시성도 병목도 전부 여기다
 3. 발급 기록   인스턴스 큐 -> 배치 INSERT -> COMMIT  (여기서 1인 1매가 최종 판정된다)
 4. 응답        커밋과 Redis 확정 표시가 끝난 뒤
-```
-
-```mermaid
-flowchart TB
-    REQ["요청 스레드 (가상)"] --> CACHE{"자격 확인<br/>쿠폰 스냅샷 캐시"}
-    CACHE -->|"기간, 등급 미달"| E4xx["400 / 403"]
-    CACHE --> SLOT{"큐 자리가 있나"}
-    SLOT -->|"없다"| C503["503 혼잡<br/>재고는 남아 있다"]
-    SLOT --> LUA{{"순번 확보 Lua 한 번<br/>counter, seq, free, pending"}}
-
-    LUA -->|"counter 가 없다"| REBUILD["-2 거절<br/>재건을 깨운다"]
-    LUA -->|"확정 표시가 붙은 회원"| DUP["200 이미 발급<br/>DB 를 안 친다"]
-    LUA -->|"소진, pending 이 비었다"| G410["410 최종 소진"]
-    LUA -->|"소진, pending 이 남았다"| G409["409 소진<br/>번호가 돌아올 수 있다"]
-    LUA -->|"번호를 받았다"| Q[("인스턴스 큐<br/>seq, memberId, future")]
-
-    REQ -.->|"큐에 넣고 잔다"| Q
-    Q --> FLUSH["플러시 스레드 (플랫폼)<br/>batch-window 20ms 또는 batch-size 500"]
-    FLUSH --> INS["배치 INSERT + COMMIT<br/>여기서 1인 1매가 최종 판정된다"]
-    INS --> MARK["markCommitted<br/>seq 에 확정 표시, pending 에서 제거"]
-    MARK --> OK["200 발급<br/>요청 스레드를 깨운다"]
-    INS -->|"유니크 제약 위반"| REPAIR["반납과 매핑 수리<br/>free 로 돌리거나 주인을 되살린다"]
-
-    style LUA fill:#fff3cd,stroke:#d39e00
-    style INS fill:#d1ecf1,stroke:#0c5460
-    style OK fill:#d4edda,stroke:#155724
 ```
 
 **요청과 응답은 끝까지 동기다.** 뒤 버전들이 요청을 묶어 쓰지만 그것은 **묶어서 쓰되 커밋까지 기다리는 것**이지 나중에 쓰는 것이 아니다. 그래서 **앱이 발급됐다고 답한 요청은 반드시 행이 있다.**
@@ -451,7 +400,35 @@ flowchart TB
 POST /v1/admin/coupons/{couponId}:verifyConsistency
 ```
 
-앱은 발급 수와 카운터, 상한, 순번의 결번, 1인 1매, 상태와 이력의 일치를 본다.
+```mermaid
+flowchart TB
+    ADMIN["관리자"] -->|"POST /v1/admin/coupons/{couponId}:verifyConsistency"| CTL["AdminCouponConsistencyController"]
+    SCHED["CouponConsistencyScheduler<br/>batch 프로필, 매일 04:30 KST"] --> SVC
+    CTL --> SVC["CouponConsistencyService"]
+    SVC --> REPO["CouponConsistencyRepository<br/>집계 전용, JPA 안 쓴다"]
+
+    REPO --> T1[("member_coupon  300만 행")]
+    REPO --> T2[("member_coupon_status_history  420만 행")]
+    REPO --> T3[("coupon  issued_quantity, total_quantity")]
+
+    SVC --> CHK{"다섯을 본다"}
+    CHK --> V1["발급 수와 issued_quantity"]
+    CHK --> V2["발급 수와 total_quantity<br/>초과 또는 과소"]
+    CHK --> V3["순번의 연속성<br/>결번 수가 곧 어긋남이다"]
+    CHK --> V4["1인 1매"]
+    CHK --> V5["상태와 이력의 마지막 전이"]
+
+    V1 & V2 & V3 & V4 & V5 --> REP["CouponConsistencyReport<br/>리포트만. 고치지 않는다"]
+
+    style CHK fill:#fff3cd,stroke:#d39e00
+    style REP fill:#d4edda,stroke:#155724
+```
+
+**회수와 종료 배치가 끝난 뒤에 돈다.** 먼저 돌면 아직 보정되지 않은 것을 어긋남으로 센다.
+
+**고치지 않는다.** 회수는 고치는 것이고 검증은 재는 것이다. 검증이 고치면 재실행 결과가 달라져 요구사항을 위반한다.
+
+**배치 프로필만 `socketTimeout` 이 300초다.** 두 표를 통째로 훑는 한 문장이 전역값 10초를 넘기기 때문이다.
 
 **검증이 상태를 들고 있으면 안 된다.** 앱은 매번 300만 건을 처음부터 훑고 중간 결과를 저장하지 않는다. 그래야 같은 데이터로 재실행했을 때 같은 결과가 나온다.
 
