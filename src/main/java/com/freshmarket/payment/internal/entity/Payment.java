@@ -22,7 +22,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Payment extends BaseMutableTimeEntity {
 
-    private static final int PG_TID_MAX_LENGTH = 100;
+    // 토스페이먼츠 paymentKey의 최대 길이는 200자다. 실제 PG 식별자를 그대로 보관한다.
+    private static final int PG_TID_MAX_LENGTH = 200;
 
     @Column(name = "order_id", nullable = false)
     private Long orderId;
