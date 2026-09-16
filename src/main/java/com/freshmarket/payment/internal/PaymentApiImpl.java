@@ -5,7 +5,11 @@ import com.freshmarket.payment.PaymentInfo;
 import com.freshmarket.payment.PaymentRequest;
 import com.freshmarket.payment.PaymentResult;
 import com.freshmarket.payment.internal.client.PaymentGateway;
+import com.freshmarket.payment.internal.client.PaymentGatewayApproval;
+import com.freshmarket.payment.internal.client.exception.PaymentGatewayRejectedException;
+import com.freshmarket.payment.internal.client.exception.PaymentGatewayUnknownException;
 import com.freshmarket.payment.internal.entity.Payment;
+import com.freshmarket.payment.internal.service.PaymentResultOutboxDispatchService;
 import com.freshmarket.payment.internal.service.PaymentService;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +21,7 @@ import org.springframework.stereotype.Component;
 class PaymentApiImpl implements PaymentApi {
 
     private final PaymentService paymentService;
+    private final PaymentResultOutboxDispatchService paymentResultOutboxDispatchService;
     private final PaymentGateway paymentGateway;
 
     @Override
@@ -26,28 +31,40 @@ class PaymentApiImpl implements PaymentApi {
         if (!preparation.newlyPrepared()) {
             return PaymentResult.from(payment);
         }
+
         /*
-         * TODO: 실제 PG Gateway를 붙일 때 아래를 함께 구현한다.
+         * [2026-09-05 19:13 KST] 남은 TODO(실제 PG Gateway를 붙일 때 함께 구현):
          *
          * [중복 승인·결과 수렴]
          * - PG에 orderId 기반의 merchant payment key(또는 PG가 요구하는 고유 주문번호)를 보낸다.
          *   같은 결제 요청·웹훅·복구 작업이 여러 번 와도 PG 승인과 내부 상태가 한 건으로 수렴해야 한다.
          * - PG 웹훅은 서명, 이벤트 ID, 결제 금액, merchant key를 검증하고, 이벤트 ID도 별도로 멱등 처리한다.
-         * - PG 승인 성공 후 DB의 Payment/Order/재고 확정 트랜잭션이 실패할 수 있다. 이 경우 PG 거래를
-         *   재조회해 PAID로 복구할 수 있어야 하며, 단순히 PENDING Payment를 반환하고 끝내면 안 된다.
-         *
-         * [실패·불확실 상태]
-         * - 명확한 거절은 FAILED로 전이하고 PaymentFailedEvent를 발행한다.
-         * - 타임아웃·연결 단절처럼 PG 승인 결과를 알 수 없으면 UNKNOWN으로 기록한다. 재호출로 이중
-         *   승인하지 말고 PG 거래 조회 API와 복구 배치로 PAID 또는 FAILED를 확정한다.
-         * - 결제 유효시간 만료·최종 실패는 order 이벤트로 전달해 PAYMENT_PENDING 주문을 취소하고,
-         *   재고 예약 및 쿠폰 사용을 같은 보상 흐름에서 되돌린다.
          *
          * [운영]
          * - Gateway HTTP 연결/읽기 타임아웃, 제한된 재시도 정책, PG 원문 응답 코드·추적 ID 로그,
          *   성공·실패·UNKNOWN·복구 지연 메트릭과 알림을 추가한다.
          */
-        return paymentService.approvePayment(payment.getId(), paymentGateway.request(payment.toRequest()));
+        PaymentGatewayApproval approval;
+        try {
+            approval = paymentGateway.request(payment.toRequest());
+        } catch (PaymentGatewayRejectedException e) {
+            return dispatchResult(paymentService.failPayment(payment.getId(), e.getMessage()));
+        } catch (PaymentGatewayUnknownException e) {
+            return paymentService.markPaymentUnknown(payment.getId(), e.getMessage());
+        }
+
+        /*
+         * 승인 반영 트랜잭션과 결과 outbox 전달은 이미 각각 자기 실패 처리를 가진다.
+         * 여기서 둘을 RuntimeException으로 함께 잡아 UNKNOWN으로 바꾸면, PAID 커밋 뒤 전달 단계에서
+         * 난 예외까지 "승인 반영 실패"로 오인한다. DB 반영이 롤백된 경우는 PENDING으로 남아
+         * reconciliation이 PG 조회로 확정하고, PAID가 커밋된 경우는 결과 outbox가 재전송한다.
+         */
+        return dispatchResult(paymentService.approvePayment(payment.getId(), approval));
+    }
+
+    private PaymentResult dispatchResult(PaymentResult result) {
+        paymentResultOutboxDispatchService.dispatchForPayment(result.paymentId());
+        return result;
     }
 
     @Override

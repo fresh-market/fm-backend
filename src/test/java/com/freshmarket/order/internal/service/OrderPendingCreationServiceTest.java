@@ -22,10 +22,12 @@ import com.freshmarket.order.internal.dto.OrderCreateItemRequest;
 import com.freshmarket.order.internal.entity.Order;
 import com.freshmarket.order.internal.entity.OrderItem;
 import com.freshmarket.order.internal.entity.OrderPlacement;
+import com.freshmarket.order.internal.entity.OrderPaymentRequestOutbox;
 import com.freshmarket.order.internal.entity.OrderStatus;
 import com.freshmarket.order.internal.exception.OrderErrorCode;
 import com.freshmarket.order.internal.exception.OrderException;
 import com.freshmarket.order.internal.repository.OrderItemRepository;
+import com.freshmarket.order.internal.repository.OrderPaymentRequestOutboxRepository;
 import com.freshmarket.order.internal.repository.OrderRepository;
 import com.freshmarket.stock.StockApi;
 import com.freshmarket.stock.StockReservationRequest;
@@ -58,6 +60,9 @@ class OrderPendingCreationServiceTest {
     private OrderItemRepository orderItemRepository;
 
     @Mock
+    private OrderPaymentRequestOutboxRepository orderPaymentRequestOutboxRepository;
+
+    @Mock
     private CartApi cartApi;
 
     @Mock
@@ -78,7 +83,8 @@ class OrderPendingCreationServiceTest {
     void setUp() {
         Clock clock = Clock.fixed(Instant.parse("2026-08-21T03:00:00Z"), ZoneId.of("Asia/Seoul"));
         sut = new OrderPendingCreationService(
-                orderRepository, orderItemRepository, cartApi, memberApi, stockApi, productApi, orderNoGenerator, clock);
+                orderRepository, orderItemRepository, orderPaymentRequestOutboxRepository, cartApi, memberApi,
+                stockApi, productApi, orderNoGenerator, clock);
     }
 
     @Test
@@ -103,6 +109,7 @@ class OrderPendingCreationServiceTest {
         assertThat(captor.getValue().items()).hasSize(2);
 
         verify(cartApi).removeCheckedOutItems(MEMBER_ID, checkoutInfo().items());
+        verify(orderPaymentRequestOutboxRepository).save(any(OrderPaymentRequestOutbox.class));
     }
 
     @Test
@@ -119,6 +126,19 @@ class OrderPendingCreationServiceTest {
         verify(memberApi, never()).findAddress(any(), any());
         verify(cartApi, never()).getCheckoutItems(any(), any());
         verify(stockApi, never()).reserve(any());
+    }
+
+    @Test
+    void 기존_주문_조회는_같은_요청이면_기존_응답을_반환한다() {
+        OrderCreateRequest request = request();
+        Order existing = existingOrder("req-1", requestHash(MEMBER_ID, request));
+        ReflectionTestUtils.setField(existing, "id", 200L);
+        when(orderRepository.findByRequestId("req-1")).thenReturn(Optional.of(existing));
+
+        PendingOrderResult result = sut.findExistingOrderResult(MEMBER_ID, request).orElseThrow();
+
+        assertThat(result.newlyCreated()).isFalse();
+        assertThat(result.response().orderId()).isEqualTo(200L);
     }
 
     @Test
