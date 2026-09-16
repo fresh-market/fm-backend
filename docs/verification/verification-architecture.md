@@ -47,12 +47,12 @@
 fresh-market/.github (common)          fresh-market/fm-backend (backend)         fresh-market/fm-infra
 -----------------------         ------------------         -----------
 docs/software-quality/          docs/code-architecture/    docs/system-design/
-  qa-*.md          217건          *-guideline.md  276건      확정값의 근거
+  qa-*.md          219건          *-guideline.md  276건      확정값의 근거
   얼마나 잘 하는가                  어떻게 쓰는가              docs/infra-review/
                                                               *-guideline.md 120건
                                                               이 인프라가 강제하는 것
 .github/llm-verify/             .github/llm-verify/        .github/llm-verify/
-  items.yml        217            items.yml       276        items.yml       120
+  items.yml        219            items.yml       276        items.yml       120
   gen_items.py     생성기          anchors.yml     규칙 11
   run.py           실행기
   known-conflicts.yml
@@ -81,7 +81,7 @@ docs/verification/                 v-commit.md    Claude 편의 진입점
 
 | 파일 | 줄 | 하는 일 |
 |------|----|---------|
-| `qa-*.md` (11개) | - | 품질 속성 점검 항목 217건과 근거 |
+| `qa-*.md` (11개) | - | 품질 속성 점검 항목 219건과 근거 |
 | `*-guideline.md` (8개) | - | 코드 관용 점검 항목 276건 |
 | `infra-review/*-guideline.md` (3개) | - | 인프라 제약 120건 |
 | `system-design/*.md` (9개) | 165KB | 확정값의 근거. 판정에는 값만 쓴다 |
@@ -90,7 +90,7 @@ docs/verification/                 v-commit.md    Claude 편의 진입점
 
 | 파일 | 줄 | 하는 일 |
 |------|----|---------|
-| `common/.github/llm-verify/items.yml` | 224 | 217건. 문서에서 생성 |
+| `common/.github/llm-verify/items.yml` | 224 | 219건. 문서에서 생성 |
 | `backend/.github/llm-verify/items.yml` | 257 | 276건 |
 | `infra/.github/llm-verify/items.yml` | 107 | 120건 |
 | `backend/.github/llm-verify/anchors.yml` | 214 | 규칙 11개. **손으로 관리한다** |

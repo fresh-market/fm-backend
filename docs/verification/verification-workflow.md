@@ -141,11 +141,11 @@ RDS 상태, 대상 그룹 healthy 수, 인증서 잔여일, CPU 크레딧 잔량
 ## 카테고리가 어디서 오는가
 
 ```
-fresh-market/.github  docs/software-quality/    217건   품질 속성 (ISO 25010 기반)
+fresh-market/.github  docs/software-quality/    219건   품질 속성 (ISO 25010 기반)
 fresh-market/fm-backend  docs/code-architecture/   276건   코드 관용과 패턴
 fresh-market/fm-infra    docs/infra-review/        120건   인프라 결정이 코드에 부과하는 제약
                                          -----
-                                         613건
+                                         615건
 ```
 
 **판정 기준은 세 저장소에서 오지만 판정 대상은 backend 코드 하나다.**
@@ -167,7 +167,7 @@ src/test/**/*Test.java     ->  UT MNT
 build.gradle               ->  MNT PERF INF(10장)
 ```
 
-613건 중 **464건**이 어떤 규칙엔가 걸린다.
+615건 중 **464건**이 어떤 규칙엔가 걸린다.
 
 `SEC` 를 service 와 repository 에도 켜는 이유는, 소유권 검증과 쿼리 조립의 판정 대상이
 컨트롤러가 아니라 그 두 곳이기 때문이다. 컨트롤러만 트리거로 두면
@@ -226,15 +226,15 @@ build.gradle               ->  MNT PERF INF(10장)
 +--------------------------+---------------------------------------+
                            v
 +- 7  레지스트리 로드 ----------------------------------------------+
-|  읽음: common/.github/llm-verify/items.yml    217건  [ 있음 ]    |
+|  읽음: common/.github/llm-verify/items.yml    219건  [ 있음 ]    |
 |        backend/.github/llm-verify/items.yml   276건  [ 있음 ]    |
 |        infra/.github/llm-verify/items.yml     120건  [ 있음 ]    |
 |                                              ------              |
-|                                               613건              |
+|                                               615건              |
 +--------------------------+---------------------------------------+
                            v
 +- 8  필터 --------------------------------------------------------+
-|  613  --prefixes-->  --levels-->  --chapters-->  활성 ID 목록    |
+|  615  --prefixes-->  --levels-->  --chapters-->  활성 ID 목록    |
 |                                                                  |
 |  예) controller 규칙이면 214건                                   |
 +--------------------------+---------------------------------------+
@@ -322,7 +322,7 @@ PR 코멘트가 대화 맥락 안에 있어 찾기 쉽고, 같은 코멘트를 �
 | 4 | git diff | 판정 범위, 재판정 범위 | - |
 | 5 | `anchors.yml` | 규칙 11개 | 있음 |
 | 6 | (계산) | 앵커 목록, 활성 조건 | - |
-| 7 | `items.yml` x 3 | 613건 | 있음 |
+| 7 | `items.yml` x 3 | 615건 | 있음 |
 | 8 | (계산) | 활성 ID 목록 | - |
 | 9 | 가이드 문서 | 항목 본문과 설명 | 있음 |
 | 10 | system-design 9개, 165KB | 확정값 (2단계에만) | 있음 (조건부) |
@@ -334,7 +334,7 @@ PR 코멘트가 대화 맥락 안에 있어 찾기 쉽고, 같은 코멘트를 �
 ### 데이터가 좁혀지는 과정
 
 ```
-613건  세 저장소의 전체 점검 항목
+615건  세 저장소의 전체 점검 항목
   |
   |  prefixes   규칙이 지정한 문서군만
   v

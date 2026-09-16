@@ -669,14 +669,14 @@ coupon.warmup:
 flowchart TB
     subgraph SRC["1층  가이드 문서 (사람이 쓴다. 판정 기준의 원본)"]
         direction LR
-        DC["common<br/>qa-*.md  217건"]
+        DC["common<br/>qa-*.md  219건"]
         DB["backend<br/>*-guideline.md  276건"]
         DI["infra<br/>infra-review/*.md  120건"]
     end
 
     subgraph REG["2층  레지스트리 (기계가 읽는다. 문서의 파생물)"]
         direction LR
-        IC["items.yml  217"]
+        IC["items.yml  219"]
         IB["items.yml  276"]
         II["items.yml  120"]
     end
@@ -713,7 +713,7 @@ flowchart TB
 
 | 저장소 | 판정 기준 | 항목 | 무엇을 다루나 |
 |---|---|---:|---|
-| common | `qa-*.md` | 217 | 품질 속성 |
+| common | `qa-*.md` | 219 | 품질 속성 |
 | backend | `*-guideline.md` | 276 | 코드 관용과 패턴 |
 | infra | `infra-review/*-guideline.md` | 120 | 인프라 제약 |
 
