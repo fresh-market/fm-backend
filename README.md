@@ -185,7 +185,13 @@ Terraform 으로 코드화한 **단일 환경**이다(`ap-northeast-2`). 인프�
 
 ![AWS 아키텍처](./docs/images/aws-architecture.png)
 
-두 AZ(`ap-northeast-2a`, `2c`)에 걸쳐 있고, **ASG 가 둘**이다 - 평상시 앱과 선착순 전용. 그 밖에 모니터링(`t4g.small`), 배치(`t3.small`), 부하 시험용(시험 때만)이 단독 인스턴스로 있다. 저장소는 RDS MySQL 8.4 Multi-AZ 와 ElastiCache Valkey 9.0 (primary + replica, 자동 장애 조치)이고, 이미지는 S3 에 두고 CloudFront + OAC 로 내보낸다. 설정은 SSM Parameter Store 가, 알림은 CloudWatch -> SNS 가 맡는다.
+**두 AZ(`ap-northeast-2a`, `2c`)에 걸쳐 있다.**
+
+* **ASG 둘** - 평상시 앱과 선착순 전용
+* **단독 인스턴스 셋** - 모니터링(`t4g.small`), 배치(`t3.small`), 부하 시험용(시험 때만)
+* **저장소** - RDS MySQL 8.4 Multi-AZ, ElastiCache Valkey 9.0(primary + replica, 자동 장애 조치)
+* **이미지** - S3 에 두고 CloudFront + OAC 로 내보낸다
+* **설정과 알림** - SSM Parameter Store, CloudWatch -> SNS
 
 ### 고정 이중화 대신 오토스케일링
 
@@ -478,7 +484,11 @@ flowchart TB
 
 이 장은 **처음 요구 부하를 통과시킨 회차**와 거기서 찾아낸 것을 적는다. 시나리오는 [`loadtest/issue.js`](./loadtest/issue.js) 다.
 
-**그 뒤에 팀은 AWS 에 인프라를 올려 19회차를 더 돌렸다**(6.5). 장애 회차도 같은 인프라에서 돌렸다. 회차를 왜 그렇게 짰는지는 [coupon-load-scenarios.md](./docs/coupon/coupon-load-scenarios.md), 회차별 값은 [coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) 에 있다. 초기 회차 기록은 [`fm-infra`](https://github.com/fresh-market/fm-infra) 에 있다.
+**그 뒤에 팀은 AWS 에 인프라를 올려 19회차를 더 돌렸다**(6.5). 장애 회차도 같은 인프라에서 돌렸다.
+
+* 회차를 왜 그렇게 짰나 - [coupon-load-scenarios.md](./docs/coupon/coupon-load-scenarios.md)
+* 회차별 값 - [coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md)
+* 초기 회차 기록 - [`fm-infra`](https://github.com/fresh-market/fm-infra)
 
 ### 6.1 결과
 
@@ -532,7 +542,7 @@ waiting p99 (200)   약 270ms
 connecting, sending 거의 0
 ```
 
-서버가 답하는 시간보다 생성기가 연결을 기다린 시간이 길다. 소진이 나는 순간에 2만 VU 가 한꺼번에 연결을 잡으려 하기 때문이고, 7.1 에서 409 의 최대가 200 보다 두 배였던 것과 같은 현상이다. `connecting` 과 `sending` 이 0 에 가까우므로 네트워크나 전송이 아니라 **생성기 쪽 연결 확보**가 그 구간의 정체다. 실패율은 내내 0% 다.
+서버가 답하는 시간보다 생성기가 연결을 기다린 시간이 길다. 소진이 나는 순간에 2만 VU 가 한꺼번에 연결을 잡으려 하기 때문이고, 6.1 에서 409 의 최대가 200 보다 두 배였던 것과 같은 현상이다. `connecting` 과 `sending` 이 0 에 가까우므로 네트워크나 전송이 아니라 **생성기 쪽 연결 확보**가 그 구간의 정체다. 실패율은 내내 0% 다.
 
 ![스레드 수, 프로세스 CPU, 배치](./docs/images/loadtest/threads-cpu-batch.png)
 
