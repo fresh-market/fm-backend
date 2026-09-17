@@ -177,4 +177,32 @@ class ExpiringSoonServiceIntegrationTest {
         assertThat(secondPage.items().get(0).productOptionId())
                 .isNotEqualTo(firstPage.items().get(0).productOptionId());
     }
+
+    /*
+     * 관리자가 재실행하면 그날 행이 새로 만들어져 확정본 버전이 바뀐다.
+     * 캐시 키에 그 버전이 들어 있어 옛 응답을 다시 내보내지 않는다.
+     *
+     * 이 검증이 필요한 이유가 있다. 캐시는 로컬(JVM)이라 재실행이 들어온 인스턴스에서
+     * 비워봐야 나머지 인스턴스는 그대로다. 무효화가 아니라 키 분리로 푸는 설계라
+     * "키가 실제로 갈리는가" 가 곧 정확성이다.
+     */
+    @Test
+    void 재확정하면_캐시된_옛_목록을_주지_않는다() {
+        // given — 감귤을 확정하고 한 번 조회해 캐시에 담는다
+        saveTargetLot("감귤", 1);
+        CursorPageResponse<ExpiringSoonResponse> before =
+                expiringSoonService.getExpiringSoonProducts(null, null, 20);
+        assertThat(before.items().get(0).productName()).isEqualTo("감귤");
+
+        // when — 그날 확정본을 지우고 다른 상품으로 다시 확정한다 (재실행과 같은 모양)
+        campaignTargetLotRepository.deleteByTargetDate(TODAY);
+        saveTargetLot("사과", 1);
+
+        // then — 캐시를 비우지 않았는데도 새 확정본이 나온다
+        CursorPageResponse<ExpiringSoonResponse> after =
+                expiringSoonService.getExpiringSoonProducts(null, null, 20);
+
+        assertThat(after.items()).hasSize(1);
+        assertThat(after.items().get(0).productName()).isEqualTo("사과");
+    }
 }
