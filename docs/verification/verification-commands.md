@@ -212,7 +212,7 @@ python3 gen_items.py ../../docs/software-quality 'qa-*.md' common \
 ```
 
 ```
-OK  common 217건. 문서와 레지스트리가 일치한다
+OK  common 219건. 문서와 레지스트리가 일치한다
 ```
 
 어긋나면 무엇이 다른지 diff 를 찍고 **종료 코드 1** 을 낸다.
