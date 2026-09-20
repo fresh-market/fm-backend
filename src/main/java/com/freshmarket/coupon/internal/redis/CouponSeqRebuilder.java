@@ -102,8 +102,8 @@ public class CouponSeqRebuilder {
             return;
         }
 
-        String token = UUID.randomUUID().toString();
-        if (!acquireLock(couponId, token)) {
+        RebuildLock lock = RebuildLock.start();
+        if (!acquireLock(couponId, lock)) {
             contributor.contribute(couponId);
             return;
         }
@@ -113,7 +113,7 @@ public class CouponSeqRebuilder {
             Thread.currentThread().interrupt();
             log.warn("event=COUPON_SEQ_REBUILD_INTERRUPTED couponId={}", couponId);
         } finally {
-            releaseLock(couponId, token);
+            releaseLock(couponId, lock);
         }
     }
 
@@ -304,9 +304,9 @@ public class CouponSeqRebuilder {
      * 락 키가 곧 "재건 중" 표시다.
      * 락을 못 잡은 인스턴스는 이 키가 있는 것을 보고 자기 큐를 올린다.
      */
-    private boolean acquireLock(long couponId, String token) {
+    private boolean acquireLock(long couponId, RebuildLock lock) {
         return Boolean.TRUE.equals(
-                redisTemplate.opsForValue().setIfAbsent(CouponSeqKeys.rebuild(couponId), token, lockTtl));
+                redisTemplate.opsForValue().setIfAbsent(CouponSeqKeys.rebuild(couponId), lock.value(), lockTtl));
     }
 
     /*
@@ -314,9 +314,9 @@ public class CouponSeqRebuilder {
      * 읽고 지우는 사이가 원자적이지 않아 아주 드물게 남의 락을 지울 수 있다. 그때도 잃는 것은
      * 없다. 뒤늦게 들어온 쪽이 카운터가 이미 선 것을 보고 그대로 돌아간다.
      */
-    private void releaseLock(long couponId, String token) {
+    private void releaseLock(long couponId, RebuildLock lock) {
         String key = CouponSeqKeys.rebuild(couponId);
-        if (token.equals(redisTemplate.opsForValue().get(key))) {
+        if (lock.value().equals(redisTemplate.opsForValue().get(key))) {
             redisTemplate.delete(key);
         }
     }
