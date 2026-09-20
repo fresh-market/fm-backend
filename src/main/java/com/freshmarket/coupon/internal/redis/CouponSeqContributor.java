@@ -4,11 +4,15 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
+import java.util.concurrent.TimeUnit;
 
 import com.freshmarket.coupon.internal.issue.CouponIssueFlusher;
 import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.issue.CouponIssueQueue;
 import com.freshmarket.coupon.internal.issue.IssueTicket;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -35,20 +39,28 @@ public class CouponSeqContributor {
      */
     private static final Duration PAUSE_TIMEOUT = Duration.ofSeconds(2);
 
+    private static final String LAG = "coupon.seq.rebuild.contribute.lag";
+
     private final StringRedisTemplate redisTemplate;
     private final CouponIssueQueue queue;
     private final CouponIssueFlusher flusher;
     private final Duration queuedTtl;
+    private final Timer lag;
 
     public CouponSeqContributor(StringRedisTemplate redisTemplate,
                                 CouponIssueQueue queue,
                                 CouponIssueFlusher flusher,
-                                CouponIssueProperties properties) {
+                                CouponIssueProperties properties,
+                                MeterRegistry registry) {
         this.redisTemplate = redisTemplate;
         this.queue = queue;
         this.flusher = flusher;
         // 재건 락과 같은 수명이다. 재건이 끝나기 전에 사라지면 주도자가 이 인스턴스의 큐를 못 읽는다
         this.queuedTtl = properties.rebuildContributeWait().multipliedBy(10);
+        this.lag = Timer.builder(LAG)
+                .description("재건이 시작된 뒤 이 인스턴스가 자기 큐를 다 올리기까지 걸린 시간")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
     }
 
     /**
@@ -75,10 +87,37 @@ public class CouponSeqContributor {
              * 아무도 안 지운다. 그래서 여기서 직접 시한을 건다.
              */
             redisTemplate.expire(key, queuedTtl);
-            log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={}", couponId, mine.size());
+            recordLag(couponId, mine.size());
         } finally {
             flusher.resume();
         }
+    }
+
+    /**
+     * 주도자가 락을 세운 뒤 이 인스턴스가 다 올리기까지 걸린 시간을 남긴다.
+     *
+     * <p><b>이 값이 {@code rebuild-contribute-wait} 를 좁히는 근거다.</b> 지금 3초는 GC 정지와
+     * 배치 하나를 덮을 만큼으로 고른 값이지 실측으로 좁힌 값이 아니다. 회차마다 가장 늦은 기여가
+     * 몇 밀리초였는지 쌓이면 그 분포를 보고 줄일 수 있다.
+     *
+     * <p>재는 데 실패해도 기여는 이미 끝났다. 그래서 여기서 예외를 밖으로 안 보낸다.
+     */
+    private void recordLag(long couponId, int size) {
+        OptionalLong startedAt = OptionalLong.empty();
+        try {
+            startedAt = RebuildLock.startedAtOf(
+                    redisTemplate.opsForValue().get(CouponSeqKeys.rebuild(couponId)));
+        } catch (RuntimeException e) {
+            log.debug("event=COUPON_SEQ_CONTRIBUTE_LAG_UNKNOWN couponId={}", couponId, e);
+        }
+        if (startedAt.isEmpty()) {
+            log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={}", couponId, size);
+            return;
+        }
+        long lagMillis = Math.max(0, System.currentTimeMillis() - startedAt.getAsLong());
+        lag.record(lagMillis, TimeUnit.MILLISECONDS);
+        log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={} lagMillis={}",
+                couponId, size, lagMillis);
     }
 
     private Map<String, String> mineFor(long couponId) {

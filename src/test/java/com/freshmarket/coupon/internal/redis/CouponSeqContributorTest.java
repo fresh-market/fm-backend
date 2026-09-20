@@ -11,12 +11,15 @@ import static org.mockito.Mockito.when;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import com.freshmarket.coupon.internal.entity.CouponScope;
 import com.freshmarket.coupon.internal.issue.CouponIssueFlusher;
 import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.issue.CouponIssueQueue;
 import com.freshmarket.coupon.internal.issue.IssueTicket;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,6 +30,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 /*
  * 이 인스턴스가 쥔 순번을 올리는 자리를 본다.
@@ -52,11 +56,17 @@ class CouponSeqContributorTest {
     @Mock
     private CouponIssueFlusher flusher;
 
+    @Mock
+    private ValueOperations<String, String> valueOperations;
+
+    private MeterRegistry registry;
+
     private CouponSeqContributor sut;
 
     @BeforeEach
     void 준비() {
-        sut = new CouponSeqContributor(redisTemplate, queue, flusher, 기본_설정());
+        registry = new SimpleMeterRegistry();
+        sut = new CouponSeqContributor(redisTemplate, queue, flusher, 기본_설정(), registry);
     }
 
     @Test
@@ -151,8 +161,74 @@ class CouponSeqContributorTest {
         verify(redisTemplate, never()).expire(anyString(), any(Duration.class));
     }
 
+    /*
+     * 이 값이 rebuild-contribute-wait 를 좁히는 근거다.
+     * 지금 3초는 GC 정지와 배치 하나를 덮을 만큼으로 고른 값이지 실측으로 좁힌 값이 아니다.
+     */
+    @Test
+    void 늦은_정도를_잰다() {
+        given큐에(티켓(9101, 1));
+        given플러시가_멈춘다();
+        given재건이_시작된_지(120);
+
+        sut.contribute(COUPON_ID);
+
+        assertThat(잰_횟수()).isEqualTo(1);
+        assertThat(잰_최댓값()).isGreaterThanOrEqualTo(120);
+    }
+
+    /*
+     * 배포가 도는 동안에는 시작 시각이 없는 옛 형식의 락이 있을 수 있다.
+     * 지표 하나 때문에 기여가 막히면 재건이 그 인스턴스의 번호를 남에게 내준다.
+     */
+    @Test
+    void 락을_못_읽어도_올리기는_끝낸다() {
+        given큐에(티켓(9101, 1));
+        given플러시가_멈춘다();
+        given락_값이("시작-시각-없는-옛-형식");
+
+        sut.contribute(COUPON_ID);
+
+        assertThat(올린_것()).containsOnlyKeys("9101");
+        assertThat(잰_횟수()).isZero();
+    }
+
+    /*
+     * 재는 시점에는 올리기가 이미 끝나 있다.
+     * 여기서 터진 것을 밖으로 보내면 플러시 루프가 그 배치를 실패로 처리해, 지표 하나 때문에
+     * 멀쩡히 끝난 기여가 오류로 남는다.
+     */
+    @Test
+    void 재다가_터져도_기여는_성공으로_끝낸다() {
+        given큐에(티켓(9101, 1));
+        given플러시가_멈춘다();
+        when(redisTemplate.opsForValue()).thenThrow(new IllegalStateException("Redis 가 답하지 않는다"));
+
+        sut.contribute(COUPON_ID);
+
+        assertThat(올린_것()).containsOnlyKeys("9101");
+        verify(flusher).resume();
+    }
+
     private void given플러시가_멈춘다() {
         when(flusher.pause(any(Duration.class))).thenReturn(true);
+    }
+
+    private void given재건이_시작된_지(long millis) {
+        given락_값이(new RebuildLock("토큰", System.currentTimeMillis() - millis).value());
+    }
+
+    private void given락_값이(String raw) {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("coupon:9001:rebuild")).thenReturn(raw);
+    }
+
+    private long 잰_횟수() {
+        return registry.timer("coupon.seq.rebuild.contribute.lag").count();
+    }
+
+    private double 잰_최댓값() {
+        return registry.timer("coupon.seq.rebuild.contribute.lag").max(TimeUnit.MILLISECONDS);
     }
 
     /*
