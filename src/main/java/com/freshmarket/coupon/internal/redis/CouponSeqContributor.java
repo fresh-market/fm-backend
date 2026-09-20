@@ -77,6 +77,12 @@ public class CouponSeqContributor {
         try {
             Map<String, String> mine = mineFor(couponId);
             if (mine.isEmpty()) {
+                /*
+                 * 올릴 것이 없어도 늦은 정도는 잰다.
+                 * 안 재면 "기여가 안 늦었다" 와 "올릴 것이 없었다" 가 지표에서 같아진다.
+                 * 2026-09-21 회차가 전부 후자였는데 표본이 0건이라 그 사실을 지표로는 못 봤다.
+                 */
+                recordLag(couponId, 0);
                 return;
             }
             String key = CouponSeqKeys.rebuildQueued(couponId);

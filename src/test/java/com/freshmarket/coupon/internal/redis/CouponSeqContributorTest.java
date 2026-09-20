@@ -150,6 +150,23 @@ class CouponSeqContributorTest {
         verify(redisTemplate).expire("coupon:9001:rebuild:queued", Duration.ofSeconds(30));
     }
 
+    /*
+     * 올릴 것이 없어도 늦은 정도는 재야 한다.
+     * 안 재면 "기여가 안 늦었다" 와 "올릴 것이 없었다" 가 지표에서 같아진다.
+     * 2026-09-21 회차가 전부 후자였는데 표본이 0건이라 그 사실을 지표로는 못 봤다.
+     */
+    @Test
+    void 큐가_비어도_늦은_정도는_잰다() {
+        given큐에();
+        given플러시가_멈춘다();
+        given재건이_시작된_지(80);
+
+        sut.contribute(COUPON_ID);
+
+        assertThat(잰_횟수()).isEqualTo(1);
+        assertThat(잰_최댓값()).isGreaterThanOrEqualTo(80);
+    }
+
     // 올릴 것이 없으면 키를 안 만들므로 시한도 안 건다
     @Test
     void 큐가_비었으면_시한도_안_건다() {
