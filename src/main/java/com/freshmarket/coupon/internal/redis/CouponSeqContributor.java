@@ -39,7 +39,7 @@ public class CouponSeqContributor {
      */
     private static final Duration PAUSE_TIMEOUT = Duration.ofSeconds(2);
 
-    private static final String LAG = "coupon.seq.rebuild.contribute.lag";
+    private static final String CONTRIBUTE_LAG = "coupon.seq.rebuild.contribute.lag";
 
     private final StringRedisTemplate redisTemplate;
     private final CouponIssueQueue queue;
@@ -57,7 +57,7 @@ public class CouponSeqContributor {
         this.flusher = flusher;
         // 재건 락과 같은 수명이다. 재건이 끝나기 전에 사라지면 주도자가 이 인스턴스의 큐를 못 읽는다
         this.queuedTtl = properties.rebuildContributeWait().multipliedBy(10);
-        this.lag = Timer.builder(LAG)
+        this.lag = Timer.builder(CONTRIBUTE_LAG)
                 .description("재건이 시작된 뒤 이 인스턴스가 자기 큐를 다 올리기까지 걸린 시간")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
