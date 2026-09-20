@@ -771,6 +771,7 @@ api-contract migration  app-config test         archunit        build
 | [coupon/coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) | 회차별 설정과 실측값 |
 | [coupon/coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) | 회수 기준 시간을 60초로 둔 근거 |
 | [coupon/warmup.md](./docs/coupon/warmup.md) | 워밍업이 무엇을 데우고 무엇을 못 데우나 |
+| [coupon/rebuild-measurement-2026-09-21.md](./docs/coupon/rebuild-measurement-2026-09-21.md) | 재건을 실제로 일으켜 본 회차와 거기서 찾은 것 |
 | [coupon/virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) | 가상 스레드를 어떻게 쟀나 |
 | [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
 | [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |
