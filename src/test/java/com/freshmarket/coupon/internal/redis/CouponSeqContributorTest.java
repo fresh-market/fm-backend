@@ -14,12 +14,13 @@ import java.util.Map;
 
 import com.freshmarket.coupon.internal.entity.CouponScope;
 import com.freshmarket.coupon.internal.issue.CouponIssueFlusher;
+import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.issue.CouponIssueQueue;
 import com.freshmarket.coupon.internal.issue.IssueTicket;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -51,8 +52,12 @@ class CouponSeqContributorTest {
     @Mock
     private CouponIssueFlusher flusher;
 
-    @InjectMocks
     private CouponSeqContributor sut;
+
+    @BeforeEach
+    void 준비() {
+        sut = new CouponSeqContributor(redisTemplate, queue, flusher, 기본_설정());
+    }
 
     @Test
     void 자기_큐의_순번을_올린다() {
@@ -120,8 +125,50 @@ class CouponSeqContributorTest {
         verify(flusher).resume();
     }
 
+    /*
+     * 이 키만 counter 의 만료를 물려받을 자리가 없다.
+     * 지우는 것이 재건 주도자의 정리 한 번뿐이라, 그 정리와 락 해제 사이에 올린 기여는 아무도
+     * 안 지운다. 시한이 없으면 그 해시가 Redis 에 영영 남는다.
+     */
+    @Test
+    void 올린_큐에_시한을_건다() {
+        given큐에(티켓(9101, 1));
+        given플러시가_멈춘다();
+
+        sut.contribute(COUPON_ID);
+
+        verify(redisTemplate).expire("coupon:9001:rebuild:queued", Duration.ofSeconds(30));
+    }
+
+    // 올릴 것이 없으면 키를 안 만들므로 시한도 안 건다
+    @Test
+    void 큐가_비었으면_시한도_안_건다() {
+        given큐에();
+        given플러시가_멈춘다();
+
+        sut.contribute(COUPON_ID);
+
+        verify(redisTemplate, never()).expire(anyString(), any(Duration.class));
+    }
+
     private void given플러시가_멈춘다() {
         when(flusher.pause(any(Duration.class))).thenReturn(true);
+    }
+
+    /*
+     * 시한은 재건 락과 같은 수명이라 rebuildContributeWait 의 열 배다.
+     * 나머지 값은 이 시험이 안 보므로 운영 기본값을 그대로 쓴다.
+     */
+    private static CouponIssueProperties 기본_설정() {
+        return new CouponIssueProperties(
+                Duration.ofSeconds(60),
+                Duration.ofMillis(20),
+                500,
+                1,
+                Integer.MAX_VALUE,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(3),
+                Duration.ofSeconds(5));
     }
 
     private void given큐에(IssueTicket... tickets) {

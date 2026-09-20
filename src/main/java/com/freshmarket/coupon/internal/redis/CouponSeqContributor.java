@@ -6,9 +6,9 @@ import java.util.List;
 import java.util.Map;
 
 import com.freshmarket.coupon.internal.issue.CouponIssueFlusher;
+import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.issue.CouponIssueQueue;
 import com.freshmarket.coupon.internal.issue.IssueTicket;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -26,7 +26,6 @@ import org.springframework.stereotype.Component;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class CouponSeqContributor {
 
     /*
@@ -39,6 +38,18 @@ public class CouponSeqContributor {
     private final StringRedisTemplate redisTemplate;
     private final CouponIssueQueue queue;
     private final CouponIssueFlusher flusher;
+    private final Duration queuedTtl;
+
+    public CouponSeqContributor(StringRedisTemplate redisTemplate,
+                                CouponIssueQueue queue,
+                                CouponIssueFlusher flusher,
+                                CouponIssueProperties properties) {
+        this.redisTemplate = redisTemplate;
+        this.queue = queue;
+        this.flusher = flusher;
+        // 재건 락과 같은 수명이다. 재건이 끝나기 전에 사라지면 주도자가 이 인스턴스의 큐를 못 읽는다
+        this.queuedTtl = properties.rebuildContributeWait().multipliedBy(10);
+    }
 
     /**
      * 이 인스턴스의 큐에서 이 쿠폰의 티켓을 골라 올린다.
@@ -56,7 +67,14 @@ public class CouponSeqContributor {
             if (mine.isEmpty()) {
                 return;
             }
-            redisTemplate.opsForHash().putAll(CouponSeqKeys.rebuildQueued(couponId), mine);
+            String key = CouponSeqKeys.rebuildQueued(couponId);
+            redisTemplate.opsForHash().putAll(key, mine);
+            /*
+             * 이 키는 다른 넷과 달리 counter 의 만료를 물려받을 자리가 없다.
+             * 지우는 것이 주도자의 정리 한 번뿐이라, 그 정리와 락 해제 사이에 올린 기여는
+             * 아무도 안 지운다. 그래서 여기서 직접 시한을 건다.
+             */
+            redisTemplate.expire(key, queuedTtl);
             log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={}", couponId, mine.size());
         } finally {
             flusher.resume();
