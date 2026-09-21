@@ -50,6 +50,9 @@ class CouponSeqRebuildTriggerTest {
     @Mock
     private ValueOperations<String, String> valueOperations;
 
+    @Mock
+    private CouponSeqInstances instances;
+
     private MeterRegistry registry;
 
     @BeforeEach
@@ -59,7 +62,7 @@ class CouponSeqRebuildTriggerTest {
     }
 
     private CouponSeqRebuildTrigger 트리거() {
-        return new CouponSeqRebuildTrigger(rebuilder, redisTemplate, registry);
+        return new CouponSeqRebuildTrigger(rebuilder, redisTemplate, instances, registry);
     }
 
     private void given카운터가(String value) {

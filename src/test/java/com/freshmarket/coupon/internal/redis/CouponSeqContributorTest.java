@@ -29,6 +29,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.HashOperations;
+import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -59,6 +60,12 @@ class CouponSeqContributorTest {
     @Mock
     private ValueOperations<String, String> valueOperations;
 
+    @Mock
+    private SetOperations<String, String> setOperations;
+
+    @Mock
+    private CouponSeqInstances instances;
+
     private MeterRegistry registry;
 
     private CouponSeqContributor sut;
@@ -66,7 +73,9 @@ class CouponSeqContributorTest {
     @BeforeEach
     void 준비() {
         registry = new SimpleMeterRegistry();
-        sut = new CouponSeqContributor(redisTemplate, queue, flusher, 기본_설정(), registry);
+        when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        when(instances.id()).thenReturn("인스턴스-가");
+        sut = new CouponSeqContributor(redisTemplate, queue, flusher, instances, 기본_설정(), registry);
     }
 
     @Test
@@ -167,15 +176,19 @@ class CouponSeqContributorTest {
         assertThat(잰_최댓값()).isGreaterThanOrEqualTo(80);
     }
 
-    // 올릴 것이 없으면 키를 안 만들므로 시한도 안 건다
+    /*
+     * 올릴 것이 없으면 rebuild:queued 를 안 만들므로 거기에 시한도 안 건다.
+     * 완료 표시는 빈 큐에서도 남기므로 키를 좁혀 본다. 안 좁히면 그쪽 시한에 걸려 시험이
+     * 지키려던 것과 다른 것을 재게 된다.
+     */
     @Test
-    void 큐가_비었으면_시한도_안_건다() {
+    void 큐가_비었으면_올린_큐에_시한을_안_건다() {
         given큐에();
         given플러시가_멈춘다();
 
         sut.contribute(COUPON_ID);
 
-        verify(redisTemplate, never()).expire(anyString(), any(Duration.class));
+        verify(redisTemplate, never()).expire(eq("coupon:9001:rebuild:queued"), any(Duration.class));
     }
 
     /*
@@ -238,6 +251,48 @@ class CouponSeqContributorTest {
     private void given락_값이(String raw) {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get("coupon:9001:rebuild")).thenReturn(raw);
+    }
+
+    /*
+     * lag 하나로는 rebuild-contribute-wait 를 못 정한다.
+     * 그 값이 덮어야 하는 것은 총합인데, 총합이 큰 이유가 "이 인스턴스가 늦게 불렸다" 인지
+     * "올리는 데 오래 걸렸다" 인지에 따라 고칠 자리가 정반대다. 그래서 셋으로 가른다.
+     */
+    @Test
+    void 기여_시간을_셋으로_가른다() {
+        given큐에(티켓(9101, 1));
+        given플러시가_멈춘다();
+        given재건이_시작된_지(120);
+
+        sut.contribute(COUPON_ID);
+
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.pause").count()).isEqualTo(1);
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.write").count()).isEqualTo(1);
+        assertThat(잰_횟수()).isEqualTo(1);
+    }
+
+    // 올릴 것이 없어도 세 구간을 다 잰다. 안 그러면 빈 기여가 분포에서 빠진다
+    @Test
+    void 큐가_비어도_셋을_다_잰다() {
+        given큐에();
+        given플러시가_멈춘다();
+        given재건이_시작된_지(50);
+
+        sut.contribute(COUPON_ID);
+
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.pause").count()).isEqualTo(1);
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.write").count()).isEqualTo(1);
+    }
+
+    // 큐를 못 얼렸으면 올리지도 않았으므로 쓴 시간이 없다
+    @Test
+    void 큐를_못_얼리면_쓴_시간을_안_잰다() {
+        when(flusher.pause(any(Duration.class))).thenReturn(false);
+
+        sut.contribute(COUPON_ID);
+
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.write").count()).isZero();
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.pause").count()).isZero();
     }
 
     private long 잰_횟수() {
