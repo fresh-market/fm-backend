@@ -55,7 +55,7 @@ max_over_time(coupon_issue_queue_size[45m]) = 92
 
 `loadtest-fault.sh cache-failover` 를 부하 중에 걸었는데 **재건 로그가 한 줄도 안 나왔다.** 복제본이 승격돼도 데이터가 복제돼 있어 **네 키가 그대로 살아남는다.**
 
-**재건은 승격이 아니라 진짜 키 손실에서만 돈다.** 장애 주입으로 재건을 재현하려면 키를 직접 지워야 한다.
+**재건은 승격이 아니라 진짜 키 손실에서만 돈다.** 장애 주입으로 재건을 재현하려면 키를 직접 지워야 한다. 이 회차에서는 손으로 보냈다.
 
 ```
 (쿠폰 인스턴스에서)
@@ -65,6 +65,16 @@ printf 'DEL coupon:900001:counter\r\n' | nc $H 6379
 ```
 
 **배치 인스턴스에서는 안 된다.** 보안 그룹이 배치에서 캐시로 가는 6379 를 막아 둬서 명령이 캐시에 닿지도 않는다. 처음에 그걸 모르고 배치에서 보내 한 회차를 헛돌았다.
+
+**이 절차는 `fm-infra` 의 시나리오가 됐다.** 손으로 보내던 것을 `loadtest-fault.sh` 가 받았다.
+
+```bash
+./scripts/loadtest-fault.sh lost-tail --lost 200   # 복제가 밀린 채 승격
+./scripts/loadtest-fault.sh seq-loss --backlog 5   # 큐를 쌓은 뒤 counter 를 지운다
+./scripts/loadtest-fault.sh cache-wipe             # 순번 네 키를 전부 지운다
+```
+
+**여기서 이 회차가 놓친 것이 드러났다.** 이 회차가 만든 것은 키가 통째로 사라지는 전손인데, **Multi-AZ 복제에서 가장 안 일어나는 모양이다.** 실제 페일오버에서 확률이 높은 것은 복제가 밀린 채 승격돼 `counter` 가 뒤로 가는 것이고, 그때는 `-2` 가 안 나오므로 **재건이 아예 안 걸린다**([재건 문서](redis-promotion-rebuild.md) 7장). 막는 것은 앱이 아니라 스키마의 `uk_mc_coupon_seq` 다. `lost-tail` 이 그 모양을 만든다.
 
 ### 3.2 DB 가 죽어 있으면 시작조차 못 하는 재건
 
@@ -113,7 +123,8 @@ if (mine.isEmpty()) {
 
 ## 6. 다음에 할 것
 
-1. **빈 기여도 재도록 고친다**(3.3). 이것 없이는 3초를 못 좁힌다
-2. `cache-failover` 로는 재건이 안 난다는 것을 `redis-promotion-rebuild.md` 에 적는다(3.1)
-3. DB 가 죽어 있으면 재건이 대기한다는 것을 `coupon-failure.md` 에 적는다(3.2)
-4. 그 뒤에 회차를 다시 돌려 `lagMillis` 분포를 얻는다
+1. **빈 기여도 재도록 고친다**(3.3). 이것 없이는 3초를 못 좁힌다. **끝냈다**
+2. `cache-failover` 로는 재건이 안 난다는 것을 `redis-promotion-rebuild.md` 에 적는다(3.1). **끝냈다**
+3. DB 가 죽어 있으면 재건이 시작조차 못 한다는 것을 `coupon-failure.md` 에 적는다(3.2). **끝냈다**
+4. **`lost-tail` 회차를 돌린다.** 이 회차가 한 번도 안 만들어 본 모양이고 실제로는 이쪽이 더 흔하다. `counter` 가 뒤로 갔을 때 스키마가 정말로 막는지, 그때 응답이 무엇인지를 본다
+5. `seq-loss --backlog` 로 회차를 다시 돌려 `lagMillis` 분포를 얻는다
