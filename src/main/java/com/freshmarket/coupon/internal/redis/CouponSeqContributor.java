@@ -40,12 +40,16 @@ public class CouponSeqContributor {
     private static final Duration PAUSE_TIMEOUT = Duration.ofSeconds(2);
 
     private static final String CONTRIBUTE_LAG = "coupon.seq.rebuild.contribute.lag";
+    private static final String CONTRIBUTE_PAUSE = "coupon.seq.rebuild.contribute.pause";
+    private static final String CONTRIBUTE_WRITE = "coupon.seq.rebuild.contribute.write";
 
     private final StringRedisTemplate redisTemplate;
     private final CouponIssueQueue queue;
     private final CouponIssueFlusher flusher;
     private final Duration queuedTtl;
     private final Timer lag;
+    private final Timer pauseWait;
+    private final Timer write;
 
     public CouponSeqContributor(StringRedisTemplate redisTemplate,
                                 CouponIssueQueue queue,
@@ -61,6 +65,21 @@ public class CouponSeqContributor {
                 .description("재건이 시작된 뒤 이 인스턴스가 자기 큐를 다 올리기까지 걸린 시간")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
+        /*
+         * lag 을 셋으로 가르려고 둘을 더 둔다.
+         *
+         * lag 은 "락이 선 때부터 다 올린 때까지" 라 그 안에 세 가지가 섞여 있다. 이 메서드에
+         * 들어오기까지 기다린 시간, pause 가 돌던 배치를 기다린 시간, 훑고 쓴 시간이다.
+         * 셋의 처방이 서로 다르므로 총합만 보고 rebuild-contribute-wait 를 건드리면 안 된다.
+         *
+         * 들어오기까지 기다린 시간은 따로 안 잰다. lag 에서 아래 둘을 빼면 그것이다.
+         */
+        this.pauseWait = Timer.builder(CONTRIBUTE_PAUSE)
+                .description("기여가 돌던 배치가 끝나기를 기다린 시간")
+                .register(registry);
+        this.write = Timer.builder(CONTRIBUTE_WRITE)
+                .description("기여가 자기 큐를 훑어 Redis 에 쓴 시간")
+                .register(registry);
     }
 
     /**
@@ -70,10 +89,13 @@ public class CouponSeqContributor {
      * 미확정으로 덮어 회수가 확정된 번호를 남에게 넘긴다.
      */
     public void contribute(long couponId) {
+        long enteredAt = System.nanoTime();
         if (!flusher.pause(PAUSE_TIMEOUT)) {
             log.warn("event=COUPON_SEQ_CONTRIBUTE_SKIPPED couponId={} reason=pause-timeout", couponId);
             return;
         }
+        long pausedAt = System.nanoTime();
+        pauseWait.record(pausedAt - enteredAt, TimeUnit.NANOSECONDS);
         try {
             Map<String, String> mine = mineFor(couponId);
             if (mine.isEmpty()) {
@@ -82,7 +104,7 @@ public class CouponSeqContributor {
                  * 안 재면 "기여가 안 늦었다" 와 "올릴 것이 없었다" 가 지표에서 같아진다.
                  * 2026-09-21 회차가 전부 후자였는데 표본이 0건이라 그 사실을 지표로는 못 봤다.
                  */
-                recordLag(couponId, 0);
+                recordLag(couponId, 0, enteredAt, pausedAt);
                 return;
             }
             String key = CouponSeqKeys.rebuildQueued(couponId);
@@ -93,7 +115,7 @@ public class CouponSeqContributor {
              * 아무도 안 지운다. 그래서 여기서 직접 시한을 건다.
              */
             redisTemplate.expire(key, queuedTtl);
-            recordLag(couponId, mine.size());
+            recordLag(couponId, mine.size(), enteredAt, pausedAt);
         } finally {
             flusher.resume();
         }
@@ -108,7 +130,11 @@ public class CouponSeqContributor {
      *
      * <p>재는 데 실패해도 기여는 이미 끝났다. 그래서 여기서 예외를 밖으로 안 보낸다.
      */
-    private void recordLag(long couponId, int size) {
+    private void recordLag(long couponId, int size, long enteredAt, long pausedAt) {
+        long writeMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pausedAt);
+        long pauseMillis = TimeUnit.NANOSECONDS.toMillis(pausedAt - enteredAt);
+        write.record(System.nanoTime() - pausedAt, TimeUnit.NANOSECONDS);
+
         OptionalLong startedAt = OptionalLong.empty();
         try {
             startedAt = RebuildLock.startedAtOf(
@@ -117,13 +143,20 @@ public class CouponSeqContributor {
             log.debug("event=COUPON_SEQ_CONTRIBUTE_LAG_UNKNOWN couponId={}", couponId, e);
         }
         if (startedAt.isEmpty()) {
-            log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={}", couponId, size);
+            log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={} pauseMillis={} writeMillis={}",
+                    couponId, size, pauseMillis, writeMillis);
             return;
         }
         long lagMillis = Math.max(0, System.currentTimeMillis() - startedAt.getAsLong());
         lag.record(lagMillis, TimeUnit.MILLISECONDS);
-        log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={} lagMillis={}",
-                couponId, size, lagMillis);
+        /*
+         * 셋을 한 줄에 같이 낸다.
+         * lag 에서 pause 와 write 를 빼면 이 메서드에 들어오기까지 기다린 시간이고, 그 값이
+         * 크면 고칠 자리가 기여가 아니라 그 앞이다. 지표를 못 보는 자리에서도 읽히게 한다.
+         */
+        log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={} lagMillis={} pauseMillis={} writeMillis={} waitMillis={}",
+                couponId, size, lagMillis, pauseMillis, writeMillis,
+                Math.max(0, lagMillis - pauseMillis - writeMillis));
     }
 
     private Map<String, String> mineFor(long couponId) {

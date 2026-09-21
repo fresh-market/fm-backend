@@ -240,6 +240,48 @@ class CouponSeqContributorTest {
         when(valueOperations.get("coupon:9001:rebuild")).thenReturn(raw);
     }
 
+    /*
+     * lag 하나로는 rebuild-contribute-wait 를 못 정한다.
+     * 그 값이 덮어야 하는 것은 총합인데, 총합이 큰 이유가 "이 인스턴스가 늦게 불렸다" 인지
+     * "올리는 데 오래 걸렸다" 인지에 따라 고칠 자리가 정반대다. 그래서 셋으로 가른다.
+     */
+    @Test
+    void 기여_시간을_셋으로_가른다() {
+        given큐에(티켓(9101, 1));
+        given플러시가_멈춘다();
+        given재건이_시작된_지(120);
+
+        sut.contribute(COUPON_ID);
+
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.pause").count()).isEqualTo(1);
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.write").count()).isEqualTo(1);
+        assertThat(잰_횟수()).isEqualTo(1);
+    }
+
+    // 올릴 것이 없어도 세 구간을 다 잰다. 안 그러면 빈 기여가 분포에서 빠진다
+    @Test
+    void 큐가_비어도_셋을_다_잰다() {
+        given큐에();
+        given플러시가_멈춘다();
+        given재건이_시작된_지(50);
+
+        sut.contribute(COUPON_ID);
+
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.pause").count()).isEqualTo(1);
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.write").count()).isEqualTo(1);
+    }
+
+    // 큐를 못 얼렸으면 올리지도 않았으므로 쓴 시간이 없다
+    @Test
+    void 큐를_못_얼리면_쓴_시간을_안_잰다() {
+        when(flusher.pause(any(Duration.class))).thenReturn(false);
+
+        sut.contribute(COUPON_ID);
+
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.write").count()).isZero();
+        assertThat(registry.timer("coupon.seq.rebuild.contribute.pause").count()).isZero();
+    }
+
     private long 잰_횟수() {
         return registry.timer("coupon.seq.rebuild.contribute.lag").count();
     }
