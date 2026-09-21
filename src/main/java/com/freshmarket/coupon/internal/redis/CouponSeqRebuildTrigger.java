@@ -79,11 +79,6 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
     @Override
     public void checkAfterFlush(long couponId, int maxIssuedSeq) {
         try {
-            /*
-             * 명부를 여기서 갱신한다. 이 자리가 맞는 이유는 플러시 루프가 큐에 티켓이 있을 때만
-             * 여기까지 오기 때문이다. 갱신이 신선한 것과 큐를 쥐고 있는 것이 같은 뜻이 된다.
-             */
-            instances.refresh();
             if (Boolean.TRUE.equals(redisTemplate.hasKey(CouponSeqKeys.rebuild(couponId)))) {
                 suspect(couponId);
             }
@@ -140,6 +135,17 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
         behind.record(gap);
         log.error("event=COUPON_SEQ_COUNTER_BEHIND couponId={} counter={} seen={} gap={}",
                 couponId, counter, mark, gap);
+    }
+
+    /**
+     * 큐를 쥐었다고 명부에 알린다. 플러시가 배치를 집은 직후에 부른다.
+     *
+     * <p><b>쓰기 성공에 묶으면 안 된다.</b> DB 가 막힌 인스턴스가 배치를 못 끝내 알림이 멈추면
+     * 큐를 쥐고 있는데도 명부에서 빠진다. 실제 회차에서 그렇게 됐다.
+     */
+    @Override
+    public void holdingQueue() {
+        instances.refresh();
     }
 
     /**
