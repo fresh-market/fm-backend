@@ -29,6 +29,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.HashOperations;
+import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -59,6 +60,12 @@ class CouponSeqContributorTest {
     @Mock
     private ValueOperations<String, String> valueOperations;
 
+    @Mock
+    private SetOperations<String, String> setOperations;
+
+    @Mock
+    private CouponSeqInstances instances;
+
     private MeterRegistry registry;
 
     private CouponSeqContributor sut;
@@ -66,7 +73,9 @@ class CouponSeqContributorTest {
     @BeforeEach
     void 준비() {
         registry = new SimpleMeterRegistry();
-        sut = new CouponSeqContributor(redisTemplate, queue, flusher, 기본_설정(), registry);
+        when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        when(instances.id()).thenReturn("인스턴스-가");
+        sut = new CouponSeqContributor(redisTemplate, queue, flusher, instances, 기본_설정(), registry);
     }
 
     @Test
@@ -167,15 +176,19 @@ class CouponSeqContributorTest {
         assertThat(잰_최댓값()).isGreaterThanOrEqualTo(80);
     }
 
-    // 올릴 것이 없으면 키를 안 만들므로 시한도 안 건다
+    /*
+     * 올릴 것이 없으면 rebuild:queued 를 안 만들므로 거기에 시한도 안 건다.
+     * 완료 표시는 빈 큐에서도 남기므로 키를 좁혀 본다. 안 좁히면 그쪽 시한에 걸려 시험이
+     * 지키려던 것과 다른 것을 재게 된다.
+     */
     @Test
-    void 큐가_비었으면_시한도_안_건다() {
+    void 큐가_비었으면_올린_큐에_시한을_안_건다() {
         given큐에();
         given플러시가_멈춘다();
 
         sut.contribute(COUPON_ID);
 
-        verify(redisTemplate, never()).expire(anyString(), any(Duration.class));
+        verify(redisTemplate, never()).expire(eq("coupon:9001:rebuild:queued"), any(Duration.class));
     }
 
     /*

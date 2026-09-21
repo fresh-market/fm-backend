@@ -55,13 +55,16 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
 
     private final CouponSeqRebuilder rebuilder;
     private final StringRedisTemplate redisTemplate;
+    private final CouponSeqInstances instances;
     private final DistributionSummary behind;
 
     public CouponSeqRebuildTrigger(CouponSeqRebuilder rebuilder,
                                    StringRedisTemplate redisTemplate,
+                                   CouponSeqInstances instances,
                                    MeterRegistry registry) {
         this.rebuilder = rebuilder;
         this.redisTemplate = redisTemplate;
+        this.instances = instances;
         this.behind = DistributionSummary.builder(COUNTER_BEHIND)
                 .description("카운터가 이미 나간 순번보다 얼마나 뒤처졌나. 정상 운영에서는 표본이 0건이다")
                 .register(registry);
@@ -76,6 +79,11 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
     @Override
     public void checkAfterFlush(long couponId, int maxIssuedSeq) {
         try {
+            /*
+             * 명부를 여기서 갱신한다. 이 자리가 맞는 이유는 플러시 루프가 큐에 티켓이 있을 때만
+             * 여기까지 오기 때문이다. 갱신이 신선한 것과 큐를 쥐고 있는 것이 같은 뜻이 된다.
+             */
+            instances.refresh();
             if (Boolean.TRUE.equals(redisTemplate.hasKey(CouponSeqKeys.rebuild(couponId)))) {
                 suspect(couponId);
             }

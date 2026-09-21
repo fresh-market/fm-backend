@@ -46,6 +46,7 @@ public class CouponSeqContributor {
     private final StringRedisTemplate redisTemplate;
     private final CouponIssueQueue queue;
     private final CouponIssueFlusher flusher;
+    private final CouponSeqInstances instances;
     private final Duration queuedTtl;
     private final Timer lag;
     private final Timer pauseWait;
@@ -54,11 +55,13 @@ public class CouponSeqContributor {
     public CouponSeqContributor(StringRedisTemplate redisTemplate,
                                 CouponIssueQueue queue,
                                 CouponIssueFlusher flusher,
+                                CouponSeqInstances instances,
                                 CouponIssueProperties properties,
                                 MeterRegistry registry) {
         this.redisTemplate = redisTemplate;
         this.queue = queue;
         this.flusher = flusher;
+        this.instances = instances;
         // 재건 락과 같은 수명이다. 재건이 끝나기 전에 사라지면 주도자가 이 인스턴스의 큐를 못 읽는다
         this.queuedTtl = properties.rebuildContributeWait().multipliedBy(10);
         this.lag = Timer.builder(CONTRIBUTE_LAG)
@@ -104,6 +107,7 @@ public class CouponSeqContributor {
                  * 안 재면 "기여가 안 늦었다" 와 "올릴 것이 없었다" 가 지표에서 같아진다.
                  * 2026-09-21 회차가 전부 후자였는데 표본이 0건이라 그 사실을 지표로는 못 봤다.
                  */
+                markDone(couponId);
                 recordLag(couponId, 0, enteredAt, pausedAt);
                 return;
             }
@@ -115,6 +119,7 @@ public class CouponSeqContributor {
              * 아무도 안 지운다. 그래서 여기서 직접 시한을 건다.
              */
             redisTemplate.expire(key, queuedTtl);
+            markDone(couponId);
             recordLag(couponId, mine.size(), enteredAt, pausedAt);
         } finally {
             flusher.resume();
@@ -157,6 +162,20 @@ public class CouponSeqContributor {
         log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={} lagMillis={} pauseMillis={} writeMillis={} waitMillis={}",
                 couponId, size, lagMillis, pauseMillis, writeMillis,
                 Math.max(0, lagMillis - pauseMillis - writeMillis));
+    }
+
+    /**
+     * 다 올렸다고 이름을 남긴다. 주도자는 이 수가 명부의 수에 닿으면 기다림을 끝낸다.
+     *
+     * <p><b>올릴 것이 없었을 때도 남긴다.</b> "아직 안 올렸다" 와 "올릴 것이 없었다" 를 주도자가
+     * 구분하지 못하면, 올릴 것이 없는 인스턴스 하나 때문에 정해진 시간을 끝까지 기다린다.
+     *
+     * <p>이 표시를 올리기보다 먼저 하면 안 된다. 주도자가 아직 안 들어온 큐를 다 온 것으로 보고
+     * 진행한다. <b>반드시 쓰기가 끝난 뒤다.</b>
+     */
+    private void markDone(long couponId) {
+        redisTemplate.opsForSet().add(CouponSeqKeys.rebuildDone(couponId), instances.id());
+        redisTemplate.expire(CouponSeqKeys.rebuildDone(couponId), queuedTtl);
     }
 
     private Map<String, String> mineFor(long couponId) {
