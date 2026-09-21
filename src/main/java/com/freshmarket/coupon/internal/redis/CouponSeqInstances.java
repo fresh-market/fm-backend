@@ -95,7 +95,7 @@ class CouponSeqInstances {
             long millis = System.currentTimeMillis();
             redisTemplate.opsForZSet().add(KEY, id, millis);
             // 갱신하는 김에 오래된 것을 치운다. 이 호출이 주기마다 한 번이라 비용이 없다
-            redisTemplate.opsForZSet().removeRangeByScore(KEY, 0, millis - PRUNE_AFTER.toMillis());
+            redisTemplate.opsForZSet().removeRangeByScore(KEY, 0, (double) millis - PRUNE_AFTER.toMillis());
         } catch (DataAccessException e) {
             log.debug("event=COUPON_SEQ_INSTANCE_REFRESH_FAILED id={}", id, e);
         }
@@ -110,7 +110,7 @@ class CouponSeqInstances {
     int live() {
         try {
             Long count = redisTemplate.opsForZSet()
-                    .count(KEY, System.currentTimeMillis() - STALE_AFTER.toMillis(), Double.MAX_VALUE);
+                    .count(KEY, (double) System.currentTimeMillis() - STALE_AFTER.toMillis(), Double.MAX_VALUE);
             return count == null ? 0 : count.intValue();
         } catch (DataAccessException e) {
             log.debug("event=COUPON_SEQ_INSTANCE_COUNT_FAILED", e);

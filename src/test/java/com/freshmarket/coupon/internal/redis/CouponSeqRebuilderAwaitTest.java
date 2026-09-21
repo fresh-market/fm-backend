@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -89,9 +91,9 @@ class CouponSeqRebuilderAwaitTest {
         when(instances.live()).thenReturn(3);
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
 
-        long 걸린시간 = 재_보기();
+        long elapsed = 재_보기();
 
-        assertThat(걸린시간).isLessThan(기다림.toMillis());
+        assertThat(elapsed).isLessThan(기다림.toMillis());
     }
 
     /*
@@ -104,9 +106,9 @@ class CouponSeqRebuilderAwaitTest {
         when(instances.live()).thenReturn(3);
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
 
-        long 걸린시간 = 재_보기();
+        long elapsed = 재_보기();
 
-        assertThat(걸린시간).isGreaterThanOrEqualTo(기다림.toMillis());
+        assertThat(elapsed).isGreaterThanOrEqualTo(기다림.toMillis());
     }
 
     /*
@@ -118,9 +120,9 @@ class CouponSeqRebuilderAwaitTest {
         when(instances.live()).thenReturn(0);
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(5L);
 
-        long 걸린시간 = 재_보기();
+        long elapsed = 재_보기();
 
-        assertThat(걸린시간).isGreaterThanOrEqualTo(기다림.toMillis());
+        assertThat(elapsed).isGreaterThanOrEqualTo(기다림.toMillis());
     }
 
     // 표시가 명부보다 많아도 끝낸다. 명부에서 막 빠진 인스턴스가 남긴 것일 수 있다
@@ -133,13 +135,13 @@ class CouponSeqRebuilderAwaitTest {
     }
 
     private long 재_보기() {
-        long 시작 = System.nanoTime();
+        long startedAt = System.nanoTime();
         sut.rebuildIfLost(COUPON_ID);
-        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - 시작);
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
     }
 
     private static Coupon 선착순_쿠폰() {
-        Coupon coupon = org.mockito.Mockito.mock(Coupon.class);
+        Coupon coupon = mock(Coupon.class);
         when(coupon.isActive()).thenReturn(true);
         when(coupon.isLimited()).thenReturn(true);
         when(coupon.getIssueEndAt()).thenReturn(LocalDateTime.now().plusDays(1));

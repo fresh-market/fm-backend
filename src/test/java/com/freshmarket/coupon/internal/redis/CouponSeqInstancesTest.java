@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -50,9 +51,9 @@ class CouponSeqInstancesTest {
     // 인스턴스마다 다른 이름이어야 한다. 같으면 명부가 늘 한 대로 보인다
     @Test
     void 식별자가_인스턴스마다_다르다() {
-        CouponSeqInstances 다른_인스턴스 = new CouponSeqInstances(redisTemplate);
+        CouponSeqInstances other = new CouponSeqInstances(redisTemplate);
 
-        assertThat(sut.id()).isNotBlank().isNotEqualTo(다른_인스턴스.id());
+        assertThat(sut.id()).isNotBlank().isNotEqualTo(other.id());
     }
 
     /*
@@ -83,15 +84,15 @@ class CouponSeqInstancesTest {
     @Test
     void 치우는_경계가_살아있는_구간보다_오래됐다() {
         sut.refresh();
-        org.mockito.ArgumentCaptor<Double> 치운_경계 = org.mockito.ArgumentCaptor.forClass(Double.class);
-        verify(zSetOperations).removeRangeByScore(eq(KEY), eq(0d), 치운_경계.capture());
+        ArgumentCaptor<Double> pruned = ArgumentCaptor.forClass(Double.class);
+        verify(zSetOperations).removeRangeByScore(eq(KEY), eq(0d), pruned.capture());
 
         when(zSetOperations.count(eq(KEY), anyDouble(), anyDouble())).thenReturn(1L);
         sut.live();
-        org.mockito.ArgumentCaptor<Double> 살아있는_경계 = org.mockito.ArgumentCaptor.forClass(Double.class);
-        verify(zSetOperations).count(eq(KEY), 살아있는_경계.capture(), anyDouble());
+        ArgumentCaptor<Double> alive = ArgumentCaptor.forClass(Double.class);
+        verify(zSetOperations).count(eq(KEY), alive.capture(), anyDouble());
 
-        assertThat(치운_경계.getValue()).isLessThan(살아있는_경계.getValue());
+        assertThat(pruned.getValue()).isLessThan(alive.getValue());
     }
 
     /*
