@@ -48,10 +48,26 @@ class CouponSeqInstances {
      */
     private static final Duration STALE_AFTER = Duration.ofSeconds(10);
 
+    /*
+     * 이 시간이 지난 등록은 아예 치운다.
+     *
+     * 식별자를 JVM 마다 새로 만들므로 배포와 교체가 있을 때마다 항목이 하나씩 는다. 치우지
+     * 않으면 명부가 끝없이 자란다. live 가 구간만 세어 답은 계속 맞으므로 아무도 안 알아챈다.
+     *
+     * STALE_AFTER 보다 훨씬 넉넉해야 한다. live 가 세는 구간을 치우면 살아 있는 인스턴스를
+     * 지우고, 그러면 주도자가 그 인스턴스를 안 기다린 채 키를 세운다.
+     */
+    private static final Duration PRUNE_AFTER = Duration.ofMinutes(10);
+
     private final StringRedisTemplate redisTemplate;
     private final String id = UUID.randomUUID().toString();
 
-    private volatile long refreshedAtNanos = Long.MIN_VALUE;
+    /*
+     * nanoTime 의 기준점은 임의라 차이로만 비교해야 한다.
+     * MIN_VALUE 로 두면 now 와의 뺄셈이 오버플로해 음수가 되고, 그러면 첫 호출이 "방금
+     * 갱신했다" 로 읽혀 명부에 아무도 안 올라간다.
+     */
+    private volatile long refreshedAtNanos = System.nanoTime() - REFRESH_EVERY.toNanos();
 
     CouponSeqInstances(StringRedisTemplate redisTemplate) {
         this.redisTemplate = redisTemplate;
@@ -76,7 +92,10 @@ class CouponSeqInstances {
         }
         refreshedAtNanos = now;
         try {
-            redisTemplate.opsForZSet().add(KEY, id, System.currentTimeMillis());
+            long millis = System.currentTimeMillis();
+            redisTemplate.opsForZSet().add(KEY, id, millis);
+            // 갱신하는 김에 오래된 것을 치운다. 이 호출이 주기마다 한 번이라 비용이 없다
+            redisTemplate.opsForZSet().removeRangeByScore(KEY, 0, millis - PRUNE_AFTER.toMillis());
         } catch (DataAccessException e) {
             log.debug("event=COUPON_SEQ_INSTANCE_REFRESH_FAILED id={}", id, e);
         }
