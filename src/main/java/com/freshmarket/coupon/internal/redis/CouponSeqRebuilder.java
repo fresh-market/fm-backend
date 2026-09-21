@@ -59,11 +59,15 @@ public class CouponSeqRebuilder {
 
     private static final String COMMITTED_SUFFIX = ":1";
 
+    // 다 모였는지 보는 주기다. 짧아야 다 모인 순간과 끝내는 순간의 차이가 작다
+    private static final long AWAIT_POLL_MILLIS = 20;
+
     private final StringRedisTemplate redisTemplate;
     private final CouponRepository couponRepository;
     private final MemberCouponSeqRepository seqRepository;
     private final CouponSeqInitializer seqInitializer;
     private final CouponSeqContributor contributor;
+    private final CouponSeqInstances instances;
     private final Duration contributeWait;
     private final Duration lockTtl;
 
@@ -72,12 +76,14 @@ public class CouponSeqRebuilder {
                               MemberCouponSeqRepository seqRepository,
                               CouponSeqInitializer seqInitializer,
                               CouponSeqContributor contributor,
+                              CouponSeqInstances instances,
                               CouponIssueProperties properties) {
         this.redisTemplate = redisTemplate;
         this.couponRepository = couponRepository;
         this.seqRepository = seqRepository;
         this.seqInitializer = seqInitializer;
         this.contributor = contributor;
+        this.instances = instances;
         this.contributeWait = properties.rebuildContributeWait();
         // 기다림과 쓰기가 끝나기 전에 락이 풀리면 두 인스턴스가 같이 쓴다. 넉넉히 잡는다
         this.lockTtl = properties.rebuildContributeWait().multipliedBy(10);
@@ -151,7 +157,7 @@ public class CouponSeqRebuilder {
                 couponId, contributeWait.toMillis());
 
         contributor.contribute(couponId);
-        Thread.sleep(contributeWait.toMillis());
+        awaitContributions(couponId);
 
         // 기다리는 동안 관리자가 이벤트를 다시 열었을 수 있다. 그러면 그쪽 카운터를 덮으면 안 된다
         if (counterExists(couponId)) {
@@ -173,6 +179,40 @@ public class CouponSeqRebuilder {
         log.warn("event=COUPON_SEQ_REBUILT couponId={} issued={} queued={} maxSeq={} freed={}",
                 couponId, issued.size(), queued.size(), maxSeq,
                 maxSeq - issued.size() - queued.size());
+    }
+
+    /**
+     * 남들이 자기 큐를 다 올리기를 기다린다.
+     *
+     * <p><b>예전에는 여기서 고정으로 잤다.</b> 주도자가 몇 대를 기다려야 하는지 몰라 시간으로
+     * 때웠고, 그 시간이 재건 정지의 대부분이었다. 명부가 생긴 뒤로는 <b>다 모이면 그 자리에서
+     * 끝낸다.</b> 정해진 시간은 바닥이 아니라 천장이 된다.
+     *
+     * <p><b>천장은 없앨 수 없다.</b> 죽었거나 먹통인 인스턴스는 영영 표시를 안 남긴다.
+     *
+     * <p><b>명부를 못 읽으면 기다림을 안 줄인다.</b> 살아 있는 수를 0 으로 받았을 때 "다 모였다"
+     * 로 읽으면 아무도 안 기다린 채 키를 세우게 된다. 모르는 채로 일찍 끝내는 것이 이 기능에서
+     * 가장 나쁜 결과다.
+     */
+    private void awaitContributions(long couponId) throws InterruptedException {
+        long deadline = System.nanoTime() + contributeWait.toNanos();
+        while (System.nanoTime() < deadline) {
+            int live = instances.live();
+            if (live > 0 && doneCount(couponId) >= live) {
+                log.info("event=COUPON_SEQ_CONTRIBUTIONS_COMPLETE couponId={} instances={} waitedMillis={}",
+                        couponId, live,
+                        contributeWait.toMillis() - TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
+                return;
+            }
+            Thread.sleep(AWAIT_POLL_MILLIS);
+        }
+        log.warn("event=COUPON_SEQ_CONTRIBUTIONS_TIMEOUT couponId={} instances={} done={} waitedMillis={}",
+                couponId, instances.live(), doneCount(couponId), contributeWait.toMillis());
+    }
+
+    private int doneCount(long couponId) {
+        Long done = redisTemplate.opsForSet().size(CouponSeqKeys.rebuildDone(couponId));
+        return done == null ? 0 : done.intValue();
     }
 
     /*
@@ -263,6 +303,8 @@ public class CouponSeqRebuilder {
 
     private void clearContributions(long couponId) {
         redisTemplate.unlink(CouponSeqKeys.rebuildQueued(couponId));
+        // 완료 표시도 함께 지운다. 안 지우면 다음 재건이 지난 회차의 수를 보고 즉시 끝낸다
+        redisTemplate.unlink(CouponSeqKeys.rebuildDone(couponId));
     }
 
     /*

@@ -52,12 +52,15 @@ class CouponSeqRebuilderEntryTest {
     @Mock
     private CouponSeqContributor contributor;
 
+    @Mock
+    private CouponSeqInstances instances;
+
     private CouponSeqRebuilder sut;
 
     @BeforeEach
     void 준비() {
         sut = new CouponSeqRebuilder(redisTemplate, couponRepository, seqRepository,
-                seqInitializer, contributor, 기본_설정());
+                seqInitializer, contributor, instances, 기본_설정());
     }
 
     // 카운터가 서 있으면 멀쩡한 것이다. DB 까지 갈 이유가 없다
