@@ -90,20 +90,39 @@ public class CouponSeqRebuilder {
      * 몫</b>이고, 주도하는 쪽은 남의 큐를 알 방법이 없다.
      *
      * <p>{@code -2} 는 손실만 뜻하지 않는다. 관리자가 아직 안 연 이벤트도 같은 값을 내므로
-     * <b>그 둘을 DB 로 가른다.</b>
+     * <b>그 둘을 DB 로 가른다.</b> 다만 그 판정은 주도하려는 쪽만 한다.
      */
     public void rebuildIfLost(long couponId) {
+        if (counterExists(couponId)) {
+            return;
+        }
+
+        /*
+         * 이미 재건이 돌고 있으면 DB 를 안 보고 기여만 하고 돌아간다.
+         *
+         * 락이 있다는 것은 주도자가 DB 로 "진짜 손실" 이라고 이미 판정했다는 뜻이다. 그 판정을
+         * 여기서 또 할 이유가 없다.
+         *
+         * 이 한 줄이 필요한 이유는 DB 장애가 겹칠 때다. 기여는 Redis 와 자기 큐만 건드리는데,
+         * 아래 findById 뒤에 두면 DB 에 못 닿는 인스턴스가 거기서 터져 자기 큐를 영영 못 올린다.
+         * 큐는 Redis 가 죽어도 살아 있는 유일한 미확정 기록이라, 안 올리면 재건이 그 번호들을
+         * 아무도 안 쥔 것으로 보고 남에게 다시 내준다. 보호가 가장 필요한 상황에서 그 보호가
+         * 사라진다 (docs/coupon/rebuild-measurement-2026-09-21b.md 3장).
+         */
+        if (rebuildInProgress(couponId)) {
+            contributor.contribute(couponId);
+            return;
+        }
+
         Coupon coupon = couponRepository.findById(couponId).orElse(null);
         if (coupon == null || !coupon.isActive() || !coupon.isLimited()) {
             // 관리자가 아직 안 열었거나 선착순 쿠폰이 아니다. 카운터가 없는 것이 정상이다
             return;
         }
-        if (counterExists(couponId)) {
-            return;
-        }
 
         RebuildLock lock = RebuildLock.start();
         if (!acquireLock(couponId, lock)) {
+            // 위 확인과 여기 사이에 남이 잡았다. 그쪽이 주도자이므로 올리기만 한다
             contributor.contribute(couponId);
             return;
         }
@@ -298,6 +317,11 @@ public class CouponSeqRebuilder {
 
     private boolean counterExists(long couponId) {
         return Boolean.TRUE.equals(redisTemplate.hasKey(CouponSeqKeys.counter(couponId)));
+    }
+
+    // 락 키가 곧 "누가 이미 주도하고 있다" 는 표시다
+    private boolean rebuildInProgress(long couponId) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(CouponSeqKeys.rebuild(couponId)));
     }
 
     /*

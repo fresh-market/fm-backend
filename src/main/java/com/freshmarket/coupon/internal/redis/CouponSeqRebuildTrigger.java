@@ -1,5 +1,6 @@
 package com.freshmarket.coupon.internal.redis;
 
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -7,9 +8,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 
 import jakarta.annotation.PreDestroy;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import com.freshmarket.coupon.internal.issue.CouponSeqRebuildSignal;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -29,10 +31,17 @@ import org.springframework.stereotype.Component;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
 
+    private static final String COUNTER_BEHIND = "coupon.seq.counter.behind";
+
     private final Set<Long> inProgress = ConcurrentHashMap.newKeySet();
+
+    /*
+     * 이 인스턴스가 이 쿠폰에서 지금까지 본 가장 큰 순번이다.
+     * 카운터가 뒤로 갔는지를 이것과 견줘서 안다. 카운터가 사라진 동안에는 지운다.
+     */
+    private final Map<Long, Integer> highWater = new ConcurrentHashMap<>();
 
     /*
      * 스레드 하나로 족하다. 재건은 이벤트당 많아야 몇 번 도는 일이고, 둘이 붙어 봐야 같은 락을
@@ -46,18 +55,31 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
 
     private final CouponSeqRebuilder rebuilder;
     private final StringRedisTemplate redisTemplate;
+    private final DistributionSummary behind;
+
+    public CouponSeqRebuildTrigger(CouponSeqRebuilder rebuilder,
+                                   StringRedisTemplate redisTemplate,
+                                   MeterRegistry registry) {
+        this.rebuilder = rebuilder;
+        this.redisTemplate = redisTemplate;
+        this.behind = DistributionSummary.builder(COUNTER_BEHIND)
+                .description("카운터가 이미 나간 순번보다 얼마나 뒤처졌나. 정상 운영에서는 표본이 0건이다")
+                .register(registry);
+    }
 
     /**
      * 플러시 스레드가 배치를 쓴 뒤 부른다. 재건 중이면 이 인스턴스도 자기 큐를 올려야 한다.
+     * 같은 자리에서 카운터가 뒤처지지 않았는지도 잰다.
      *
-     * <p>확인이 키 하나 읽기이고 배치당 한 번이라 값이 싸다. 창 20밀리초 기준으로 초당 50번이다.
+     * <p>확인이 키 두 개 읽기이고 배치당 한 번이라 값이 싸다. 창 20밀리초 기준으로 초당 100번이다.
      */
     @Override
-    public void checkAfterFlush(long couponId) {
+    public void checkAfterFlush(long couponId, int maxIssuedSeq) {
         try {
             if (Boolean.TRUE.equals(redisTemplate.hasKey(CouponSeqKeys.rebuild(couponId)))) {
                 suspect(couponId);
             }
+            measureBehind(couponId, maxIssuedSeq);
         } catch (DataAccessException e) {
             /*
              * 이 확인이 실패해도 방금 쓴 배치는 이미 성공한 것이다.
@@ -69,6 +91,47 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
              */
             log.debug("event=COUPON_SEQ_REBUILD_CHECK_FAILED couponId={}", couponId, e);
         }
+    }
+
+    /**
+     * 카운터가 이미 나간 순번보다 뒤처졌는지 잰다.
+     *
+     * <p><b>이 식은 깨질 수 없다.</b> 번호는 카운터를 {@code INCR} 한 뒤에야 나가고 카운터는
+     * 정상적으로 줄지 않으므로, 카운터는 나간 어느 번호보다도 크거나 같다.
+     *
+     * <pre>
+     * counter &gt;= 이 배치의 최대 순번      재건이 살아 있는 티켓보다 낮게 문을 열면 깨진다
+     * counter &gt;= 여태 본 최대 순번        복제가 밀린 채 승격돼 카운터가 뒤로 가면 깨진다
+     * </pre>
+     *
+     * <p><b>재기만 하고 재건은 안 띄운다.</b> 재건은 그 이벤트의 플러시를 3초 넘게 멈추므로
+     * 오탐이 곧 장애다. 정상 운영에서 이 표본이 0건이라는 것을 회차로 확인한 뒤에 붙인다
+     * ({@code docs/coupon/rebuild-measurement-2026-09-21b.md} 5장).
+     *
+     * <p><b>카운터가 없으면 기준을 버린다.</b> 재건 중이거나 이벤트가 닫힌 것이라 견줄 대상이
+     * 아니다. 다만 이 때문에 이벤트를 발급 이력째 다시 준비하면 그 첫 배치가 한 번 걸릴 수 있다.
+     */
+    private void measureBehind(long couponId, int maxIssuedSeq) {
+        String raw = redisTemplate.opsForValue().get(CouponSeqKeys.counter(couponId));
+        if (raw == null) {
+            highWater.remove(couponId);
+            return;
+        }
+        int mark = highWater.merge(couponId, maxIssuedSeq, Math::max);
+        long counter;
+        try {
+            counter = Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            log.warn("event=COUPON_SEQ_COUNTER_UNREADABLE couponId={} value={}", couponId, raw);
+            return;
+        }
+        if (counter >= mark) {
+            return;
+        }
+        long gap = mark - counter;
+        behind.record(gap);
+        log.error("event=COUPON_SEQ_COUNTER_BEHIND couponId={} counter={} seen={} gap={}",
+                couponId, counter, mark, gap);
     }
 
     /**

@@ -197,8 +197,11 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 /*
                  * 재건이 도는지 배치마다 한 번 본다. 요청당이 아니라 배치당이라 값이 싸다.
                  * 이 확인이 없으면 요청을 못 받는 인스턴스가 자기 큐를 영영 안 올린다 (coupon.md 9장).
+                 *
+                 * 방금 쓴 최대 순번을 함께 넘긴다. 카운터가 그보다 작으면 깨질 수 없는 식이 깨진
+                 * 것이고, 그 비교를 여기서만 공짜로 할 수 있다. 번호를 쥔 쪽이 이 스레드다.
                  */
-                rebuildSignal.getObject().checkAfterFlush(couponId);
+                rebuildSignal.getObject().checkAfterFlush(couponId, maxIssuedSeq(batch));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 failAll(batch, IssueResult.ABORTED);
@@ -445,6 +448,19 @@ public class CouponIssueFlusher implements SmartLifecycle {
             return new IssueOutcome.Congested(IssueResult.DB_FAILED);
         }
         return new IssueOutcome.Failed();
+    }
+
+    /*
+     * 이 배치에 든 가장 큰 순번이다.
+     * 행이 되었는지는 안 본다. 번호가 나간 순간 이미 카운터를 지나왔으므로, 실패한 티켓의
+     * 번호도 카운터보다 작거나 같아야 하는 것은 같다.
+     */
+    private static int maxIssuedSeq(List<IssueTicket> batch) {
+        int max = 0;
+        for (IssueTicket ticket : batch) {
+            max = Math.max(max, ticket.issueSeq());
+        }
+        return max;
     }
 
     private void failAll(List<IssueTicket> batch, IssueResult reason) {
