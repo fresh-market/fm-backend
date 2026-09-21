@@ -409,6 +409,15 @@ if (counterExists(couponId)) {
 ./scripts/loadtest-fault.sh lost-tail --lost 200
 ```
 
+**주입해서 재 봤고 이 절의 설명이 그대로 나왔다.** 200건을 유실시켰더니 `SEQ_TAKEN` 이 정확히
+200건 나오고 재건 로그는 한 줄도 없었다. 그런데도 재고 10,000장이 다 나갔고 결번이 0 이며
+p99 가 321.77ms 였다([측정](rebuild-measurement-2026-09-21b.md) 2장).
+
+**다만 기여는 DB 가 살아 있어야 한다.** `CouponSeqRebuilder.rebuildIfLost` 가 락을 다투기 전에
+`couponRepository.findById` 를 부르므로, DB 가 막힌 인스턴스는 거기서 터져 자기 큐를 못 올린다.
+기여가 Redis 와 큐만 건드리는데도 그렇다. **DB 장애가 겹치면 이 절이 말하는 보호가 통째로
+빠진다**([측정](rebuild-measurement-2026-09-21b.md) 3장).
+
 ### 무엇이 어긋나느냐에 따라 다른 증상
 
 | 어긋난 키 | 무슨 일이 나나 |

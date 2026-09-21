@@ -126,5 +126,5 @@ if (mine.isEmpty()) {
 1. **빈 기여도 재도록 고친다**(3.3). 이것 없이는 3초를 못 좁힌다. **끝냈다**
 2. `cache-failover` 로는 재건이 안 난다는 것을 `redis-promotion-rebuild.md` 에 적는다(3.1). **끝냈다**
 3. DB 가 죽어 있으면 재건이 시작조차 못 한다는 것을 `coupon-failure.md` 에 적는다(3.2). **끝냈다**
-4. **`lost-tail` 회차를 돌린다.** 이 회차가 한 번도 안 만들어 본 모양이고 실제로는 이쪽이 더 흔하다. `counter` 가 뒤로 갔을 때 스키마가 정말로 막는지, 그때 응답이 무엇인지를 본다
-5. `seq-loss --backlog` 로 회차를 다시 돌려 `lagMillis` 분포를 얻는다
+4. **`lost-tail` 회차를 돌린다.** 이 회차가 한 번도 안 만들어 본 모양이고 실제로는 이쪽이 더 흔하다. `counter` 가 뒤로 갔을 때 스키마가 정말로 막는지, 그때 응답이 무엇인지를 본다. **끝냈다.** [후속 회차](rebuild-measurement-2026-09-21b.md) 2장
+5. `seq-loss --backlog` 로 회차를 다시 돌려 `lagMillis` 분포를 얻는다. **돌렸지만 또 0건이었다.** 기여가 DB 읽기 뒤에 있어서다. [후속 회차](rebuild-measurement-2026-09-21b.md) 3장
