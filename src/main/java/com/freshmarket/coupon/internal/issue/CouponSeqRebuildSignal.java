@@ -11,9 +11,12 @@ public interface CouponSeqRebuildSignal {
 
     /**
      * 방금 쓴 배치의 쿠폰이 재건 중인지 보고, 그렇다면 이 인스턴스의 큐를 올리게 한다.
+     * 같은 자리에서 카운터가 뒤처지지 않았는지도 잰다.
      *
      * <p><b>부르는 쪽을 막지 않는다.</b> 실제 일은 다른 스레드가 한다. 여기서 큐를 얼리면
      * 플러시 스레드가 자기를 얼리는 셈이 된다.
+     *
+     * @param maxIssuedSeq 방금 쓴 배치에 든 가장 큰 순번. 카운터가 뒤처졌는지의 기준이 된다
      */
-    void checkAfterFlush(long couponId);
+    void checkAfterFlush(long couponId, int maxIssuedSeq);
 }

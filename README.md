@@ -412,7 +412,7 @@ flowchart TB
 | F-2e | 캐시 Multi-AZ 페일오버 | 9,989 | 10,000 | 11 | 0 | **1.041초** |
 | F-3c | 앱 급사 + 캐시 페일오버 | 9,031 | 9,035 | 4 | 0 | 0.321초 |
 
-**셋 다 초과 발급 0, 1인 2매 0 이다.** 정합성은 어느 장애에서도 안 깨졌다.
+**셋 다 초과 발급 0 이고 1인 1매가 지켜졌다.** 정합성은 어느 장애에서도 안 깨졌다.
 
 **`max_seq` 가 회차마다 10,000 이다.** 번호는 끝까지 나갔고 **그중 몇 장이 DB 에 못 들어갔느냐만 갈렸다.**
 
@@ -771,6 +771,8 @@ api-contract migration  app-config test         archunit        build
 | [coupon/coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) | 회차별 설정과 실측값 |
 | [coupon/coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) | 회수 기준 시간을 60초로 둔 근거 |
 | [coupon/warmup.md](./docs/coupon/warmup.md) | 워밍업이 무엇을 데우고 무엇을 못 데우나 |
+| [coupon/rebuild-measurement-2026-09-21.md](./docs/coupon/rebuild-measurement-2026-09-21.md) | 재건을 실제로 일으켜 본 회차와 거기서 찾은 것 |
+| [coupon/rebuild-measurement-2026-09-21b.md](./docs/coupon/rebuild-measurement-2026-09-21b.md) | 캐시 유실을 직접 주입해 본 회차. 기여가 DB 읽기 뒤에 있다 |
 | [coupon/virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) | 가상 스레드를 어떻게 쟀나 |
 | [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
 | [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |
