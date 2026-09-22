@@ -188,6 +188,14 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 fillWithinWindow(batch, batchSize, windowNanos);
 
                 long couponId = batch.get(0).couponId();
+
+                /*
+                 * 큐를 쥐었다는 것을 쓰기보다 먼저 알린다.
+                 * 아래 checkAfterFlush 에 묶으면 DB 가 막힌 인스턴스가 배치를 못 끝내 알림도
+                 * 멈춘다. 하필 그때가 큐가 두꺼워 기여가 가장 중요한 순간이다.
+                 */
+                rebuildSignal.getObject().holdingQueue();
+
                 inFlight.incrementAndGet();
                 try {
                     flush(batch);
