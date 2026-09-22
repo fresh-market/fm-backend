@@ -43,7 +43,7 @@ AWS 실측   20,000 VU / ramp 60초 / 재고 10,000장 / 전용 인스턴스 3�
 회차 3    1초 차   instances=3  done=2   waitMillis 3,016
 ```
 
-`STALE_AFTER` 가 10초다. **11초가 지나면 죽은 대가 명부에서 빠져 주도자가 안 기다린다.** 1초면 아직 남아 있어 **영영 안 올 기여를 천장까지 기다린다.**
+`STALE_AFTER` 가 10초다. **이 간격은 주입 방법에서 나왔고 절차는 부록에 적었다.** **11초가 지나면 죽은 대가 명부에서 빠져 주도자가 안 기다린다.** 1초면 아직 남아 있어 **영영 안 올 기여를 천장까지 기다린다.**
 
 ```
 COUPON_SEQ_CONTRIBUTIONS_TIMEOUT couponId=900001 instances=3 done=2 waitedMillis=3000
@@ -77,3 +77,52 @@ COUPON_SEQ_CONTRIBUTIONS_TIMEOUT couponId=900001 instances=3 done=2 waitedMillis
 2. **감지 지연을 잰다.** 카운터가 사라진 때부터 주도자가 시작할 때까지다. 그것까지 더해야 진짜 정지 시간이다
 3. **`STALE_AFTER` 를 어떻게 할지 정한다.** 10초가 정지에 얹히는 것을 봤으니 근거가 생겼다
 4. 회차 1의 이중 재건을 밝힌다
+5. **`loadtest-fault.sh app+seq-loss` 가 죽이기와 키 삭제를 한 호출로 보내게 고친다.** 지금은 SSM 을 두 번 왕복해 둘 사이가 11초로 벌어지고, 그래서 **가장 위험한 회차 3을 스크립트로 못 만든다**(부록)
+
+## 부록. 어떻게 다시 돌리나
+
+### 준비
+
+전용 ASG 3대를 띄우고 배포를 먼저 끝낸다. **부하보다 배포가 먼저여야 한다.** ASG 를 먼저 열면 인스턴스가 아직 안 올라간 이미지 태그를 당겨 못 뜬다.
+
+```
+cd fm-infra
+./scripts/apply.sh                 # 인프라
+./scripts/deploy.sh                # 이미지 태그는 40자 전체 SHA 다
+./scripts/loadtest-seed.sh         # 배포가 스키마를 만든 뒤에 돌려야 한다
+./scripts/coupon-event.sh open     # 이벤트를 연다
+```
+
+### 주입 시점
+
+**k6 시작 8초 뒤에 넣었다.** 재고 만 장이 램프업 중에 수십 초면 다 나가므로 늦으면 소진된 뒤가 되고, 그러면 큐가 비어 재건이 `issued=10000 queued=0` 으로 끝난다.
+
+### 회차별 주입
+
+| 회차 | 무엇을 넣었나 | 죽이기와 키 삭제 사이 |
+|---|---|---:|
+| 1 | `./scripts/loadtest-fault.sh seq-loss` | 해당 없음 |
+| 2 | `./scripts/loadtest-fault.sh app+seq-loss` | 11초 |
+| 3 | 죽이기와 `DEL` 을 SSM 한 호출로 합쳤다 | 1초 |
+
+**회차 2와 3의 간격 차이는 의도한 것이 아니라 스크립트의 모양에서 나왔다.** `app+seq-loss` 가 `stop_one_app; drop_keys counter` 로 SSM 을 두 번 왕복하는데, 대당 4~5초씩 걸려 둘 사이가 11초가 된다. **그 11초가 `STALE_AFTER` 10초를 넘겨 죽은 대가 명부에서 빠졌고, 그래서 회차 2가 2밀리초로 끝났다.**
+
+회차 3은 그 창 안을 보려고 두 일을 한 SSM 호출에 담아 손으로 보냈다. **지금 스크립트로는 회차 3을 재현할 수 없다.**
+
+### 무엇을 거두나
+
+앱 로그에서 이 한 줄이 네 구간을 다 갖고 있다.
+
+```
+COUPON_SEQ_REBUILT couponId=... issued=... queued=... maxSeq=... freed=...
+  rebuildMillis=... contributeMillis=... waitMillis=... readWriteMillis=...
+```
+
+명부가 몇 대를 세었는지는 그 앞줄에서 본다.
+
+```
+COUPON_SEQ_CONTRIBUTIONS_COMPLETE couponId=... instances=... waitedMillis=...
+COUPON_SEQ_CONTRIBUTIONS_TIMEOUT  couponId=... instances=... done=... waitedMillis=...
+```
+
+정합성은 DB 에서 직접 받는다. 발급행, 최대순번, 결번, 회원수 넷이다.
