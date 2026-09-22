@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -262,6 +263,31 @@ class CouponSeqRebuildTriggerTest {
 
         assertThatCode(() -> 트리거().checkAfterFlush(COUPON_ID, 10)).doesNotThrowAnyException();
         assertThat(뒤처짐_표본()).isZero();
+    }
+
+    /*
+     * 이 시험이 2026-09-22 회차가 드러낸 자리를 고정한다.
+     *
+     * 명부 갱신을 flush 뒤에 뒀더니, DB 를 10초 막았을 때 세 대가 모두 명부에서 빠졌다.
+     * 배치를 못 끝내 알림도 멈춘 것이다. 셋이 다 올렸는데도 주도자가 그것을 모른 채
+     * 정해진 시간을 끝까지 기다렸다. 큐가 두꺼워 기여가 가장 중요한 순간이 하필 그때다.
+     */
+    @Test
+    void 큐를_쥐었다는_알림은_쓰기와_무관하다() {
+        트리거().holdingQueue();
+
+        verify(instances).refresh();
+    }
+
+    // 플러시 뒤 확인은 명부를 안 건드린다. 쓰기가 실패해도 알림은 이미 갔어야 한다
+    @Test
+    void 플러시_뒤_확인은_명부를_갱신하지_않는다() {
+        when(redisTemplate.hasKey(anyString())).thenReturn(false);
+        given카운터가(null);
+
+        트리거().checkAfterFlush(COUPON_ID, 10);
+
+        verify(instances, never()).refresh();
     }
 
     // 쿠폰이 다르면 서로를 막지 않는다. 집합의 키가 쿠폰이라는 뜻이다
