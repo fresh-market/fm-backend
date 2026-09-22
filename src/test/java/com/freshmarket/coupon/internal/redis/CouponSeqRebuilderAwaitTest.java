@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Optional;
 
 import com.freshmarket.coupon.internal.entity.Coupon;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.repository.CouponRepository;
 import com.freshmarket.coupon.internal.repository.MemberCouponSeqRepository;
@@ -66,11 +67,13 @@ class CouponSeqRebuilderAwaitTest {
     private ZSetOperations<String, String> zSetOperations;
 
     private CouponSeqRebuilder sut;
+    private SimpleMeterRegistry registry;
 
     @BeforeEach
     void 준비() {
+        registry = new SimpleMeterRegistry();
         sut = new CouponSeqRebuilder(redisTemplate, couponRepository, seqRepository,
-                seqInitializer, contributor, instances, 설정(기다림));
+                seqInitializer, contributor, instances, 설정(기다림), registry);
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
@@ -132,6 +135,51 @@ class CouponSeqRebuilderAwaitTest {
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
 
         assertThat(재_보기()).isLessThan(기다림.toMillis());
+    }
+
+    /*
+     * 재건이 문을 닫아 둔 시간을 잰다. 이것이 곧 그 이벤트의 발급이 멈춘 시간이다.
+     *
+     * 여태 재는 곳이 없어서 "큐 수집 대기 3초 + 읽고 쓰기 427밀리초" 라는 계산값을 실측인
+     * 것처럼 써 왔고, 조기 종료를 붙인 뒤에도 줄어든 총량을 한 번도 확인하지 못했다.
+     */
+    @Test
+    void 재건이_문을_닫아_둔_시간을_잰다() {
+        when(instances.live()).thenReturn(3);
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        sut.rebuildIfLost(COUPON_ID);
+
+        assertThat(registry.timer("coupon.seq.rebuild.duration").count()).isEqualTo(1);
+        assertThat(registry.timer("coupon.seq.rebuild.readwrite").count()).isEqualTo(1);
+    }
+
+    /*
+     * 읽고 쓰기는 전체보다 짧아야 한다.
+     * 같으면 기다림이 전체에서 빠졌다는 뜻이고, 그러면 둘을 따로 잴 이유가 없다.
+     */
+    @Test
+    void 읽고_쓰기는_전체의_일부다() {
+        when(instances.live()).thenReturn(3);
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
+
+        sut.rebuildIfLost(COUPON_ID);
+
+        double 전체 = registry.timer("coupon.seq.rebuild.duration").totalTime(TimeUnit.MILLISECONDS);
+        double 읽고쓰기 = registry.timer("coupon.seq.rebuild.readwrite").totalTime(TimeUnit.MILLISECONDS);
+        assertThat(읽고쓰기).isLessThan(전체);
+        // 이 회차는 한 대를 못 기다려 천장까지 갔다. 전체가 그만큼은 돼야 한다
+        assertThat(전체).isGreaterThanOrEqualTo(기다림.toMillis());
+    }
+
+    // 재건을 안 하면 재지 않는다. 카운터가 멀쩡하면 문을 닫은 적이 없다
+    @Test
+    void 재건을_안_하면_안_잰다() {
+        when(redisTemplate.hasKey("coupon:9001:counter")).thenReturn(true);
+
+        sut.rebuildIfLost(COUPON_ID);
+
+        assertThat(registry.timer("coupon.seq.rebuild.duration").count()).isZero();
     }
 
     private long 재_보기() {

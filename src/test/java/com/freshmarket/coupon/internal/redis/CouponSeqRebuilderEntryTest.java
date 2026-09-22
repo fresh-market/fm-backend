@@ -12,6 +12,7 @@ import java.time.Duration;
 import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.repository.CouponRepository;
 import com.freshmarket.coupon.internal.repository.MemberCouponSeqRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -60,7 +61,7 @@ class CouponSeqRebuilderEntryTest {
     @BeforeEach
     void 준비() {
         sut = new CouponSeqRebuilder(redisTemplate, couponRepository, seqRepository,
-                seqInitializer, contributor, instances, 기본_설정());
+                seqInitializer, contributor, instances, 기본_설정(), new SimpleMeterRegistry());
     }
 
     // 카운터가 서 있으면 멀쩡한 것이다. DB 까지 갈 이유가 없다
