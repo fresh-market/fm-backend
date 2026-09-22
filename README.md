@@ -775,6 +775,7 @@ api-contract migration  app-config test         archunit        build
 | [coupon/rebuild-measurement-2026-09-21b.md](./docs/coupon/rebuild-measurement-2026-09-21b.md) | 캐시 유실을 직접 주입해 본 회차. 기여가 DB 읽기 뒤에 있다 |
 | [coupon/rebuild-fix-verification-2026-09-21.md](./docs/coupon/rebuild-fix-verification-2026-09-21.md) | 두 고침이 실제로 도는지 본 회차. 3초가 여유 있는 값이 아니다 |
 | [coupon/rebuild-early-exit-2026-09-22.md](./docs/coupon/rebuild-early-exit-2026-09-22.md) | 조기 종료를 붙이고 돌려 본 회차. DB 장애가 길면 명부가 빈다 |
+| [coupon/rebuild-queue-contribution-2026-09-22.md](./docs/coupon/rebuild-queue-contribution-2026-09-22.md) | 큐가 실제로 재건에 쓰인 회차. 조기 종료가 2ms 에 끝났다 |
 | [coupon/virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) | 가상 스레드를 어떻게 쟀나 |
 | [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
 | [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |
