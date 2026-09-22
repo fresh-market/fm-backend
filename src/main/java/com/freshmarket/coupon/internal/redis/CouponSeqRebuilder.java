@@ -18,6 +18,8 @@ import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.repository.CouponRepository;
 import com.freshmarket.coupon.internal.repository.MemberCouponSeqRepository;
 import com.freshmarket.coupon.internal.repository.MemberCouponSeqRepository.IssuedSeq;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations.TypedTuple;
@@ -70,6 +72,8 @@ public class CouponSeqRebuilder {
     private final CouponSeqInstances instances;
     private final Duration contributeWait;
     private final Duration lockTtl;
+    private final Timer duration;
+    private final Timer readWrite;
 
     public CouponSeqRebuilder(StringRedisTemplate redisTemplate,
                               CouponRepository couponRepository,
@@ -77,7 +81,8 @@ public class CouponSeqRebuilder {
                               CouponSeqInitializer seqInitializer,
                               CouponSeqContributor contributor,
                               CouponSeqInstances instances,
-                              CouponIssueProperties properties) {
+                              CouponIssueProperties properties,
+                              MeterRegistry registry) {
         this.redisTemplate = redisTemplate;
         this.couponRepository = couponRepository;
         this.seqRepository = seqRepository;
@@ -87,6 +92,24 @@ public class CouponSeqRebuilder {
         this.contributeWait = properties.rebuildContributeWait();
         // 기다림과 쓰기가 끝나기 전에 락이 풀리면 두 인스턴스가 같이 쓴다. 넉넉히 잡는다
         this.lockTtl = properties.rebuildContributeWait().multipliedBy(10);
+        /*
+         * 재건이 문을 닫아 둔 시간을 잰다.
+         *
+         * 이것이 곧 그 이벤트의 발급이 멈춘 시간이다. 그런데 여태 재는 곳이 없어서
+         * "큐 수집 대기 3초 + 읽고 쓰기 427밀리초 = 약 3.4초" 라는 계산값을 실측인 것처럼
+         * 써 왔다. 조기 종료를 붙인 뒤에도 줄어든 총량을 한 번도 안 쟀다.
+         *
+         * 감지 지연은 안 들어 있다. 카운터가 사라진 때부터가 아니라 주도자가 일을 시작한
+         * 때부터이므로, 실제 정지는 이 값보다 길다.
+         */
+        this.duration = Timer.builder("coupon.seq.rebuild.duration")
+                .description("재건이 문을 닫아 둔 시간. 주도자가 시작해 카운터를 세울 때까지다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+        this.readWrite = Timer.builder("coupon.seq.rebuild.readwrite")
+                .description("DB 를 읽고 네 키를 세운 시간. 항목 수에 비례해 늘어난다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
     }
 
     /**
@@ -156,8 +179,11 @@ public class CouponSeqRebuilder {
         log.warn("event=COUPON_SEQ_REBUILD_STARTED couponId={} contributeWaitMillis={}",
                 couponId, contributeWait.toMillis());
 
+        long startedAt = System.nanoTime();
         contributor.contribute(couponId);
+        long contributedAt = System.nanoTime();
         awaitContributions(couponId);
+        long awaitedAt = System.nanoTime();
 
         // 기다리는 동안 관리자가 이벤트를 다시 열었을 수 있다. 그러면 그쪽 카운터를 덮으면 안 된다
         if (counterExists(couponId)) {
@@ -174,11 +200,25 @@ public class CouponSeqRebuilder {
         writePending(couponId, queued);
         writeFree(couponId, gaps(issued, queued, maxSeq));
         openGate(couponId, maxSeq, coupon.getIssueEndAt());
+
+        /*
+         * 문이 열리는 자리가 여기다. 뒷정리는 그 뒤이므로 재는 끝점도 여기다.
+         * clearContributions 까지 재면 이미 발급이 재개된 시간을 정지로 세게 된다.
+         */
+        long openedAt = System.nanoTime();
+        duration.record(openedAt - startedAt, TimeUnit.NANOSECONDS);
+        readWrite.record(openedAt - awaitedAt, TimeUnit.NANOSECONDS);
+
         clearContributions(couponId);
 
-        log.warn("event=COUPON_SEQ_REBUILT couponId={} issued={} queued={} maxSeq={} freed={}",
+        log.warn("event=COUPON_SEQ_REBUILT couponId={} issued={} queued={} maxSeq={} freed={}"
+                        + " rebuildMillis={} contributeMillis={} waitMillis={} readWriteMillis={}",
                 couponId, issued.size(), queued.size(), maxSeq,
-                maxSeq - issued.size() - queued.size());
+                maxSeq - issued.size() - queued.size(),
+                TimeUnit.NANOSECONDS.toMillis(openedAt - startedAt),
+                TimeUnit.NANOSECONDS.toMillis(contributedAt - startedAt),
+                TimeUnit.NANOSECONDS.toMillis(awaitedAt - contributedAt),
+                TimeUnit.NANOSECONDS.toMillis(openedAt - awaitedAt));
     }
 
     /**
