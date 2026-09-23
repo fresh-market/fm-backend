@@ -113,6 +113,36 @@ public class CouponIssueFlusher implements SmartLifecycle {
         return running;
     }
 
+    /**
+     * 톰캣보다 <b>뒤에</b> 멈춘다. 기본값을 쓰면 반대가 된다.
+     *
+     * <p>스프링은 phase 가 높은 것부터 멈춘다({@code DefaultLifecycleProcessor.stopBeans} 가
+     * {@code Comparator.reverseOrder()} 로 정렬한다). {@link SmartLifecycle} 의 기본값은
+     * {@code Integer.MAX_VALUE} 라 아무것도 재정의하지 않으면 이 빈이 제일 먼저 죽는다.
+     * 웹 계층은 두 단계로 나뉜다.
+     *
+     * <pre>
+     * MAX - 1024   WebServerGracefulShutdownLifecycle   진행 중 요청을 기다린다
+     * MAX - 2048   WebServerStartStopLifecycle          웹 서버를 실제로 닫는다
+     * </pre>
+     *
+     * <p>그래서 -2048 로는 모자란다. 웹 서버를 닫는 빈과 <b>같은 phase 라 함께 멈추고</b>,
+     * 같은 단계 안에서는 순서가 보장되지 않는다. 그 아래로 내려야 확실히 뒤에 온다.
+     *
+     * <p>먼저 죽으면 그 뒤에 처리되는 요청이 Redis 순번을 받아 <b>아무도 안 읽는 큐에 넣는다.</b>
+     * {@code CouponIssueQueue.submit} 에는 종료 가드가 없고 {@code drainLeftovers} 는 이미
+     * 지나간 뒤라, 그 순번은 발급되지 않은 채 재고에서 빠진다.
+     *
+     * <p>생산자와 소비자의 관계로 보면 방향이 분명하다. 톰캣이 큐에 넣고 이 빈이 꺼내 쓴다.
+     * <b>끌 때는 생산자를 먼저 멈춰야</b> 하고, 정지 순서가 내림차순이므로 소비자인 이쪽이
+     * 더 낮아야 한다. 켤 때는 오름차순이라 이 값이 낮으면 소비자가 먼저 뜨는데, 그것도 맞다.
+     * 첫 요청이 오기 전에 꺼내 갈 쪽이 이미 돌고 있어야 한다.
+     */
+    @Override
+    public int getPhase() {
+        return SmartLifecycle.DEFAULT_PHASE - 4096;
+    }
+
     /*
      * 앱이 내려갈 때 이 메서드가 큐에 남은 티켓을 한 번 더 쓴다.
      * 그때도 못 쓴 것은 그 순번이 Redis 의 pending 에 남아 있어, 나중에 회수 로직이 시간을 보고
