@@ -174,6 +174,23 @@ http.setResponseCallback(http.expectedStatuses(200, 409, 410, 422, 503));
 let settled = false;   // 이 사람의 결과가 확정됐나
 let attempts = 0;      // 이 사람이 쏜 횟수
 
+/*
+ * 토큰이 VU 수를 채우는지 회차 시작 전에 본다.
+ *
+ * 모자라면 초과 VU 는 아래에서 아무것도 안 하고 끝난다. 오류도 경고도 없이 부하만 줄어
+ * 회차는 정상 종료되는데 실제로는 요구 조건을 안 건 셈이 된다. 결과를 통과로 읽을 수 있다.
+ *
+ * setup 에서 던지면 k6 가 회차를 시작하지 않는다. 시작한 뒤에 알아채면 이미 늦다.
+ */
+export function setup() {
+  if (tokens.length < VUS) {
+    throw new Error(
+      `토큰이 ${tokens.length}개뿐이라 VU ${VUS}를 못 채운다. ` +
+        `loadtest/mint-tokens.py 로 ${VUS}개를 만들거나 VUS 를 줄여라.`,
+    );
+  }
+}
+
 export default function () {
   /*
    * 토큰을 VU 번호로 고른다. VU 하나가 사람 하나다.
@@ -186,6 +203,7 @@ export default function () {
    * VU 를 20,000 보다 줄여 예비 시험을 하면 시도하는 사람 수도 함께 준다.
    * 요구 조건을 재는 회차에서는 VUS 를 덮어쓰지 않는다.
    */
+  // setup 이 이미 막았으므로 여기 걸릴 일이 없다. 배열 밖 접근만 방어한다
   const index = exec.vu.idInTest - 1;
   if (index >= tokens.length) {
     return;
