@@ -35,7 +35,7 @@ jobs:
           python-version: "3.12"
 
       # gen_items.py 는 표준 라이브러리만 쓴다. 설치할 것이 없다
-      - name: backend 250건
+      - name: backend 276건
         run: |
           python3 common/.github/llm-verify/gen_items.py \
             target/docs/code-architecture '*-guideline.md' backend 코드 \
