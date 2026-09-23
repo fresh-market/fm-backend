@@ -36,7 +36,7 @@ DELETE /v1/admin/admins/{adminId}
 | 필드 | 필수 | 제약 |
 |---|---|---|
 | `loginId` | O | 50자 이하. 중복 불가 |
-| `initialPassword` | O | INPUT_ONLY. 10~72자. 영문 대문자·소문자·숫자·특수문자 모두 포함. 응답에는 반환하지 않음 |
+| `initialPassword` | O | INPUT_ONLY. 10~72자. 영문 대문자와 소문자와 숫자와 특수문자 모두 포함. 응답에는 반환하지 않음 |
 | `name` | O | 50자 이하 |
 | `role` | O | `ADMIN` 또는 `SUPER_ADMIN` |
 
