@@ -5,7 +5,8 @@ import com.freshmarket.order.internal.dto.OrderCreateResponse;
 /*
  * OrderPendingCreationService(짧은 트랜잭션)와 OrderCreateService(트랜잭션 밖에서 결제 이벤트를
  * 발행하는 조립부) 사이의 내부 전달값이다. newlyCreated가 false면 requestId 재시도로 기존 주문을
- * 그대로 돌려준 것이라 — 호출부는 결제 요청 이벤트를 다시 발행하지 않는다.
+ * 그대로 돌려준 것이다. 호출부는 새 결제를 만들지 않지만, 미전달 결제요청 outbox는 다시 dispatch해
+ * 이전 프로세스 종료로 인한 전달 유실을 복구할 수 있다.
  *
  * internal.service 패키지 밖(internal 바로 아래)에 두는 이유: ArchitectureTest의 서비스_이름 규칙이
  * domain.service의 모든 최상위 클래스에 Service 접미사를 요구한다 — 이 record는 서비스가 아니라
