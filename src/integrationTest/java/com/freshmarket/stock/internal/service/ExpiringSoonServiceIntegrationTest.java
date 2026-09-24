@@ -9,6 +9,7 @@ import com.freshmarket.product.internal.entity.StorageType;
 import com.freshmarket.product.internal.repository.CategoryRepository;
 import com.freshmarket.product.internal.repository.ProductOptionRepository;
 import com.freshmarket.product.internal.repository.ProductRepository;
+import com.freshmarket.stock.internal.ExpiringSoonPolicy;
 import com.freshmarket.stock.internal.dto.ExpiringSoonResponse;
 import com.freshmarket.stock.internal.entity.CampaignTargetLot;
 import com.freshmarket.stock.internal.entity.StockLot;
@@ -16,6 +17,7 @@ import com.freshmarket.stock.internal.repository.CampaignTargetLotCacheRepositor
 import com.freshmarket.stock.internal.repository.CampaignTargetLotRepository;
 import com.freshmarket.stock.internal.repository.StockLotRepository;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -66,8 +68,22 @@ class ExpiringSoonServiceIntegrationTest {
     @Autowired
     private CampaignTargetLotCacheRepository campaignTargetLotCacheRepository;
 
+    @Autowired
+    private Clock clock;
+
     private static final Long SUPPLIER_ID = 999999L;
-    private static final LocalDate TODAY = LocalDate.now();
+
+    /*
+     * 배치와 조회가 보는 기준일이다. 호스트 시간대가 무엇이든 한국 날짜를 준다.
+     *
+     * LocalDate.now() 를 쓰면 안 된다. 시험 JVM 은 build.gradle 이 user.timezone 을 UTC 로
+     * 박아 두어 늘 UTC 이고, 조회는 ExpiringSoonPolicy 가 정한 Asia/Seoul 로 기준일을 센다.
+     * 둘이 갈리는 UTC 15시부터 24시 사이(한국 자정부터 아침 아홉 시)에는 심어 둔 대상의 날짜와
+     * 조회가 찾는 날짜가 하루 어긋나 목록이 통째로 비어 보인다.
+     */
+    private LocalDate today() {
+        return ExpiringSoonPolicy.businessToday(clock);
+    }
 
     /*
      * 캐시는 로컬(JVM) 이라 스프링 컨텍스트와 수명을 같이한다 — 테스트마다 롤백되는 DB 와 달리
@@ -97,9 +113,9 @@ class ExpiringSoonServiceIntegrationTest {
         ProductOption option = productOptionRepository.save(
                 ProductOption.register(product.getId(), "1kg", 10000));
         StockLot lot = stockLotRepository.save(StockLot.register(
-                "lot-req-" + name, option.getId(), TODAY.minusDays(2), TODAY.plusDays(12), 100));
+                "lot-req-" + name, option.getId(), today().minusDays(2), today().plusDays(12), 100));
         campaignTargetLotRepository.save(CampaignTargetLot.register(
-                TODAY, lot.getId(), new BigDecimal("0.0500"), 70, targetRank));
+                today(), lot.getId(), new BigDecimal("0.0500"), 70, targetRank));
     }
 
     @Test
@@ -130,7 +146,7 @@ class ExpiringSoonServiceIntegrationTest {
         ProductOption option = productOptionRepository.save(
                 ProductOption.register(product.getId(), "1kg", 10000));
         stockLotRepository.save(StockLot.register(
-                "lot-req-비대상", option.getId(), TODAY.minusDays(2), TODAY.plusDays(12), 100));
+                "lot-req-비대상", option.getId(), today().minusDays(2), today().plusDays(12), 100));
 
         // when
         CursorPageResponse<ExpiringSoonResponse> result =
@@ -195,7 +211,7 @@ class ExpiringSoonServiceIntegrationTest {
         assertThat(before.items().get(0).productName()).isEqualTo("감귤");
 
         // when — 그날 확정본을 지우고 다른 상품으로 다시 확정한다 (재실행과 같은 모양)
-        campaignTargetLotRepository.deleteByTargetDate(TODAY);
+        campaignTargetLotRepository.deleteByTargetDate(today());
         saveTargetLot("사과", 1);
 
         // then — 캐시를 비우지 않았는데도 새 확정본이 나온다
