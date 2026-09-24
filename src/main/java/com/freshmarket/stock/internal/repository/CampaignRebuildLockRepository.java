@@ -26,7 +26,7 @@ import org.springframework.stereotype.Repository;
 @RequiredArgsConstructor
 public class CampaignRebuildLockRepository {
 
-    // V34 가 심어 둔 유일한 행. 확정 대상이 언제나 "오늘" 하나뿐이라 잠금도 하나면 된다
+    // V39 가 심어 둔 유일한 행. 확정 대상이 언제나 "오늘" 하나뿐이라 잠금도 하나면 된다
     private static final String LOCK_NAME = "campaign_target_lot";
 
     private final EntityManager entityManager;
