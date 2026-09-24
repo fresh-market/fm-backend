@@ -8,9 +8,21 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
-// 로컬 개발 전용 PG 대역이다. 테스트 PG/운영에서는 실제 PG 구현체만 등록한다.
+/*
+ * PG 대역이다. 항상 승인만 반환한다.
+ *
+ * 실제 PG 구현체가 아직 없어 운영(prod)도 이 대역을 쓴다. 운영에서 결제는 전부 승인된다.
+ * prod 를 빼면 PaymentApiImpl 과 PaymentReconciliationService 가 주입받을 빈이 없어
+ * 앱과 배치 인스턴스(prod,batch)가 기동하지 못한다 (#203 배포 실패).
+ *
+ * integrationTest 는 FakePaymentGatewayIntegrationTest 가 따로 맡으므로 여기 넣지 않는다.
+ * 넣으면 PaymentGateway 빈이 둘이 되어 통합 테스트 컨텍스트가 뜨지 않는다.
+ *
+ * 실제 PG 구현체를 추가할 때는 그 구현체에 @Profile("prod") 를 거는 것과 여기서 prod 를 빼는 것을
+ * 같은 커밋에서 한다. 둘을 나누면 운영에 PaymentGateway 가 0개인 순간이 생긴다.
+ */
 @Component
-@Profile("local")
+@Profile({"local", "prod"})
 @RequiredArgsConstructor
 public class MockPaymentGateway implements PaymentGateway {
 
