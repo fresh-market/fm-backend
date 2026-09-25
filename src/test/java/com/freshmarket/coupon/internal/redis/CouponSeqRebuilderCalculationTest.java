@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
  * 재건이 세울 값을 정하는 두 식을 본다. Redis 도 DB 도 필요 없는 순수 계산이다.
  *
  * 이 둘이 이 기능의 정확성 전부를 정한다. 카운터가 낮으면 이미 행이 있는 번호가 다시 나가고,
- * 높으면 상한 밖 번호가 나간다. 구멍을 덜 잡으면 그만큼 재고가 덜 팔린다.
+ * 높으면 상한 밖 번호가 나간다. 결번을 덜 잡으면 그만큼 재고가 덜 팔린다.
  */
 class CouponSeqRebuilderCalculationTest {
 
@@ -57,7 +57,7 @@ class CouponSeqRebuilderCalculationTest {
     }
 
     @Test
-    void 구멍은_아무도_안_쥔_번호다() {
+    void 결번은_아무도_안_쥔_번호다() {
         List<IssuedSeq> issued = List.of(new IssuedSeq(9101, 1), new IssuedSeq(9102, 4));
         Map<Long, Integer> queued = Map.of(9103L, 5);
 

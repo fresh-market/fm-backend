@@ -4,19 +4,25 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import com.freshmarket.coupon.internal.entity.Coupon;
 import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.repository.CouponRepository;
 import com.freshmarket.coupon.internal.repository.MemberCouponSeqRepository;
 import com.freshmarket.coupon.internal.repository.MemberCouponSeqRepository.IssuedSeq;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations.TypedTuple;
 import org.springframework.stereotype.Component;
 
 /**
@@ -38,7 +44,7 @@ import org.springframework.stereotype.Component;
  * </pre>
  *
  * <p><b>카운터는 세지 않고 최댓값을 본다.</b> 스크립트가 {@code INCR} 을 먼저 하고 그 결과를
- * 주므로 이 키는 마지막으로 나간 번호다. 개수로 더하면 두 방향으로 깨진다. 구멍은 DB 에도 큐에도
+ * 주므로 이 키는 마지막으로 나간 번호다. 개수로 더하면 두 방향으로 깨진다. 결번은 DB 에도 큐에도
  * 없어 모자라게 세고, {@code free} 재사용은 {@code INCR} 없이 번호가 나가 넘치게 센다. 넘치면
  * 카운터가 총량을 지나가는데 {@code free} 경로는 상한 검사를 안 지나므로,
  * <b>반드시 실패할 번호를 만들어 낸다.</b>
@@ -55,28 +61,55 @@ public class CouponSeqRebuilder {
 
     private static final String COMMITTED_SUFFIX = ":1";
 
+    // 다 모였는지 보는 주기다. 짧아야 다 모인 순간과 끝내는 순간의 차이가 작다
+    private static final long AWAIT_POLL_MILLIS = 20;
+
     private final StringRedisTemplate redisTemplate;
     private final CouponRepository couponRepository;
     private final MemberCouponSeqRepository seqRepository;
     private final CouponSeqInitializer seqInitializer;
     private final CouponSeqContributor contributor;
+    private final CouponSeqInstances instances;
     private final Duration contributeWait;
     private final Duration lockTtl;
+    private final Timer duration;
+    private final Timer readWrite;
 
     public CouponSeqRebuilder(StringRedisTemplate redisTemplate,
                               CouponRepository couponRepository,
                               MemberCouponSeqRepository seqRepository,
                               CouponSeqInitializer seqInitializer,
                               CouponSeqContributor contributor,
-                              CouponIssueProperties properties) {
+                              CouponSeqInstances instances,
+                              CouponIssueProperties properties,
+                              MeterRegistry registry) {
         this.redisTemplate = redisTemplate;
         this.couponRepository = couponRepository;
         this.seqRepository = seqRepository;
         this.seqInitializer = seqInitializer;
         this.contributor = contributor;
+        this.instances = instances;
         this.contributeWait = properties.rebuildContributeWait();
         // 기다림과 쓰기가 끝나기 전에 락이 풀리면 두 인스턴스가 같이 쓴다. 넉넉히 잡는다
         this.lockTtl = properties.rebuildContributeWait().multipliedBy(10);
+        /*
+         * 재건이 문을 닫아 둔 시간을 잰다.
+         *
+         * 이것이 곧 그 이벤트의 발급이 멈춘 시간이다. 그런데 여태 재는 곳이 없어서
+         * "큐 수집 대기 3초 + 읽고 쓰기 427밀리초 = 약 3.4초" 라는 계산값을 실측인 것처럼
+         * 써 왔다. 조기 종료를 붙인 뒤에도 줄어든 총량을 한 번도 안 쟀다.
+         *
+         * 감지 지연은 안 들어 있다. 카운터가 사라진 때부터가 아니라 주도자가 일을 시작한
+         * 때부터이므로, 실제 정지는 이 값보다 길다.
+         */
+        this.duration = Timer.builder("coupon.seq.rebuild.duration")
+                .description("재건이 문을 닫아 둔 시간. 주도자가 시작해 카운터를 세울 때까지다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+        this.readWrite = Timer.builder("coupon.seq.rebuild.readwrite")
+                .description("DB 를 읽고 네 키를 세운 시간. 항목 수에 비례해 늘어난다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
     }
 
     /**
@@ -86,20 +119,39 @@ public class CouponSeqRebuilder {
      * 몫</b>이고, 주도하는 쪽은 남의 큐를 알 방법이 없다.
      *
      * <p>{@code -2} 는 손실만 뜻하지 않는다. 관리자가 아직 안 연 이벤트도 같은 값을 내므로
-     * <b>그 둘을 DB 로 가른다.</b>
+     * <b>그 둘을 DB 로 가른다.</b> 다만 그 판정은 주도하려는 쪽만 한다.
      */
     public void rebuildIfLost(long couponId) {
+        if (counterExists(couponId)) {
+            return;
+        }
+
+        /*
+         * 이미 재건이 돌고 있으면 DB 를 안 보고 기여만 하고 돌아간다.
+         *
+         * 락이 있다는 것은 주도자가 DB 로 "진짜 손실" 이라고 이미 판정했다는 뜻이다. 그 판정을
+         * 여기서 또 할 이유가 없다.
+         *
+         * 이 한 줄이 필요한 이유는 DB 장애가 겹칠 때다. 기여는 Redis 와 자기 큐만 건드리는데,
+         * 아래 findById 뒤에 두면 DB 에 못 닿는 인스턴스가 거기서 터져 자기 큐를 영영 못 올린다.
+         * 큐는 Redis 가 죽어도 살아 있는 유일한 미확정 기록이라, 안 올리면 재건이 그 번호들을
+         * 아무도 안 쥔 것으로 보고 남에게 다시 내준다. 보호가 가장 필요한 상황에서 그 보호가
+         * 사라진다 (docs/coupon/rebuild-measurement-2026-09-21b.md 3장).
+         */
+        if (rebuildInProgress(couponId)) {
+            contributor.contribute(couponId);
+            return;
+        }
+
         Coupon coupon = couponRepository.findById(couponId).orElse(null);
         if (coupon == null || !coupon.isActive() || !coupon.isLimited()) {
             // 관리자가 아직 안 열었거나 선착순 쿠폰이 아니다. 카운터가 없는 것이 정상이다
             return;
         }
-        if (counterExists(couponId)) {
-            return;
-        }
 
-        String token = UUID.randomUUID().toString();
-        if (!acquireLock(couponId, token)) {
+        RebuildLock lock = RebuildLock.start();
+        if (!acquireLock(couponId, lock)) {
+            // 위 확인과 여기 사이에 남이 잡았다. 그쪽이 주도자이므로 올리기만 한다
             contributor.contribute(couponId);
             return;
         }
@@ -109,7 +161,7 @@ public class CouponSeqRebuilder {
             Thread.currentThread().interrupt();
             log.warn("event=COUPON_SEQ_REBUILD_INTERRUPTED couponId={}", couponId);
         } finally {
-            releaseLock(couponId, token);
+            releaseLock(couponId, lock);
         }
     }
 
@@ -121,14 +173,17 @@ public class CouponSeqRebuilder {
      *
      * <p><b>큐를 DB 보다 먼저 읽는다.</b> 티켓은 큐에서 DB 로만 가고 반대로는 안 간다. 큐를
      * 먼저 읽으면 그사이 넘어간 티켓이 양쪽에 다 잡히지만, DB 를 먼저 읽으면 <b>어디에도 안
-     * 잡혀 구멍이 된다.</b>
+     * 잡혀 결번이 된다.</b>
      */
     private void lead(long couponId, Coupon coupon) throws InterruptedException {
         log.warn("event=COUPON_SEQ_REBUILD_STARTED couponId={} contributeWaitMillis={}",
                 couponId, contributeWait.toMillis());
 
+        long startedAt = System.nanoTime();
         contributor.contribute(couponId);
-        Thread.sleep(contributeWait.toMillis());
+        long contributedAt = System.nanoTime();
+        awaitContributions(couponId);
+        long awaitedAt = System.nanoTime();
 
         // 기다리는 동안 관리자가 이벤트를 다시 열었을 수 있다. 그러면 그쪽 카운터를 덮으면 안 된다
         if (counterExists(couponId)) {
@@ -145,11 +200,59 @@ public class CouponSeqRebuilder {
         writePending(couponId, queued);
         writeFree(couponId, gaps(issued, queued, maxSeq));
         openGate(couponId, maxSeq, coupon.getIssueEndAt());
+
+        /*
+         * 문이 열리는 자리가 여기다. 뒷정리는 그 뒤이므로 재는 끝점도 여기다.
+         * clearContributions 까지 재면 이미 발급이 재개된 시간을 정지로 세게 된다.
+         */
+        long openedAt = System.nanoTime();
+        duration.record(openedAt - startedAt, TimeUnit.NANOSECONDS);
+        readWrite.record(openedAt - awaitedAt, TimeUnit.NANOSECONDS);
+
         clearContributions(couponId);
 
-        log.warn("event=COUPON_SEQ_REBUILT couponId={} issued={} queued={} maxSeq={} freed={}",
+        log.warn("event=COUPON_SEQ_REBUILT couponId={} issued={} queued={} maxSeq={} freed={}"
+                        + " rebuildMillis={} contributeMillis={} waitMillis={} readWriteMillis={}",
                 couponId, issued.size(), queued.size(), maxSeq,
-                maxSeq - issued.size() - queued.size());
+                maxSeq - issued.size() - queued.size(),
+                TimeUnit.NANOSECONDS.toMillis(openedAt - startedAt),
+                TimeUnit.NANOSECONDS.toMillis(contributedAt - startedAt),
+                TimeUnit.NANOSECONDS.toMillis(awaitedAt - contributedAt),
+                TimeUnit.NANOSECONDS.toMillis(openedAt - awaitedAt));
+    }
+
+    /**
+     * 남들이 자기 큐를 다 올리기를 기다린다.
+     *
+     * <p><b>예전에는 여기서 고정으로 잤다.</b> 주도자가 몇 대를 기다려야 하는지 몰라 시간으로
+     * 때웠고, 그 시간이 재건 정지의 대부분이었다. 명부가 생긴 뒤로는 <b>다 모이면 그 자리에서
+     * 끝낸다.</b> 정해진 시간은 바닥이 아니라 천장이 된다.
+     *
+     * <p><b>천장은 없앨 수 없다.</b> 죽었거나 먹통인 인스턴스는 영영 표시를 안 남긴다.
+     *
+     * <p><b>명부를 못 읽으면 기다림을 안 줄인다.</b> 살아 있는 수를 0 으로 받았을 때 "다 모였다"
+     * 로 읽으면 아무도 안 기다린 채 키를 세우게 된다. 모르는 채로 일찍 끝내는 것이 이 기능에서
+     * 가장 나쁜 결과다.
+     */
+    private void awaitContributions(long couponId) throws InterruptedException {
+        long deadline = System.nanoTime() + contributeWait.toNanos();
+        while (System.nanoTime() < deadline) {
+            int live = instances.live();
+            if (live > 0 && doneCount(couponId) >= live) {
+                log.info("event=COUPON_SEQ_CONTRIBUTIONS_COMPLETE couponId={} instances={} waitedMillis={}",
+                        couponId, live,
+                        contributeWait.toMillis() - TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
+                return;
+            }
+            Thread.sleep(AWAIT_POLL_MILLIS);
+        }
+        log.warn("event=COUPON_SEQ_CONTRIBUTIONS_TIMEOUT couponId={} instances={} done={} waitedMillis={}",
+                couponId, instances.live(), doneCount(couponId), contributeWait.toMillis());
+    }
+
+    private int doneCount(long couponId) {
+        Long done = redisTemplate.opsForSet().size(CouponSeqKeys.rebuildDone(couponId));
+        return done == null ? 0 : done.intValue();
     }
 
     /*
@@ -170,21 +273,19 @@ public class CouponSeqRebuilder {
      * 시각은 복원할 수 없어 지금으로 넣는다. 그만큼 회수 기준이 뒤로 밀린다.
      */
     private void writePending(long couponId, Map<Long, Integer> queued) {
-        if (queued.isEmpty()) {
-            return;
-        }
         double now = System.currentTimeMillis();
-        queued.keySet().forEach(memberId ->
-                redisTemplate.opsForZSet().add(CouponSeqKeys.pending(couponId),
-                        String.valueOf(memberId), now));
+        Set<TypedTuple<String>> members = queued.keySet().stream()
+                .map(memberId -> TypedTuple.of(String.valueOf(memberId), now))
+                .collect(Collectors.toSet());
+        addInChunks(CouponSeqKeys.pending(couponId), members);
     }
 
     private void writeFree(long couponId, List<Integer> freed) {
-        String key = CouponSeqKeys.free(couponId);
-        for (Integer seq : freed) {
-            // 점수가 번호라 스크립트의 ZPOPMIN 이 낮은 번호부터 꺼낸다
-            redisTemplate.opsForZSet().add(key, String.valueOf(seq), seq);
-        }
+        // 점수가 번호라 스크립트의 ZPOPMIN 이 낮은 번호부터 꺼낸다
+        Set<TypedTuple<String>> numbers = freed.stream()
+                .map(seq -> TypedTuple.of(String.valueOf(seq), (double) seq))
+                .collect(Collectors.toSet());
+        addInChunks(CouponSeqKeys.free(couponId), numbers);
     }
 
     /**
@@ -242,6 +343,29 @@ public class CouponSeqRebuilder {
 
     private void clearContributions(long couponId) {
         redisTemplate.unlink(CouponSeqKeys.rebuildQueued(couponId));
+        // 완료 표시도 함께 지운다. 안 지우면 다음 재건이 지난 회차의 수를 보고 즉시 끝낸다
+        redisTemplate.unlink(CouponSeqKeys.rebuildDone(couponId));
+    }
+
+    /*
+     * 항목마다 한 번씩 치면 만 건이 만 번의 왕복이 된다.
+     * 재건은 발급이 멈춰 있는 동안 도는 일이라 그 시간이 곧 장애 시간이다.
+     */
+    private void addInChunks(String key, Set<TypedTuple<String>> values) {
+        if (values.isEmpty()) {
+            return;
+        }
+        Set<TypedTuple<String>> chunk = new HashSet<>(CHUNK);
+        for (TypedTuple<String> value : values) {
+            chunk.add(value);
+            if (chunk.size() == CHUNK) {
+                redisTemplate.opsForZSet().add(key, chunk);
+                chunk.clear();
+            }
+        }
+        if (!chunk.isEmpty()) {
+            redisTemplate.opsForZSet().add(key, chunk);
+        }
     }
 
     private void putAllInChunks(String key, Map<String, String> fields) {
@@ -277,13 +401,18 @@ public class CouponSeqRebuilder {
         return Boolean.TRUE.equals(redisTemplate.hasKey(CouponSeqKeys.counter(couponId)));
     }
 
+    // 락 키가 곧 "누가 이미 주도하고 있다" 는 표시다
+    private boolean rebuildInProgress(long couponId) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(CouponSeqKeys.rebuild(couponId)));
+    }
+
     /*
      * 락 키가 곧 "재건 중" 표시다.
      * 락을 못 잡은 인스턴스는 이 키가 있는 것을 보고 자기 큐를 올린다.
      */
-    private boolean acquireLock(long couponId, String token) {
+    private boolean acquireLock(long couponId, RebuildLock lock) {
         return Boolean.TRUE.equals(
-                redisTemplate.opsForValue().setIfAbsent(CouponSeqKeys.rebuild(couponId), token, lockTtl));
+                redisTemplate.opsForValue().setIfAbsent(CouponSeqKeys.rebuild(couponId), lock.value(), lockTtl));
     }
 
     /*
@@ -291,9 +420,9 @@ public class CouponSeqRebuilder {
      * 읽고 지우는 사이가 원자적이지 않아 아주 드물게 남의 락을 지울 수 있다. 그때도 잃는 것은
      * 없다. 뒤늦게 들어온 쪽이 카운터가 이미 선 것을 보고 그대로 돌아간다.
      */
-    private void releaseLock(long couponId, String token) {
+    private void releaseLock(long couponId, RebuildLock lock) {
         String key = CouponSeqKeys.rebuild(couponId);
-        if (token.equals(redisTemplate.opsForValue().get(key))) {
+        if (lock.value().equals(redisTemplate.opsForValue().get(key))) {
             redisTemplate.delete(key);
         }
     }

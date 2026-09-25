@@ -11,7 +11,7 @@
 import http from 'k6/http';
 import { sleep } from 'k6';
 import exec from 'k6/execution';
-import { Counter } from 'k6/metrics';
+import { Counter, Trend } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
@@ -80,6 +80,12 @@ const retried = new Counter('coupon_retried');
 // 재시도 상한까지 갔는데도 못 받고 끝난 사람 수
 const gaveUp = new Counter('coupon_gave_up');
 const soldOut = new Counter('coupon_sold_out');
+/*
+ * 소진이면서 회수할 것도 없는 경우다 (410). 서버가 409 와 나눠 답한다.
+ * 둘을 나눠 세면 그 비율이 곧 "회수가 얼마나 남았나" 라, 이벤트가 실제로 끝났는지를
+ * 지표에서 볼 수 있다. 앱도 sold-out 과 sold-out-final 로 나눠 센다.
+ */
+const soldOutFinal = new Counter('coupon_sold_out_final');
 const congested = new Counter('coupon_congested');
 const rejected = new Counter('coupon_rejected');
 const unexpected = new Counter('coupon_unexpected');
@@ -88,6 +94,26 @@ const unexpected = new Counter('coupon_unexpected');
  * 앱이 낸 500 과 갈라야 한다. 앞은 시험 환경이 모자란 것이고 뒤는 앱이 잘못한 것이다.
  */
 const connectFailed = new Counter('coupon_connect_failed');
+
+/*
+ * ALB 가 502 나 504 로 답한 횟수다. 사람 수가 아니라 시도 횟수다.
+ *
+ * unexpected 와 갈라 센다. 앞엣것은 "봐서는 안 되는 것" 이고 이쪽은 장애 회차에서
+ * 반드시 나오는 값이라, 섞으면 장애 회차의 임계가 늘 깨진다.
+ */
+const gatewayFailed = new Counter('coupon_gateway_failed');
+/*
+ * SLO 가 재는 응답만 담는 지연이다. coupon.md 7장이 모집단을 이렇게 정했다.
+ *
+ *   대상   발급(200)과 소진(409, 410).  서버가 판정을 끝낸 응답이다
+ *   제외   혼잡(503).  요청 예산에서 잘린 값이라 넣으면 예산을 재는 셈이 된다
+ *
+ * http_req_duration 과 둘 다 둔다. 서로 다른 질문에 답하기 때문이다. 그쪽은 503 까지
+ * 담아 사용자가 겪은 시간을 재고, 이쪽은 서버가 판정을 끝낸 것만 담아 SLO 를 잰다.
+ * 전에는 하나로 겸했는데, 그 태그는 expectedStatuses 가 정하고 그 목록은
+ * http_req_failed 를 위한 것이라 503 이 섞여 들어왔다.
+ */
+const settledDuration = new Trend('coupon_settled_duration', true);
 
 export const options = {
   scenarios: {
@@ -109,25 +135,37 @@ export const options = {
   },
   thresholds: {
     /*
-     * coupon.md 8장의 합격 기준을 그대로 옮긴 것이다.
+     * coupon.md 7장의 합격 기준을 그대로 옮긴 것이다.
      * "요구 부하를 걸었을 때 처리된 발급 응답의 p99 가 1초 이하다."
      *
      * 전에는 p(95)<2000 이었다. 분위수도 임계도 SLO 보다 느슨해서, 이 임계를 통과해도
      * 합격인지 알 수 없었다. 실제로 5,000 VU 회차가 이 임계는 통과하고 SLO 는 미달이었다
      * (2026-08-30, p99 1.127초). 사람이 Prometheus 를 따로 뒤져야 드러났다.
+     *
+     * 그 뒤에도 모집단이 SLO 와 달랐다. 혼잡(503)까지 들어 있어서, 예산을 바꾸는 것만으로
+     * 이 값이 움직였다. 지금은 판정이 끝난 응답만 담는 지표에 건다.
      */
-    'http_req_duration{expected_response:true}': ['p(99)<1000'],
-    // 소진과 혼잡은 정상 응답이라 실패로 안 센다. 여기 걸리는 것은 진짜 오류다
+    coupon_settled_duration: ['p(99)<1000'],
+    /*
+     * 소진과 혼잡은 정상 응답이라 실패로 안 센다. 여기 걸리는 것은 진짜 오류다.
+     *
+     * 장애 회차에서는 502 와 504 가 반드시 나오므로 이 임계가 깨진다. 그것이 맞다.
+     * 그 회차는 임계 통과가 아니라 발급 수와 gap 으로 판정한다.
+     */
     http_req_failed: ['rate<0.01'],
+    // ALB 가 낸 502/504 는 coupon_gateway_failed 로 따로 세므로 여기 안 들어온다
     coupon_unexpected: ['count==0'],
   },
 };
 
 /*
- * 소진(409)과 혼잡(503)은 설계가 정한 정상 응답이다.
- * 이걸 안 알려 주면 k6 가 둘을 실패로 세서 http_req_failed 가 뜻을 잃는다.
+ * 소진(409, 410)과 혼잡(503)은 설계가 정한 정상 응답이다.
+ * 이걸 안 알려 주면 k6 가 그것들을 실패로 세서 http_req_failed 가 뜻을 잃는다.
+ *
+ * 410 은 소진이면서 다시 나올 번호도 없다는 뜻이라 재시도를 막으려고 끊는 응답이다.
+ * 동접이 재고의 두 배면 이 응답이 만 건 규모로 나온다.
  */
-http.setResponseCallback(http.expectedStatuses(200, 409, 422, 503));
+http.setResponseCallback(http.expectedStatuses(200, 409, 410, 422, 503));
 
 /*
  * VU 마다 따로 갖는 상태다. k6 는 VU 하나에 자바스크립트 런타임 하나를 주므로
@@ -135,6 +173,23 @@ http.setResponseCallback(http.expectedStatuses(200, 409, 422, 503));
  */
 let settled = false;   // 이 사람의 결과가 확정됐나
 let attempts = 0;      // 이 사람이 쏜 횟수
+
+/*
+ * 토큰이 VU 수를 채우는지 회차 시작 전에 본다.
+ *
+ * 모자라면 초과 VU 는 아래에서 아무것도 안 하고 끝난다. 오류도 경고도 없이 부하만 줄어
+ * 회차는 정상 종료되는데 실제로는 요구 조건을 안 건 셈이 된다. 결과를 통과로 읽을 수 있다.
+ *
+ * setup 에서 던지면 k6 가 회차를 시작하지 않는다. 시작한 뒤에 알아채면 이미 늦다.
+ */
+export function setup() {
+  if (tokens.length < VUS) {
+    throw new Error(
+      `토큰이 ${tokens.length}개뿐이라 VU ${VUS}를 못 채운다. ` +
+        `loadtest/mint-tokens.py 로 ${VUS}개를 만들거나 VUS 를 줄여라.`,
+    );
+  }
+}
 
 export default function () {
   /*
@@ -148,6 +203,7 @@ export default function () {
    * VU 를 20,000 보다 줄여 예비 시험을 하면 시도하는 사람 수도 함께 준다.
    * 요구 조건을 재는 회차에서는 VUS 를 덮어쓰지 않는다.
    */
+  // setup 이 이미 막았으므로 여기 걸릴 일이 없다. 배열 밖 접근만 방어한다
   const index = exec.vu.idInTest - 1;
   if (index >= tokens.length) {
     return;
@@ -166,6 +222,14 @@ export default function () {
   });
   attempts += 1;
 
+  /*
+   * 서버가 판정을 끝낸 응답만 SLO 지연에 담는다.
+   * 아래 세 갈래(200, 409, 410)가 그것이고 혼잡(503)은 안 담는다.
+   */
+  if (res.status === 200 || res.status === 409 || res.status === 410) {
+    settledDuration.add(res.timings.duration);
+  }
+
   if (res.status === 200) {
     /*
      * 본문의 alreadyIssued 로 가른다. 문자열로 보는 것은 res.json() 이 2만 VU 에서
@@ -178,8 +242,16 @@ export default function () {
     }
     settled = true;
   } else if (res.status === 409) {
-    // 소진은 최종이다. 다시 시도해도 같다
+    /*
+     * 재고는 없지만 미확정 순번을 쥔 사람이 있어 그 번호가 다시 나올 수 있다.
+     * 이 시험은 그래도 재시도하지 않는다. 회수는 기준 시간이 지나야 도는데
+     * 그때까지 기다리면 이 시험이 재는 것이 발급 경로가 아니라 회수 주기가 된다.
+     */
     soldOut.add(1);
+    settled = true;
+  } else if (res.status === 410) {
+    // 소진이고 쥔 사람도 없다. 다시 나올 번호가 없으므로 최종이다
+    soldOutFinal.add(1);
     settled = true;
   } else if (res.status === 503) {
     congested.add(1);
@@ -194,6 +266,30 @@ export default function () {
       const hinted = parseFloat(res.headers['Retry-After']);
       retried.add(1);
       sleep(Number.isFinite(hinted) && hinted > 0 ? hinted : RETRY_FALLBACK);
+    }
+  } else if (res.status === 502 || res.status === 504) {
+    /*
+     * ALB 가 낸 것이다. 앱이 잘못 답한 것이 아니라 답을 못 한 것이다.
+     *
+     * 502 는 대상이 응답을 안 줬을 때이고 504 는 게이트웨이 타임아웃이다. 인스턴스가
+     * 죽으면 ALB 가 그것을 알아채기까지 그쪽으로 간 요청이 이 응답을 받는다.
+     *
+     * 다시 쏘는 이유가 둘이다. 하나는 실제 사람이 502 를 받으면 다시 누르기 때문이고,
+     * 다른 하나는 안 쏘면 회수가 시험되지 않기 때문이다. 죽은 인스턴스의 큐에 있던
+     * 티켓은 번호를 태우는데, 그 번호는 소진 뒤에 들어온 요청이 있어야 되살아난다.
+     * 아무도 다시 안 쏘면 그 경로가 영영 안 돈다.
+     *
+     * 연결 실패(status 0)와 다르다. 그쪽은 생성기가 모자란 것이라 재시도로 덮으면
+     * 생성기의 한계가 지표에서 사라진다. 이쪽은 서버 쪽 장애다.
+     */
+    gatewayFailed.add(1);
+    if (attempts >= MAX_ATTEMPTS) {
+      gaveUp.add(1);
+      settled = true;
+    } else {
+      // Retry-After 가 없다. ALB 가 낸 응답이라 서버가 배압을 알려 줄 자리가 없다
+      retried.add(1);
+      sleep(RETRY_FALLBACK);
     }
   } else if (res.status === 422 || res.status === 404) {
     // 자격이 아니다. 최종이다

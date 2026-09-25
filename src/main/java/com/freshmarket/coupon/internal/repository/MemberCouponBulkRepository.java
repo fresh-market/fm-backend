@@ -2,7 +2,10 @@ package com.freshmarket.coupon.internal.repository;
 
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.freshmarket.coupon.internal.issue.IssueTicket;
@@ -41,6 +44,15 @@ public class MemberCouponBulkRepository {
             SELECT issue_seq FROM member_coupon WHERE coupon_id = ? AND member_id = ?
             """;
 
+    /*
+     * 자리 표시자 개수가 순번 개수에 따라 달라져 이 문장만 조립한다.
+     * 값은 전부 파라미터로 넘어가고 조립되는 것은 물음표뿐이라 주입될 자리가 없다.
+     */
+    private static final String FIND_OWNERS_SQL = """
+            SELECT member_id, issue_seq FROM member_coupon
+             WHERE coupon_id = ? AND issue_seq IN (%s)
+            """;
+
     private final JdbcTemplate jdbcTemplate;
 
     /**
@@ -76,6 +88,40 @@ public class MemberCouponBulkRepository {
     public Optional<Integer> findIssuedSeq(long couponId, long memberId) {
         List<Integer> found = jdbcTemplate.queryForList(FIND_SEQ_SQL, Integer.class, couponId, memberId);
         return found.isEmpty() ? Optional.empty() : Optional.ofNullable(found.get(0));
+    }
+
+    /**
+     * 이 순번들을 실제로 쥔 회원이다. {@code uk_mc_coupon_seq} 에 걸렸을 때 그 번호의 주인을
+     * 찾아 확정 표시를 되살리려고 읽는다({@code docs/coupon/coupon.md} 3장).
+     *
+     * <p>그 위반이 곧 <b>이 순번을 쓰는 행이 DB 에 있다</b>는 증거라, 이 조회는 대개 넣은 만큼
+     * 돌려준다. 회수가 잘못 짚은 건이 한 배치에 여럿 몰리므로 한 문장으로 묶어 읽는다.
+     *
+     * <p>{@code uk_mc_coupon_seq} 가 이 조회의 인덱스다. 유니크 인덱스라 순번 하나가 행 하나를
+     * 바로 집는다.
+     *
+     * @return 순번 -> 그 번호를 쥔 회원. 행이 없는 순번은 결과에서 빠진다
+     */
+    public Map<Integer, Long> findOwners(long couponId, List<Integer> issueSeqs) {
+        if (issueSeqs.isEmpty()) {
+            return Map.of();
+        }
+        Object[] args = new Object[issueSeqs.size() + 1];
+        args[0] = couponId;
+        for (int i = 0; i < issueSeqs.size(); i++) {
+            args[i + 1] = issueSeqs.get(i);
+        }
+        Map<Integer, Long> owners = new HashMap<>(issueSeqs.size());
+        jdbcTemplate.query(FIND_OWNERS_SQL.formatted(placeholders(issueSeqs.size())),
+                rs -> {
+                    owners.put(rs.getInt("issue_seq"), rs.getLong("member_id"));
+                },
+                args);
+        return owners;
+    }
+
+    private static String placeholders(int count) {
+        return String.join(",", Collections.nCopies(count, "?"));
     }
 
     private static void bind(PreparedStatement ps, IssueTicket ticket) throws SQLException {

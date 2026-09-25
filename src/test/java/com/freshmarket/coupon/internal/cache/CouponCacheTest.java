@@ -82,7 +82,7 @@ class CouponCacheTest {
         verify(couponRepository).findById(COUPON_ID);
     }
 
-    // 켜진 쿠폰만 담는다. 발급 창 안에서는 그 값들이 얼어붙으므로 다시 읽을 이유가 없다
+    // 켜진 쿠폰만 담는다. 발급 창 안에서는 그 값들이 고정되므로 다시 읽을 이유가 없다
     @Test
     void 켜진_쿠폰은_두_번째부터_DB_를_안_읽는다() {
         // given
@@ -148,7 +148,7 @@ class CouponCacheTest {
         verify(couponRepository, times(2)).findById(COUPON_ID);
     }
 
-    // 발급 창 안에서는 값이 얼어붙으므로 그 시각 전에는 다시 읽을 이유가 없다
+    // 발급 창 안에서는 값이 고정되므로 그 시각 전에는 다시 읽을 이유가 없다
     @Test
     void 마감에서_60초가_되기_전에는_다시_읽지_않는다() throws Exception {
         // given

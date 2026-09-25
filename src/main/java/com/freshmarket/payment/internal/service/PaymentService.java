@@ -5,9 +5,11 @@ import com.freshmarket.payment.PaymentResult;
 import com.freshmarket.payment.internal.PaymentPreparation;
 import com.freshmarket.payment.internal.client.PaymentGatewayApproval;
 import com.freshmarket.payment.internal.entity.Payment;
+import com.freshmarket.payment.internal.entity.PaymentResultOutbox;
 import com.freshmarket.payment.internal.exception.PaymentErrorCode;
 import com.freshmarket.payment.internal.exception.PaymentException;
 import com.freshmarket.payment.internal.repository.PaymentRepository;
+import com.freshmarket.payment.internal.repository.PaymentResultOutboxRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import java.util.Optional;
@@ -23,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class PaymentService {
 
     private final PaymentRepository paymentRepository;
+    private final PaymentResultOutboxRepository paymentResultOutboxRepository;
     private final Clock clock;
 
     // PG 호출 전에 PENDING 행을 별도 트랜잭션으로 확정한다. 외부 호출 동안 DB 트랜잭션을 잡지 않는다.
@@ -39,6 +42,14 @@ public class PaymentService {
         return new PaymentPreparation(payment, newlyPrepared);
     }
 
+    /*
+     * [2026-09-05 19:13 KST] PENDING의 최초 승인뿐 아니라, 복구 배치가 UNKNOWN을 뒤늦게 PAID로
+     * 확정할 때도 이 메서드를 그대로 쓴다 — 그래서 "대기 상태가 아니면 거부"하는 조건에 UNKNOWN도
+     * 통과시키도록 넓혔다. Payment.approve() 쪽 가드도 같은 이유로 함께 넓어졌다.
+     *
+     * order 전달 의도도 여기서 outbox로 저장한다. Payment 상태와 같은 트랜잭션에 남기므로, 프로세스가
+     * 커밋 직후 죽어도 dispatcher가 나중에 order에 다시 전달할 수 있다.
+     */
     @Transactional
     public PaymentResult approvePayment(Long paymentId, PaymentGatewayApproval approval) {
         if (paymentId == null || paymentId <= 0 || approval == null
@@ -50,7 +61,7 @@ public class PaymentService {
         if (payment.isPaid()) {
             return PaymentResult.from(payment);
         }
-        if (!payment.isPending()) {
+        if (!payment.isPending() && !payment.isUnknown()) {
             throw new PaymentException(PaymentErrorCode.PAYMENT_NOT_PENDING);
         }
 
@@ -58,7 +69,50 @@ public class PaymentService {
 
         log.info("event=PAYMENT_PAID paymentId={} orderId={} amount={} method={}",
                 payment.getId(), payment.getOrderId(), payment.getAmount(), payment.getMethod());
+        paymentResultOutboxRepository.save(
+                PaymentResultOutbox.approved(payment.getId(), payment.getOrderId(), payment.getPaidAt()));
 
+        return PaymentResult.from(payment);
+    }
+
+    /*
+     * [2026-09-05 19:13 KST] PG가 명확히 거절했을 때, 그리고 내부 반영 실패 후 복구 배치가 PG
+     * 재조회로 거절을 확인했을 때 모두 이 메서드로 온다. 이미 FAILED면 그대로 반환해 재시도로 인한
+     * 중복 처리를 막는다 — PAID처럼 findByIdForUpdate로 잠근 뒤 판단하므로 동시 호출에도 안전하다.
+     *
+     * 실패 결과 outbox도 실제로 FAILED로 전이할 때만(이미 FAILED였던 경우는 제외) 저장한다.
+     * UNKNOWN 상태에서는 이 메서드가 호출되지 않으므로 — 아직 PG 결과가 확정 안 된 결제 때문에
+     * 주문을 섣불리 취소하는 일은 없다.
+     */
+    @Transactional
+    public PaymentResult failPayment(Long paymentId, String reason) {
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+                .orElseThrow(() -> new PaymentException(PaymentErrorCode.PAYMENT_NOT_FOUND));
+        if (payment.isFailed()) {
+            return PaymentResult.from(payment);
+        }
+        payment.fail();
+        log.info("event=PAYMENT_FAILED paymentId={} orderId={} amount={} method={} reason={}",
+                payment.getId(), payment.getOrderId(), payment.getAmount(), payment.getMethod(), reason);
+        paymentResultOutboxRepository.save(PaymentResultOutbox.failed(payment.getId(), payment.getOrderId(), reason));
+        return PaymentResult.from(payment);
+    }
+
+    /*
+     * [2026-09-05 17:54 KST] PG 응답을 알 수 없을 때(timeout·연결 유실, 또는 내부 반영 자체가
+     * 실패한 경우) 호출한다. 복구 배치가 PG 거래 조회로 PAID/FAILED를 확정하기 전까지의 중간
+     * 상태다. order에게는 아무 것도 알리지 않는다 — 아직 결론이 안 났으니 주문을 건드릴 수 없다.
+     */
+    @Transactional
+    public PaymentResult markPaymentUnknown(Long paymentId, String reason) {
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+                .orElseThrow(() -> new PaymentException(PaymentErrorCode.PAYMENT_NOT_FOUND));
+        if (payment.isUnknown()) {
+            return PaymentResult.from(payment);
+        }
+        payment.markUnknown();
+        log.info("event=PAYMENT_UNKNOWN paymentId={} orderId={} amount={} method={} reason={}",
+                payment.getId(), payment.getOrderId(), payment.getAmount(), payment.getMethod(), reason);
         return PaymentResult.from(payment);
     }
 

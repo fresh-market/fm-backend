@@ -45,7 +45,7 @@ class CouponConsistencyIntegrationTest extends IntegrationTestSupport {
         CouponConsistencyReport report = sut.verify();
 
         assertThat(재고_어긋남()).isEmpty();
-        assertThat(순번_구멍()).isEmpty();
+        assertThat(순번_결번()).isEmpty();
         assertThat(report.duplicates()).noneMatch(duplicate -> duplicate.couponId() == COUPON_ID);
     }
 
@@ -66,16 +66,16 @@ class CouponConsistencyIntegrationTest extends IntegrationTestSupport {
 
     /*
      * 번호는 나갔는데 행이 안 들어간 모양을 만든다.
-     * 3번을 빼면 MAX 가 4 이고 행이 3 개라 구멍이 하나다.
+     * 3번을 빼면 MAX 가 4 이고 행이 3 개라 결번이 하나다.
      */
     @Test
-    void 순번의_구멍을_잡는다() {
+    void 순번의_결번을_잡는다() {
         발급한다(1, 2, 4);
         카운터를_적는다(3);
 
         sut.verify();
 
-        assertThat(순번_구멍()).singleElement()
+        assertThat(순번_결번()).singleElement()
                 .satisfies(span -> {
                     assertThat(span.maxSeq()).isEqualTo(4);
                     assertThat(span.issued()).isEqualTo(3);
@@ -188,7 +188,7 @@ class CouponConsistencyIntegrationTest extends IntegrationTestSupport {
         return sut.verify().stock().stream().filter(counted -> counted.couponId() == COUPON_ID).toList();
     }
 
-    private List<CouponSeqSpan> 순번_구멍() {
+    private List<CouponSeqSpan> 순번_결번() {
         return sut.verify().seqGaps().stream().filter(span -> span.couponId() == COUPON_ID).toList();
     }
 

@@ -25,19 +25,21 @@ class CouponWarmupRunnerTest {
     private final StringRedisTemplate redis = mock(StringRedisTemplate.class);
     private final JwtTokenProvider jwt = mock(JwtTokenProvider.class);
     private final WebServerApplicationContext webServer = mock(WebServerApplicationContext.class);
+    private final CouponWriteWarmup writeWarmup = mock(CouponWriteWarmup.class);
 
     private CouponWarmupRunner runner(CouponWarmupProperties properties) {
-        return new CouponWarmupRunner(properties, jwt, redis, webServer);
+        return new CouponWarmupRunner(properties, jwt, redis, webServer, writeWarmup);
     }
 
     private static CouponWarmupProperties enabled(int requests) {
-        return new CouponWarmupProperties(true, 1000000L, requests, 2, Duration.ofSeconds(2));
+        return new CouponWarmupProperties(
+                true, 1000000L, requests, 2, Duration.ofSeconds(2), 0, Duration.ofSeconds(20));
     }
 
     // 꺼져 있으면 Redis 도 안 건드린다
     @Test
     void 꺼져_있으면_아무것도_하지_않는다() {
-        runner(new CouponWarmupProperties(false, 1L, 10, 2, Duration.ofSeconds(1)))
+        runner(new CouponWarmupProperties(false, 1L, 10, 2, Duration.ofSeconds(1), 0, Duration.ofSeconds(20)))
                 .run(new DefaultApplicationArguments());
 
         verify(redis, never()).hasKey(anyString());
@@ -81,7 +83,7 @@ class CouponWarmupRunnerTest {
 
     /*
      * 끝내 못 붙어도 예외가 밖으로 나가면 안 된다.
-     * 나가면 인스턴스가 ready 를 못 받고 ASG 가 교체를 반복한다.
+     * 나가면 인스턴스가 ready 를 못 받고, 살아 있는 채로 트래픽만 못 받아 이벤트를 못 연다.
      */
     @Test
     void 끝내_못_붙어도_기동을_막지_않는다() {

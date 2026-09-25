@@ -106,7 +106,7 @@ common 과 infra 항목은 `--full` 로 연다. 커밋 범위를 정하는 ref �
 ./verify.sh -n 5 --agent "claude -p"
 
 # 다른 저장소 항목까지 판정한다. ref 와 함께 쓴다
-./verify.sh --full --agent "codex exec"
+./verify.sh --full --agent "gemini -p"
 ./verify.sh HEAD --full --agent "claude -p"
 ./verify.sh 84fa77d --full --agent "gemini -p"
 ```
@@ -212,7 +212,7 @@ python3 gen_items.py ../../docs/software-quality 'qa-*.md' common \
 ```
 
 ```
-OK  common 217건. 문서와 레지스트리가 일치한다
+OK  common 219건. 문서와 레지스트리가 일치한다
 ```
 
 어긋나면 무엇이 다른지 diff 를 찍고 **종료 코드 1** 을 낸다.
