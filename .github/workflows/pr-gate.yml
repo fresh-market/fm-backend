@@ -114,8 +114,12 @@ jobs:
     uses: fresh-market/.github/.github/workflows/llm-verify.yml@main
     with:
       # 다른 저장소 항목까지 판정한다.
-      # 끄면 backend 275건만 보고 common 의 품질 속성과 infra 의 인프라 제약은
-      # 아무도 강제로 보지 않는다. 켜면 484건이고 호출이 1회에서 2회로 는다.
+      #
+      # 끄면 backend 276건만 보고 common 의 품질 속성과 infra 의 인프라 제약은
+      # 아무도 강제로 보지 않는다. 켜면 615건이고 호출이 1회에서 2회로 는다.
+      #
+      # 이 값이 run.py 의 CI_STAGES 도 덮는다. 켜 두었으므로 CI 는 1단계(backend)와
+      # 2단계(common + infra)를 다 판정한다.
       full: true
     secrets:
       # 갱신 잡이 조립해 둔 CLI 인증 파일이다. 없으면 API 키로 떨어진다.
