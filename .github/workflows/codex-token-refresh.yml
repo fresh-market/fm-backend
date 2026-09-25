@@ -1,0 +1,22 @@
+# Codex 액세스 토큰 갱신 (진입점)
+#
+# 본체는 fresh-market/.github 에 있다. 세 저장소가 같은 절차를 써야 해서 복사하지 않는다.
+#
+# ChatGPT 구독으로 G-PR 을 돌리면 액세스 토큰 수명이 10일이다.
+# 그보다 짧은 주기로 갱신해 만료 전에 갈아 끼운다.
+# 만료되면 판정이 인증 실패로 0건이 되는데, 게이트가 비차단이라 조용히 지나간다.
+
+name: Codex 토큰 갱신
+
+on:
+  schedule:
+    # 수명 10일보다 짧게 잡는다. 한 번 걸러도 다음 주기가 만료 전에 온다
+    - cron: "0 18 */4 * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    uses: fresh-market/.github/.github/workflows/codex-token-refresh.yml@main
+    secrets:
+      CODEX_REFRESH_TOKEN: ${{ secrets.CODEX_REFRESH_TOKEN }}
+      SECRETS_PAT: ${{ secrets.SECRETS_PAT }}
