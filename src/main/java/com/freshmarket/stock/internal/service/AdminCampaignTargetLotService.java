@@ -3,7 +3,10 @@ package com.freshmarket.stock.internal.service;
 import com.freshmarket.common.response.PageCursor;
 import com.freshmarket.common.response.PageTokens;
 import com.freshmarket.product.ProductOptionInfo;
+import com.freshmarket.stock.internal.ExpiringSoonPolicy;
+import com.freshmarket.stock.internal.batch.CampaignTargetLotRebuildService;
 import com.freshmarket.stock.internal.dto.AdminCampaignTargetLotListResponse;
+import com.freshmarket.stock.internal.dto.AdminCampaignTargetLotRebuildResponse;
 import com.freshmarket.stock.internal.dto.AdminCampaignTargetLotResponse;
 import com.freshmarket.stock.internal.entity.CampaignTargetLot;
 import com.freshmarket.stock.internal.repository.CampaignTargetLotRepository;
@@ -40,12 +43,15 @@ public class AdminCampaignTargetLotService {
 
     private final CampaignTargetLotRepository campaignTargetLotRepository;
     private final CampaignTargetLotProductInfoService campaignTargetLotProductInfoService;
+    private final CampaignTargetLotRebuildService campaignTargetLotRebuildService;
     private final Clock clock;
 
     public AdminCampaignTargetLotService(CampaignTargetLotRepository campaignTargetLotRepository,
-            CampaignTargetLotProductInfoService campaignTargetLotProductInfoService, Clock clock) {
+            CampaignTargetLotProductInfoService campaignTargetLotProductInfoService,
+            CampaignTargetLotRebuildService campaignTargetLotRebuildService, Clock clock) {
         this.campaignTargetLotRepository = campaignTargetLotRepository;
         this.campaignTargetLotProductInfoService = campaignTargetLotProductInfoService;
+        this.campaignTargetLotRebuildService = campaignTargetLotRebuildService;
         this.clock = clock;
     }
 
@@ -58,7 +64,7 @@ public class AdminCampaignTargetLotService {
      * 두 단계 모두 IN 조회 한 번씩이라 페이지 크기와 무관하게 쿼리는 세 번이다.
      */
     public AdminCampaignTargetLotListResponse find(PageCursor cursor, int pageSize) {
-        LocalDate today = LocalDate.now(clock);
+        LocalDate today = ExpiringSoonPolicy.businessToday(clock);
         int effectivePageSize = resolvePageSize(pageSize);
         int afterRank = cursor != null ? cursor.id().intValue() : 0;
 
@@ -98,4 +104,20 @@ public class AdminCampaignTargetLotService {
         return PageTokens.encode(new PageCursor((long) page.get(page.size() - 1).getTargetRank(), null));
     }
 
+
+    /*
+     * 오늘자 대상을 다시 확정한다. 자정 배치가 실패했거나 기준 데이터가 바뀌었을 때
+     * 다음 자정까지 기다리지 않고 복구하는 수단이다.
+     *
+     * 재계산형이라 여러 번 눌러도 결과가 같다. 당일분을 지우고 다시 만든다.
+     *
+     * 캐시를 여기서 비우지 않는다. 회원용 조회의 캐시 키에 확정본 버전이 들어 있어
+     * 다시 확정하면 키가 달라지고, 옛 항목은 아무도 찾지 않게 되어 만료로 정리된다.
+     * 로컬 캐시라 이 인스턴스만 비워봐야 다른 인스턴스가 그대로인 문제도 그래서 없다.
+     */
+    public AdminCampaignTargetLotRebuildResponse rebuildToday() {
+        LocalDate today = ExpiringSoonPolicy.businessToday(clock);
+        int confirmedCount = campaignTargetLotRebuildService.rebuild();
+        return new AdminCampaignTargetLotRebuildResponse(today, confirmedCount);
+    }
 }
