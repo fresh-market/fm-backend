@@ -696,7 +696,7 @@ flowchart TB
     S1 --> J{"항목별 판정"}
     S2 --> J
     J --> GL["G-LOCAL  개발자 로컬<br/>docs/llm-review/ 에 커밋되어 남는다"]
-    AG["갈아 끼우는 자리<br/>로컬은 --agent 로 CLI 를 준다 (codex exec, gemini -p, ...)<br/>CI 는 CODEX_AUTH_JSON, 없으면 OPENAI_API_KEY"] -.-> RUN
+    AG["갈아 끼우는 자리<br/>로컬은 --agent 로 CLI 를 준다 (gemini -p, claude -p, ...)<br/>CI 는 GEMINI_CREDS_JSON, 없으면 GEMINI_API_KEY"] -.-> RUN
     J --> GP["G-PR  CI 자동<br/>PR 코멘트. 안 남는다"]
 
     style AG fill:#e7e9ee,stroke:#5d6675
@@ -736,7 +736,7 @@ api-contract migration  app-config test         archunit        build
 | G-PR | develop 을 향한 PR 에서만 도는 LLM 판정 | 안 막는다 | 안 남는 PR 코멘트 |
 | G-LOCAL | 위 전부 | 안 막는다 | `docs/llm-review/` 에 커밋되어 남는다 |
 
-**LLM 은 갈아 끼운다.** 로컬은 `./verify.sh --agent "codex exec"` 처럼 CLI 를 준다. CI 는 `CODEX_AUTH_JSON` 으로 돌다가 없으면 API 키로 떨어진다.
+**LLM 은 갈아 끼운다.** 로컬은 `./verify.sh --agent "gemini -p"` 처럼 CLI 를 준다. CI 는 Gemini CLI 를 쓰며 `GEMINI_CREDS_JSON` 으로 돌다가 없으면 API 키로 떨어진다.
 
 **판정은 두 단계로 나눠 부른다.** 1단계가 backend 항목을 본다. 그 응답이 온전할 때만 2단계가 common 과 infra 를 본다. 건너뛴 항목은 `UNJUDGED` 로 남아 **통과와 구분된다.**
 
