@@ -299,7 +299,8 @@ OK  backend 273건. 문서와 레지스트리가 일치한다
 | "판정할 항목 없음" | 정상이다. 문서만 고쳤을 때 그렇다 |
 | 활성 항목이 적고 규칙이 `on_no_match` 다 | 정상이다. 어떤 앵커에도 안 걸린 변경이다 |
 | 같은 항목이 계속 `INSUFFICIENT_EVIDENCE` | `backend/.github/llm-verify/anchors.yml` 의 `anchors` 에 파일 추가 |
-| CI 워크플로가 빨갛다 | `GEMINI_API_KEY`, `SONAR_TOKEN` 시크릿 확인 |
+| CI 워크플로가 빨갛다 | `CODEX_AUTH_JSON`, `SONAR_TOKEN` 시크릿 확인 |
+| `G-PR` 이 빨갛고 코멘트에 미판정이 남았다 | 판정을 못 한 것이다. 코멘트의 단계별 사유를 본다. 병합은 막지 않는다 |
 | PR 을 열었는데 registry-check 가 안 돈다 | 문서를 건드린 PR 에서만 돈다 |
 | `G-PR` 이 skipped 다 | `G-BUILD` 가 실패했다. 그것부터 고친다 |
 | 같은 지적이 매 PR 마다 나온다 | `common/.github/llm-verify/known-conflicts.yml` 에 등록 |
