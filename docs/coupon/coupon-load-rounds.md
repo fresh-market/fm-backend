@@ -302,6 +302,7 @@ COUPON_SEQ_REBUILD_SKIPPED   없음
 ## 관련 문서
 
 * 계획: [coupon-load-scenarios.md](coupon-load-scenarios.md)
+* 버전 비교 회차: [coupon-version-results-2026-09-27.md](coupon-version-results-2026-09-27.md). 10장의 "병목이 없다" 를 구현 넷으로 다시 확인한 회차다
 * 요구사항: [requirement.md](requirement.md)
 * 설계와 SLO: [coupon.md](coupon.md) 5장, 8장
 * 워밍업: [warmup.md](warmup.md)
