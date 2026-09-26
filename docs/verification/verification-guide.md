@@ -99,7 +99,7 @@ PR 을 올리기 전에 한 번 돌린다.
 git clone https://github.com/fresh-market/fm-backend.git backend
 ```
 
-판정 기준 590건 중 317건이 다른 두 저장소에 있다. `./verify.sh` 가 그 둘을 두 단계로 찾는다.
+판정 기준 615건 중 339건이 다른 두 저장소에 있다. `./verify.sh` 가 그 둘을 두 단계로 찾는다.
 
 | 순서 | 위치 | 어떻게 다루나 |
 |------|------|---------------|
@@ -121,11 +121,11 @@ git clone https://github.com/fresh-market/fm-backend.git backend
 
 ## 이 시스템이 하는 일
 
-코드 품질 점검을 LLM 에게 맡긴다. 점검 항목은 세 저장소에 나뉘어 총 590건이고, 판정 대상은 backend 코드다.
+코드 품질 점검을 LLM 에게 맡긴다. 점검 항목은 세 저장소에 나뉘어 총 615건이고, 판정 대상은 backend 코드다.
 
 ```
 커밋하면      로컬에서 판정한다   (./verify.sh 를 쳐야 돈다)
-PR 을 열면    CI 에서 gemini 가 본다  (자동)
+PR 을 열면    CI 에서 LLM 이 본다     (자동)
 둘 다         병합을 막지 않는다
 ```
 
