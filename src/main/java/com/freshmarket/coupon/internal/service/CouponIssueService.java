@@ -16,6 +16,8 @@ import com.freshmarket.coupon.internal.exception.DataAccessFailures;
 import com.freshmarket.coupon.internal.CouponIssueMetrics;
 import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.issue.CouponIssueQueue;
+import org.springframework.dao.DuplicateKeyException;
+import com.freshmarket.coupon.internal.repository.MemberCouponBulkRepository;
 import com.freshmarket.coupon.internal.issue.CouponWriteCircuit;
 import com.freshmarket.coupon.internal.issue.IssueOutcome;
 import com.freshmarket.coupon.internal.issue.IssueResult;
@@ -52,6 +54,10 @@ public class CouponIssueService {
     private final CouponSeqAllocator allocator;
     private final CouponSeqRebuildTrigger rebuildTrigger;
     private final CouponIssueQueue queue;
+    // v1 브랜치가 쓰는 경로다. 순번 확보와 발급 기록을 한 트랜잭션으로 묶는다
+    private final CouponV1IssueTransaction v1Transaction;
+    // 중복 발급일 때 이미 가진 순번을 읽는다
+    private final MemberCouponBulkRepository bulkRepository;
     private final CouponWriteCircuit writeCircuit;
     private final CouponIssueProperties properties;
     private final CouponIssueMetrics metrics;
@@ -77,10 +83,46 @@ public class CouponIssueService {
         }
 
         /*
-         * 이 메서드는 큐에 자리가 있는지를 순번을 받기 전에 확인한다.
-         * 순번을 먼저 받고 나서 큐에 못 넣으면 그 번호를 Redis 에 반납해야 하는데, 순서를 이렇게
-         * 두면 반납할 일 자체가 안 생긴다.
+         * ---- v1 브랜치 ----
+         *
+         * 여기가 v1 과 v2 를 가르는 자리다. v1 은 Redis 를 안 쓰고 DB 조건부 UPDATE 하나로
+         * 판정한다. 그 UPDATE 가 coupon 행에 배타 락을 걸어 같은 쿠폰의 요청이 전부 한 줄로 선다.
+         *
+         * 거절되는 쪽도 그 락을 기다린다는 것이 v1 의 핵심 약점이다. 판정 자체가 락 뒤에 있어서다.
+         * v2 는 INCR 결과만 보고 DB 를 안 건드리고 끊는다. 그래서 v2 가 이득의 대부분을 가져간다
+         * (docs/coupon/coupon.md 6장).
+         *
+         * 큐도 확인하지 않는다. 큐가 없으므로 QUEUE_FULL 이 이 브랜치에서는 안 나온다.
+         * 1인 1매는 uk_mc_coupon_member 가 막고 그 위반이 DuplicateKeyException 으로 온다.
          */
+        try {
+            int seq = v1Transaction.issue(
+                    couponId, memberId, coupon.scope(), coupon.totalQuantity());
+            if (seq == 0) {
+                /*
+                 * 재고가 없다. v1 은 미확정 순번이라는 상태가 없어서 소진이 곧 최종이다.
+                 * v2 부터는 pending 키를 쥔 사람이 있으면 다시 나올 수 있어 409 와 410 이 갈린다.
+                 */
+                metrics.record(IssueResult.SOLD_OUT_FINAL);
+                throw new CouponException(CouponErrorCode.SOLD_OUT_FINAL);
+            }
+            metrics.record(IssueResult.ISSUED);
+            return CouponIssueResponse.issued(seq);
+        } catch (DuplicateKeyException e) {
+            /*
+             * 이 회원이 이미 갖고 있다. 위 트랜잭션이 롤백되어 issued_quantity 도 되돌아간다.
+             * 그래서 중복 시도가 재고를 깎지 않는다.
+             */
+            return bulkRepository.findIssuedSeq(couponId, memberId)
+                    .map(this::alreadyIssued)
+                    .orElseThrow(() -> congested(IssueResult.SEQ_TAKEN, e));
+        } catch (DataAccessException e) {
+            throw congestedIfTransient(e);
+        }
+    }
+
+    /* v2 부터 쓰는 경로다. 이 브랜치에서는 안 불린다. 비교를 위해 코드를 남겨 둔다. */
+    private CouponIssueResponse issueViaQueue(CachedCoupon coupon, long couponId, long memberId) {
         if (!queue.hasRoom()) {
             throw congested(IssueResult.QUEUE_FULL);
         }
