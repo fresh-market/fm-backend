@@ -203,7 +203,7 @@ infra 에 Terraform 이 생기면 그쪽에도 만들고, 그때 이 문서를 c
 |---------|------|
 | `backend/src`의 Java 코드 | 모든 규칙이 기본 집합으로 떨어진다 |
 | `backend/build.gradle` | **G-BUILD 가 돌지 않는다.** 차단 게이트 하나가 공백 |
-| `GEMINI_API_KEY` | CI 판정 스텝이 실패한다 |
+| `CODEX_AUTH_JSON` 과 `OPENAI_API_KEY` 둘 다 없음 | CI 인증 스텝이 실패한다 |
 | `infra/.github/llm-verify/anchors.yml` | 인프라 코드 자체는 판정되지 않는다 |
 | G-RELEASE 스크립트 | 배포 전 `PRE` 13건이 확인되지 않는다 |
 
