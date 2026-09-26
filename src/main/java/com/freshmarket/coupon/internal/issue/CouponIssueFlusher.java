@@ -304,6 +304,22 @@ public class CouponIssueFlusher implements SmartLifecycle {
         completeIssued(batch);
     }
 
+    /*
+     * v2 브랜치용. 요청 스레드가 자기 티켓 하나를 직접 쓴다.
+     *
+     * v2 는 큐와 벌크 INSERT 가 없는 버전이다. 그 차이를 재려고 이 진입점을 둔다.
+     * 새로 쓰지 않고 아래 flushOneByOne 을 그대로 부른다. 중복 해소와 DB 실패 처리와 회로와
+     * Redis 뒷정리가 전부 거기 있어서, 다시 쓰면 v2 의 수치가 그 새 코드의 버그를 재게 된다.
+     *
+     * 큐를 안 쓰므로 플러시 스레드는 빈 큐를 보며 돌기만 한다. 껐다가 재건 경로가 큐를 훑는
+     * 부분이 함께 죽는 것보다 그대로 두는 편이 안전하다.
+     *
+     * 이 메서드는 이 브랜치에만 있다. 병합 대상이 아니다.
+     */
+    public void writeInline(IssueTicket ticket) {
+        flushOneByOne(List.of(ticket));
+    }
+
     private void flushOneByOne(List<IssueTicket> batch) {
         List<IssueTicket> issued = new ArrayList<>(batch.size());
         /*

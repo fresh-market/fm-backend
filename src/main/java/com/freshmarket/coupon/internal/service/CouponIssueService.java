@@ -15,6 +15,7 @@ import com.freshmarket.coupon.internal.exception.CouponException;
 import com.freshmarket.coupon.internal.exception.DataAccessFailures;
 import com.freshmarket.coupon.internal.CouponIssueMetrics;
 import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
+import com.freshmarket.coupon.internal.issue.CouponIssueFlusher;
 import com.freshmarket.coupon.internal.issue.CouponIssueQueue;
 import com.freshmarket.coupon.internal.issue.CouponWriteCircuit;
 import com.freshmarket.coupon.internal.issue.IssueOutcome;
@@ -52,6 +53,8 @@ public class CouponIssueService {
     private final CouponSeqAllocator allocator;
     private final CouponSeqRebuildTrigger rebuildTrigger;
     private final CouponIssueQueue queue;
+    // v2 브랜치가 요청 스레드에서 직접 쓰기 위해 받는다
+    private final CouponIssueFlusher flusher;
     private final CouponWriteCircuit writeCircuit;
     private final CouponIssueProperties properties;
     private final CouponIssueMetrics metrics;
@@ -216,7 +219,16 @@ public class CouponIssueService {
     private CouponIssueResponse record(CachedCoupon coupon, long memberId, int issueSeq) {
         IssueTicket ticket = IssueTicket.of(
                 coupon.couponId(), memberId, coupon.scope(), coupon.totalQuantity(), issueSeq);
-        queue.submit(ticket);
+        /*
+         * v2 브랜치다. 요청 스레드가 직접 쓴다. v3 는 여기서 queue.submit(ticket) 을 한다.
+         *
+         * 그 한 줄이 v2 와 v3 를 가른다. v2 는 발급 한 건에 DB 왕복 하나이고, v3 는 플러시
+         * 스레드가 여러 건을 한 문장으로 묶는다. 나머지는 같다. Redis 순번도 같이 쓴다.
+         *
+         * 아래 waitFor 는 그대로 둔다. writeInline 이 돌아올 때 future 가 이미 완료되어 있어
+         * 바로 결과를 꺼낸다. 두 버전이 같은 응답 경로를 쓰게 두면 측정이 쓰기 방식만 잰다.
+         */
+        flusher.writeInline(ticket);
         return waitFor(ticket);
     }
 
