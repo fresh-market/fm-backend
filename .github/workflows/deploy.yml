@@ -21,6 +21,22 @@ on:
   push:
     branches: [main]
 
+  # 브랜치를 골라 배포한다. 부하 시험으로 버전을 비교하려면 이 길이 필요하다.
+  #
+  # v1 에서 v3 까지는 v4 보다 나쁜 구현이다. 비교 데이터를 만들려고 그것을 main 에 병합하면
+  # 운영이 잠시 그 버전으로 돈다. 그래서 main 을 거치지 않고 브랜치에서 바로 이미지를 만든다.
+  #
+  # 위험은 하나다. 이 길로 올린 브랜치 이미지가 운영에 남는다. 그래서 시험이 끝나면 main 을
+  # 다시 배포해 되돌린다. 아래 skip_rolling 을 쓰면 이미지만 만들고 굴리지 않는다.
+  #
+  # 태그가 커밋 SHA 이고 ECR 이 IMMUTABLE 이라 버전마다 태그가 달라 서로 덮지 않는다.
+  workflow_dispatch:
+    inputs:
+      skip_rolling:
+        description: 이미지만 만들고 롤링 배포는 건너뛴다
+        type: boolean
+        default: false
+
 # 배포는 중간에 끊으면 안 된다. 구 인스턴스를 지우는 도중에 취소되면 용량이 반이 된다.
 concurrency:
   group: deploy-prod
@@ -69,7 +85,8 @@ jobs:
 
   deploy:
     needs: check
-    if: needs.check.outputs.up == 'true'
+    # 인프라가 없으면 건너뛴다. 다만 이미지만 만드는 요청은 인프라와 무관하므로 통과시킨다.
+    if: needs.check.outputs.up == 'true' || inputs.skip_rolling == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -113,6 +130,7 @@ jobs:
 
       # 0번 사전 점검부터 10번 최종 확인까지 스크립트가 수행한다.
       - name: 롤링 배포
+        if: ${{ inputs.skip_rolling != true }}
         env:
           PROJECT: freshmarket
           # 스모크 대상의 호스트는 deploy.sh 가 ALB 에서 직접 조회한다.
