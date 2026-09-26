@@ -45,19 +45,16 @@ PR 에 코멘트 하나로 달린다. push 할 때마다 새로 달리지 않고
 
 * `src/main/java/com/x/internal/service/OrderService.java:3`
 * public 메서드가 매개변수 유효성을 검사하지 않는다
-* 고치기: 메서드 앞에서 null 과 범위를 검사하고 `IllegalArgumentException` 을 던진다
 
 **`DI-4-02`** 트랜잭션 안에서 외부 API를 호출하지 않는가
 
 * `src/main/java/com/x/internal/service/OrderService.java:6`
 * 결제 트랜잭션 안에서 `externalApi.call()` 을 호출한다
-* 고치기: 외부 호출을 트랜잭션 밖으로 빼고 실패 시 보상 경로를 둔다
 
 **`SEC-1-01`** 리소스 접근 시 소유권 또는 권한을 검증하는가
 
 * `src/main/java/com/x/internal/service/OrderService.java:4`
 * id 로 조회만 하고 호출자가 소유자인지 확인하지 않는다
-* 고치기: 인증 주체의 식별자를 조회 조건에 포함한다
 
 <details><summary>기존 부채 1건</summary>
 

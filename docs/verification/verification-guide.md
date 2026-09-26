@@ -99,7 +99,7 @@ PR 을 올리기 전에 한 번 돌린다.
 git clone https://github.com/fresh-market/fm-backend.git backend
 ```
 
-판정 기준 590건 중 317건이 다른 두 저장소에 있다. `./verify.sh` 가 그 둘을 두 단계로 찾는다.
+판정 기준 615건 중 339건이 다른 두 저장소에 있다. `./verify.sh` 가 그 둘을 두 단계로 찾는다.
 
 | 순서 | 위치 | 어떻게 다루나 |
 |------|------|---------------|
@@ -121,11 +121,11 @@ git clone https://github.com/fresh-market/fm-backend.git backend
 
 ## 이 시스템이 하는 일
 
-코드 품질 점검을 LLM 에게 맡긴다. 점검 항목은 세 저장소에 나뉘어 총 590건이고, 판정 대상은 backend 코드다.
+코드 품질 점검을 LLM 에게 맡긴다. 점검 항목은 세 저장소에 나뉘어 총 615건이고, 판정 대상은 backend 코드다.
 
 ```
 커밋하면      로컬에서 판정한다   (./verify.sh 를 쳐야 돈다)
-PR 을 열면    CI 에서 gemini 가 본다  (자동)
+PR 을 열면    CI 에서 LLM 이 본다     (자동)
 둘 다         병합을 막지 않는다
 ```
 
@@ -164,7 +164,7 @@ PR 을 열면    CI 에서 gemini 가 본다  (자동)
 `registry-check.yml` 은 조건이 하나 더 붙는다. **점검 항목 문서나 `items.yml` 을 건드린 PR 에서만** 돈다.
 Java 코드만 고친 PR 에서는 실행조차 되지 않는다.
 
-**G-PR 은 G-BUILD 가 통과해야 돈다.** 빌드가 깨진 PR 에 LLM 을 부르면 무료 티어만 낭비한다.
+**G-PR 은 G-BUILD 가 통과해야 돈다.** 빌드가 깨진 PR 에 LLM 을 부르면 판정 한도만 낭비한다.
 
 판정 코멘트는 **돌 때마다 옛 것을 지우고 새로 단다.** 항상 하나만 남고 그것이 최신이다.
 지난 판정은 Actions 탭의 실행 기록과 Job Summary 에 남는다.
@@ -299,7 +299,8 @@ OK  backend 273건. 문서와 레지스트리가 일치한다
 | "판정할 항목 없음" | 정상이다. 문서만 고쳤을 때 그렇다 |
 | 활성 항목이 적고 규칙이 `on_no_match` 다 | 정상이다. 어떤 앵커에도 안 걸린 변경이다 |
 | 같은 항목이 계속 `INSUFFICIENT_EVIDENCE` | `backend/.github/llm-verify/anchors.yml` 의 `anchors` 에 파일 추가 |
-| CI 워크플로가 빨갛다 | `GEMINI_API_KEY`, `SONAR_TOKEN` 시크릿 확인 |
+| CI 워크플로가 빨갛다 | `CODEX_AUTH_JSON`, `SONAR_TOKEN` 시크릿 확인 |
+| `G-PR` 이 빨갛고 코멘트에 미판정이 남았다 | 판정을 못 한 것이다. 코멘트의 단계별 사유를 본다. 병합은 막지 않는다 |
 | PR 을 열었는데 registry-check 가 안 돈다 | 문서를 건드린 PR 에서만 돈다 |
 | `G-PR` 이 skipped 다 | `G-BUILD` 가 실패했다. 그것부터 고친다 |
 | 같은 지적이 매 PR 마다 나온다 | `common/.github/llm-verify/known-conflicts.yml` 에 등록 |

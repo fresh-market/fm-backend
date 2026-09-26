@@ -2,7 +2,7 @@
 #
 # 두 게이트를 한 파일에 둔 이유는 needs 로 순서를 매기기 위해서다.
 # 워크플로가 갈라져 있으면 needs 를 쓸 수 없어 빌드가 깨진 PR 에도 판정이 돈다.
-# Gemini 무료 티어는 분당 요청 수가 10 이라 그 낭비가 그대로 뒤 PR 을 밀리게 한다.
+# 판정 한도는 아껴 쓸 수밖에 없어서 그 낭비가 그대로 뒤 PR 을 밀리게 한다.
 #
 # 차단하는 것은 build 뿐이다. verify 는 지적만 남긴다.
 # 근거는 fresh-market/.github 의 docs/software-quality/qa-llm-verification.md 에 있다.
@@ -106,7 +106,7 @@ jobs:
   # --- G-PR. 차단하지 않는다 -----------------------------------------------
   #
   # develop 을 향한 PR 에서만 돈다. main 은 develop 이 이미 판정한 것을 받으므로
-  # 같은 변경을 두 번 판정하면 무료 티어 한도만 쓴다.
+  # 같은 변경을 두 번 판정하면 판정 한도만 쓴다.
   verify:
     name: G-PR
     needs: build
@@ -114,8 +114,12 @@ jobs:
     uses: fresh-market/.github/.github/workflows/llm-verify.yml@main
     with:
       # 다른 저장소 항목까지 판정한다.
-      # 끄면 backend 275건만 보고 common 의 품질 속성과 infra 의 인프라 제약은
-      # 아무도 강제로 보지 않는다. 켜면 484건이고 호출이 1회에서 2회로 는다.
+      #
+      # 끄면 backend 276건만 보고 common 의 품질 속성과 infra 의 인프라 제약은
+      # 아무도 강제로 보지 않는다. 켜면 615건이고 호출이 1회에서 2회로 는다.
+      #
+      # 이 값이 run.py 의 CI_STAGES 도 덮는다. 켜 두었으므로 CI 는 1단계(backend)와
+      # 2단계(common + infra)를 다 판정한다.
       full: true
     secrets:
       # 갱신 잡이 조립해 둔 CLI 인증 파일이다. 없으면 API 키로 떨어진다.
