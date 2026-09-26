@@ -21,9 +21,21 @@ spring:
   #
   # 대가로 큐 길이의 자연 상한이 사라진다. 플랫폼 스레드일 때는 요청 스레드 수가 곧 큐
   # 길이의 상한이었는데 그것이 없어지므로, 앱이 coupon.issue.queue-capacity 로 직접 건다.
+  #
+  # ---- v3 브랜치 ----
+  #
+  # 이 브랜치는 v3 다. v4 와 한 가지만 다르다. 가상 스레드를 끈다.
+  # 큐와 벌크 INSERT 와 Redis 순번은 v4 와 같다. 오직 캐리어 스레드만 플랫폼으로 되돌린다.
+  #
+  # 그래서 server.tomcat.threads.max 200 이 다시 실제 상한이 된다. 동시에 큐에서 잠들 수 있는
+  # 요청이 200 개이므로 큐 길이의 실효 상한도 200 이다. queue-capacity 20000 은 그보다 훨씬
+  # 커서 이 브랜치에서는 발화하지 않는다. 값을 맞추지 않고 그대로 둔다. v4 와 다른 것을 하나로
+  # 묶어야 측정이 그 하나를 재기 때문이다.
+  #
+  # 이 브랜치는 부하 시험 비교용이고 병합 대상이 아니다. 근거는 docs/coupon/coupon.md 6장에 있다.
   threads:
     virtual:
-      enabled: true
+      enabled: false
 
   datasource:
     hikari:
