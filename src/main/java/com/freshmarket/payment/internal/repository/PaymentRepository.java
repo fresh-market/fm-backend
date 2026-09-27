@@ -62,7 +62,18 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
      * 같은 방식 — id 기준 커서로 페이지를 넘기면 한 페이지 처리 중 다른 행이 새로 같은 상태가 되어도
      * 중복/누락 없이 다음 페이지로 넘어간다. updatedAt이 그 상태로 전이된 시점이라, 그 시점 기준으로
      * (상태별로 다른) 유예 시간이 지난 것만 대상으로 삼는다.
+     *
+     * [2026-09-27 KST] pgTid IS NOT NULL 조건을 추가했다 — 결제창을 열어놓고 그냥 이탈한 경우
+     * (confirm을 한 번도 호출 안 함, Payment.recordConfirmAttempt 클래스 주석 참고)는 pgTid가 끝까지
+     * 비어 있어 토스 쪽에 물어볼 거래 자체가 없다. 이런 행까지 매 주기 inquire()로 재조회하면 PG에
+     * 의미 없는 호출만 쌓인다. UNKNOWN은 markUnknown()이 항상 recordConfirmAttempt() 이후에만
+     * 일어나므로(PaymentConfirmationService.confirm 참고) 이 조건이 사실상 영향이 없지만, PENDING은
+     * "confirm 시도 중 프로세스가 죽어 pgTid는 남았지만 상태 전이를 못한 경우"와 "애초에 confirm을
+     * 시도조차 안 한 이탈"이 둘 다 섞여 있어 이 조건으로 후자를 걸러낸다. 이탈로 오래 PAYMENT_PENDING에
+     * 머문 주문은 이 배치가 아니라 order.internal.batch.PendingOrderExpirationService가 순수 TTL로
+     * 만료시킨다 — 그 배치는 payment 테이블을 전혀 보지 않고 Order.status/updatedAt만 보므로(L2끼리
+     * 직접 호출 금지 규칙과 무관하게) pgTid 유무와 상관없이 이미 이 케이스를 커버하고 있었다.
      */
-    List<Payment> findByStatusAndReconciliationIsolatedFalseAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
+    List<Payment> findByStatusAndReconciliationIsolatedFalseAndPgTidIsNotNullAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
             PaymentStatus status, Long afterId, LocalDateTime cutoff, Pageable pageable);
 }

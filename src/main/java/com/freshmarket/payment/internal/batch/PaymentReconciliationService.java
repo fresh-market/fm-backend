@@ -90,7 +90,12 @@ public class PaymentReconciliationService {
         List<Payment> page;
         Pageable pageable = PageRequest.of(0, PAGE_SIZE);
         do {
-            page = paymentRepository.findByStatusAndReconciliationIsolatedFalseAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
+            /*
+             * [2026-09-27 KST] pgTid IS NOT NULL 조건이 붙은 쿼리로 바뀌었다 — confirm을 한 번도
+             * 시도 안 한 이탈 건은 여기서 아예 후보에서 빠진다(PaymentRepository 쿼리 메서드 주석
+             * 참고). 그 건들은 order 쪽 PendingOrderExpirationService가 별도로 TTL 만료시킨다.
+             */
+            page = paymentRepository.findByStatusAndReconciliationIsolatedFalseAndPgTidIsNotNullAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
                     status, afterId, cutoff, pageable);
             for (Payment payment : page) {
                 reconcileOne(payment);
