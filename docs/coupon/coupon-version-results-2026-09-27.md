@@ -269,8 +269,25 @@ Out of memory: Killed process (k6) total-vm:8804788kB, anon-rss:7442372kB
 **v2 와 v3 와 v4 의 우열이다.** 세 범위가 겹친다. 가르려면 표본을 늘리거나 부하를 올려야
 한다.
 
-**v1 의 상한이 왜 4,000건인지 정확히는 모른다.** 락 대기가 원인인 것은 지표가 말하지만,
-RDS `db.t4g.micro` 의 한계와 행 락의 직렬화 중 어느 쪽이 더 큰지는 가르지 못했다.
+**v1 의 500 이 무슨 예외인지 모른다.** `COMMON-001` 은 잡히지 않은 예외의 공통 응답이고
+어느 예외인지는 앱 로그에 있는데 회차 뒤에 인스턴스를 파괴했다. `hikaricp_connections_pending`
+최대 102 에 `active` 8 이므로 커넥션 획득 타임아웃이 그럴듯하지만 **추정이다.**
+
+**열한 회차의 임계 판정을 모른다.** `issue.js` 의 임계가 넷인데 p99 와 DB 정합성만 뽑았다.
+그래서 v1 이 요청의 80%에 500 을 돌려준다는 것을 v1-3 한 회차에서 우연히 발견했다.
+
+```
+✗ 'rate<0.01' rate=80.19%
+thresholds on metrics 'coupon_settled_duration, coupon_unexpected, http_req_failed' have been crossed
+k6 exit 99
+```
+
+**`coupon_unexpected: ['count==0']` 이 정확히 이것을 잡으려고 있었는데 내 기록에 그 신호가
+없었다.** 나머지 열한 회차는 k6 요약이 OOM 으로 사라지고 Prometheus 도 파괴해서 영영 모른다.
+`k6_coupon_unexpected_total` 이 시계열 목록에 있었는데 뽑지 않았다.
+
+**그래서 v2, v3, v4 도 500 을 냈는지 모른다.** 발급이 10,000 이었으므로 대량은 아니었겠지만
+`count==0` 을 지켰는지는 확인할 수 없다.
 
 **`tomcat_threads_busy_threads` 를 못 봤다.** v3 와 v4 를 가르는 지표인데 수집되지 않았다.
 
