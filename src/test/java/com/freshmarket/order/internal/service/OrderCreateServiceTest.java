@@ -60,7 +60,7 @@ class OrderCreateServiceTest {
     @Test
     void 새로_생성된_주문이면_결제요청_outbox를_dispatch한다() {
         OrderCreateRequest request = request();
-        OrderCreateResponse response = new OrderCreateResponse(100L, "100", OrderStatus.PAYMENT_PENDING, 38_700);
+        OrderCreateResponse response = new OrderCreateResponse(100L, "100", "ORD-00000100", OrderStatus.PAYMENT_PENDING, 38_700);
         when(orderPendingCreationCoordinatorService.createPendingOrder(1L, request))
                 .thenReturn(new PendingOrderResult(response, true));
 
@@ -73,7 +73,7 @@ class OrderCreateServiceTest {
     @Test
     void requestId_재시도면_미전달_결제요청_outbox를_다시_dispatch한다() {
         OrderCreateRequest request = request();
-        OrderCreateResponse response = new OrderCreateResponse(100L, "100", OrderStatus.PAID, 38_700);
+        OrderCreateResponse response = new OrderCreateResponse(100L, "100", "ORD-00000100", OrderStatus.PAID, 38_700);
         when(orderPendingCreationCoordinatorService.createPendingOrder(1L, request))
                 .thenReturn(new PendingOrderResult(response, false));
 

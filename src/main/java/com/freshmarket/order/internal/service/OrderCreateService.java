@@ -29,13 +29,13 @@ import org.springframework.transaction.annotation.Transactional;
  *      OrderPendingCreationService 짧은 트랜잭션으로 주문/주문상품 저장, 재고 예약, 장바구니 정리까지
  *      끝내고 커밋한 뒤 돌아온다. requestId 동시 충돌이면 커밋된 기존 주문을 다시 읽어 수렴한다.
  *   b. (여기, 트랜잭션 밖) order outbox dispatch — payment.domain의 리스너가 공용 이벤트를 받아
- *      이벤트를 받아 PaymentApi.requestPayment를 부른다(자세한 이유는 그 이벤트 클래스 주석:
- *      order/payment 둘 다 L2라 서로 직접 못 부른다). 지금은 MockPaymentGateway라 이 호출이
- *      순식간에 끝나지만, 나중에 실제 PG WebClient로 바뀌어 네트워크 지연이 생겨도 이 시점엔 DB
- *      락을 하나도 쥐고 있지 않다 — PG 호출을 열린 트랜잭션 밖으로 빼는 게 이 구조의 핵심이다.
- *      "mock 성공만 리턴하는 지점"을 한 곳으로 좁히고 싶다면 손댈 곳은 이 이벤트 발행부가 아니라
- *      payment.domain.client.MockPaymentGateway 하나다 — PaymentGateway 인터페이스의 구현체를
- *      실제 PG 클라이언트로 교체하는 것만으로 끝난다(PaymentApiImpl/PaymentService는 안 바뀐다).
+ *      PaymentApi.preparePayment를 불러 PENDING 결제 행만 만든다(자세한 이유는 그 이벤트 클래스
+ *      주석: order/payment 둘 다 L2라 서로 직접 못 부른다). [2026-09-27 KST] 토스 연동 전에는
+ *      이 지점에서 곧바로 PG 승인 호출까지 동기로 이어졌지만, 이제는 PENDING 준비로 끝난다 — 실제
+ *      PG 승인은 프론트가 토스 결제창 인증을 마친 뒤 별도로 부르는 확정(confirm) API
+ *      (PaymentConfirmController → PaymentConfirmationService)에서 일어난다. 그래도 "PG 호출을
+ *      열린 트랜잭션 밖으로 빼는 게 이 구조의 핵심이다"는 그대로 유효하다 — 그 PG 호출이 이제
+ *      이 메서드가 아니라 confirm 요청 시점에 일어날 뿐이다.
  *   c. onPaymentApproved/onPaymentFailed(아래) — 결제 결과가 확정되면 이벤트 체인 끝에서 새로
  *      짧은 트랜잭션을 연다.
  *
