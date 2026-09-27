@@ -219,7 +219,7 @@ loadtest/issue.js` 이고 그 문서는 `-o` 를 한 번도 적지 않았다. `/
 
 ## 11. 결과
 
-**2026-09-27 회차의 결과는 [coupon-version-results-2026-09-27.md](coupon-version-results-2026-09-27.md) 에 있다.**
+**2026-09-27 회차의 결과는 [coupon-load-versions.md](coupon-load-versions.md) 에 있다.**
 
 | 버전 | p99 | 발급 | SLO 1초 |
 |---|---:|---:|---|
