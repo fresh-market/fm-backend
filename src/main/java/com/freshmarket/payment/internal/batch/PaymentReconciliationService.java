@@ -117,7 +117,7 @@ public class PaymentReconciliationService {
             switch (result.status()) {
                 case APPROVED -> {
                     PaymentResult reconciled = paymentService.approvePayment(payment.getId(),
-                            new PaymentGatewayApproval(result.pgTid(), result.paidAt()));
+                            new PaymentGatewayApproval(result.pgTid(), result.paidAt(), result.method()));
                     log.info("event=PAYMENT_RECONCILIATION_RESOLVED paymentId={} orderId={} status={}",
                             payment.getId(), payment.getOrderId(), reconciled.status());
                 }

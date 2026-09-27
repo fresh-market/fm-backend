@@ -1,6 +1,6 @@
 package com.freshmarket.payment.internal.client;
 
-import com.freshmarket.payment.PaymentRequest;
+import com.freshmarket.payment.PaymentMethod;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -29,19 +29,19 @@ public class MockPaymentGateway implements PaymentGateway {
     private final Clock clock;
 
     @Override
-    public PaymentGatewayApproval request(PaymentRequest request) {
-        // TODO: WebClient로 PG 결제 승인 API를 호출하고, 응답의 거래번호와 승인시각을 매핑한다.
-        // 실제로 외부api의 응답에서는 더 많은 데이터를 받는다.
-        return new PaymentGatewayApproval("mock_" + UUID.randomUUID(), LocalDateTime.now(clock));
+    public PaymentGatewayApproval confirm(String paymentKey, String pgOrderNo, int amount) {
+        // TODO: WebClient로 토스 결제 승인(confirm) API를 호출하고, 응답의 거래번호·승인시각·결제수단을
+        // 매핑한다. 실제로 외부api의 응답에서는 더 많은 데이터를 받는다.
+        return new PaymentGatewayApproval("mock_" + UUID.randomUUID(), LocalDateTime.now(clock), PaymentMethod.CARD);
     }
 
     /*
-     * [2026-09-05 18:28 KST] request()가 항상 성공만 반환해 Mock으로는 UNKNOWN이 될 일이 없다.
+     * [2026-09-05 18:28 KST] confirm()이 항상 성공만 반환해 Mock으로는 UNKNOWN이 될 일이 없다.
      * 그래서 복구 배치가 이 메서드를 부를 일도 실제로는 없지만, 인터페이스 계약이라 구현은 해둔다 —
-     * 호출되면 request()와 같은 패턴으로 즉시 승인 응답을 준다.
+     * 호출되면 confirm()과 같은 패턴으로 즉시 승인 응답을 준다.
      */
     @Override
     public PaymentGatewayInquiryResult inquire(String pgOrderNo) {
-        return PaymentGatewayInquiryResult.approved("mock_" + UUID.randomUUID(), LocalDateTime.now(clock));
+        return PaymentGatewayInquiryResult.approved("mock_" + UUID.randomUUID(), LocalDateTime.now(clock), PaymentMethod.CARD);
     }
 }

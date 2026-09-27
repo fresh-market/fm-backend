@@ -49,10 +49,9 @@ class PaymentReconciliationServiceTest {
         when(paymentRepository.findByStatusAndReconciliationIsolatedFalseAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
                 eq(PaymentStatus.UNKNOWN), anyLong(), any(), any()))
                 .thenReturn(List.of(first, second), List.of());
-        when(paymentGateway.inquire(Payment.pgOrderNoFor(100L)))
-                .thenReturn(PaymentGatewayInquiryResult.approved("pg_100", paidAt));
-        when(paymentGateway.inquire(Payment.pgOrderNoFor(200L)))
-                .thenReturn(PaymentGatewayInquiryResult.rejected("카드 거절"));
+        when(paymentGateway.inquire(first.getPgOrderNo()))
+                .thenReturn(PaymentGatewayInquiryResult.approved("pg_100", paidAt, PaymentMethod.CARD));
+        when(paymentGateway.inquire(second.getPgOrderNo())).thenReturn(PaymentGatewayInquiryResult.rejected("카드 거절"));
         when(paymentService.approvePayment(eq(10L), any()))
                 .thenThrow(new RuntimeException("outbox write failed"));
         when(paymentService.failPayment(20L, "카드 거절"))
@@ -68,7 +67,7 @@ class PaymentReconciliationServiceTest {
     }
 
     private static Payment unknownPayment(Long paymentId, Long orderId) {
-        Payment payment = Payment.prepare(orderId, PaymentMethod.CARD, 25_800);
+        Payment payment = Payment.prepare(orderId, 7L, PaymentMethod.CARD, 25_800);
         payment.markUnknown();
         ReflectionTestUtils.setField(payment, "id", paymentId);
         return payment;

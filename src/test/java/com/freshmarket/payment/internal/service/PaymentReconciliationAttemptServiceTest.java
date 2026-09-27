@@ -21,7 +21,7 @@ class PaymentReconciliationAttemptServiceTest {
 
     @Test
     void 세번째_미해결_대사는_결제를_격리한다() {
-        Payment payment = Payment.prepare(100L, PaymentMethod.CARD, 25_800);
+        Payment payment = Payment.prepare(100L, 7L, PaymentMethod.CARD, 25_800);
         payment.markUnknown();
         ReflectionTestUtils.setField(payment, "id", 10L);
         ReflectionTestUtils.setField(payment, "reconciliationAttemptCount", 2);
@@ -37,7 +37,7 @@ class PaymentReconciliationAttemptServiceTest {
 
     @Test
     void 첫번째_미해결_대사는_다음_주기에_재시도한다() {
-        Payment payment = Payment.prepare(100L, PaymentMethod.CARD, 25_800);
+        Payment payment = Payment.prepare(100L, 7L, PaymentMethod.CARD, 25_800);
         payment.markUnknown();
         ReflectionTestUtils.setField(payment, "id", 10L);
         when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
@@ -52,7 +52,7 @@ class PaymentReconciliationAttemptServiceTest {
 
     @Test
     void 이미_확정된_결제는_대사_횟수를_늘리지_않는다() {
-        Payment payment = Payment.prepare(100L, PaymentMethod.CARD, 25_800);
+        Payment payment = Payment.prepare(100L, 7L, PaymentMethod.CARD, 25_800);
         payment.fail();
         ReflectionTestUtils.setField(payment, "id", 10L);
         when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));

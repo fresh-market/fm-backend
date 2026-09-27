@@ -5,8 +5,9 @@
  * orders.order_no는 정책상 "orderNo = orderId" 값을 문자열로 그대로 담는다
  * (Order.assignOrderNo 클래스 주석 참고) — order_id가 아직 작은 초기 주문들은 "1", "42"처럼
  * 6자에 못 미쳐 토스 orderId 최소 길이 요건을 만족하지 못한다. 그래서 orders.order_no를 그대로
- * 재사용하지 않고, payment가 자신의 order_id로부터 "ORD-" + 8자리 0패딩 값을 직접 만들어 이
- * 컬럼에 저장한다(Payment.pgOrderNoFor 참고) — order 도메인은 이 값의 존재조차 몰라도 된다.
+ * 재사용하지 않고, "ORD-" + 8자리 0패딩 값을 직접 만들어 이 컬럼에 저장한다
+ * (common.pg.MerchantOrderNoGenerator 참고) — order도 같은 계산을 독립적으로 할 수 있어 order
+ * 도메인은 이 컬럼의 존재조차 몰라도 된다.
  *
  * 한 번 PG에 보낸 값은 이후 재조회·재승인에도 계속 같아야 하므로, 필요할 때마다 다시 계산하지
  * 않고 생성 시점에 고정해서 저장한다 — 나중에 생성 규칙이 바뀌어도 이미 PG에 보낸 기존 값은

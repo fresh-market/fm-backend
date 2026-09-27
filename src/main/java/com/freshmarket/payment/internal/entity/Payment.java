@@ -1,6 +1,7 @@
 package com.freshmarket.payment.internal.entity;
 
 import com.freshmarket.common.entity.BaseMutableTimeEntity;
+import com.freshmarket.common.pg.MerchantOrderNoGenerator;
 import com.freshmarket.payment.PaymentMethod;
 import com.freshmarket.payment.PaymentRequest;
 import com.freshmarket.payment.PaymentStatus;
@@ -25,21 +26,27 @@ public class Payment extends BaseMutableTimeEntity {
     // 토스페이먼츠 paymentKey의 최대 길이는 200자다. 실제 PG 식별자를 그대로 보관한다.
     private static final int PG_TID_MAX_LENGTH = 200;
 
-    // "ORD-" + 8자리 0패딩. pgOrderNoFor() 참고.
-    private static final String PG_ORDER_NO_PREFIX = "ORD-";
-    private static final int PG_ORDER_NO_DIGITS = 8;
-
     @Column(name = "order_id", nullable = false)
     private Long orderId;
 
     /*
-     * 토스페이먼츠에 보내는 가맹점 주문번호다. orders.order_no(정책상 orderId를 문자열로 그대로
-     * 담는다)는 초기 주문에서 토스 orderId 최소 길이(6자) 요건에 못 미칠 수 있어 재사용하지
-     * 않는다 — 자세한 이유는 V39 마이그레이션 주석 참고. order 도메인과 무관하게 payment
-     * 내부에서만 쓰는 값이라 공개 계약(PaymentRequest 등)에는 담지 않는다.
+     * [2026-09-27 KST] 토스페이먼츠에 보내는 가맹점 주문번호다. orders.order_no(정책상 orderId를
+     * 문자열로 그대로 담는다 — Order.assignOrderNo 클래스 주석 참고)는 초기 주문에서 토스 orderId
+     * 최소 길이(6자) 요건에 못 미칠 수 있어 재사용하지 않는다 — 자세한 이유는 V39 마이그레이션 주석
+     * 참고. 계산 자체는 order와 공유하는 순수 함수(MerchantOrderNoGenerator)라 order도 주문 생성
+     * 응답에서 독립적으로 같은 값을 낼 수 있다 — 이 필드는 그 계산 결과를 고정해서 보관만 한다.
      */
     @Column(name = "pg_order_no", nullable = false, length = 20)
     private String pgOrderNo;
+
+    /*
+     * [2026-09-27 KST] 주문 소유자다. order/payment 둘 다 L2라 confirm 시점에 payment가 order를
+     * 다시 조회해 소유자를 확인할 수 없다(ArchitectureTest.도메인은_아래로만_부른다) — 그래서 결제
+     * 준비 시점에 order가 이미 아는 memberId를 이벤트로 함께 실어 보내 이 컬럼에 스냅샷해둔다.
+     * amount를 orders.total_amount에서 스냅샷하는 것과 같은 방식이다.
+     */
+    @Column(name = "member_id", nullable = false)
+    private Long memberId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "method", nullable = false, length = 30)
@@ -67,9 +74,12 @@ public class Payment extends BaseMutableTimeEntity {
     @Column(name = "reconciliation_isolated", nullable = false)
     private boolean reconciliationIsolated;
 
-    private Payment(Long orderId, PaymentMethod method, int amount) {
+    private Payment(Long orderId, Long memberId, PaymentMethod method, int amount) {
         if (orderId == null) {
             throw new IllegalArgumentException("orderId 는 필수다");
+        }
+        if (memberId == null) {
+            throw new IllegalArgumentException("memberId 는 필수다");
         }
         if (method == null) {
             throw new IllegalArgumentException("method 는 필수다");
@@ -79,35 +89,38 @@ public class Payment extends BaseMutableTimeEntity {
         }
         this.orderId = orderId;
         this.pgOrderNo = pgOrderNoFor(orderId);
+        this.memberId = memberId;
         this.method = method;
         this.amount = amount;
         this.status = PaymentStatus.PENDING;
         this.refundedAmount = 0;
     }
 
-    public static Payment prepare(Long orderId, PaymentMethod method, int amount) {
-        return new Payment(orderId, method, amount);
+    public static Payment prepare(Long orderId, Long memberId, PaymentMethod method, int amount) {
+        return new Payment(orderId, memberId, method, amount);
     }
 
     /*
-     * orderId로부터 토스 orderId 규칙(6~64자)을 만족하는 가맹점 주문번호를 만든다. 순수하게
-     * orderId로만 결정되는 값이지만 컬럼에 저장해두는 이유는 클래스 주석(pgOrderNo 필드) 참고.
-     * insertIfAbsent()가 엔티티를 거치지 않는 네이티브 upsert라 PaymentService가 삽입 전에 같은
-     * 값을 미리 계산해야 해서 public static으로 둔다 — 그래야 계산 규칙이 한 곳(여기)에만 있다.
+     * orderId로부터 토스 orderId 규칙을 만족하는 가맹점 주문번호를 만든다. 실제 계산은
+     * MerchantOrderNoGenerator(common)에 있다 — order도 같은 계산이 필요해서(주문 생성 응답에
+     * 담아 프론트에 돌려준다) 공유 위치에 둔 것이지 payment 고유 로직이 아니다. insertIfAbsent()가
+     * 엔티티를 거치지 않는 네이티브 upsert라 PaymentService가 삽입 전에 같은 값을 미리 계산해야
+     * 해서 이 위임 메서드를 public static으로 둔다.
      */
     public static String pgOrderNoFor(Long orderId) {
-        if (orderId == null) {
-            throw new IllegalArgumentException("orderId 는 필수다");
-        }
-        return PG_ORDER_NO_PREFIX + String.format("%0" + PG_ORDER_NO_DIGITS + "d", orderId);
+        return MerchantOrderNoGenerator.from(orderId);
     }
 
     /*
      * [2026-09-05 18:28 KST] 복구 배치(PaymentReconciliationService)가 UNKNOWN을 뒤늦게 PAID로
      * 확정할 때도 이 메서드를 그대로 재사용한다 — PENDING에서의 최초 승인과 UNKNOWN에서의 뒤늦은
      * 확정은 "PG가 승인했다"는 같은 사실을 반영하는 것뿐이라 별도 메서드를 두지 않았다.
+     *
+     * [2026-09-27 KST] method 파라미터를 추가했다 — 토스 결제창은 사용자가 결제수단을 직접
+     * 고르므로, 준비 단계에 고정해둔 값(현재는 CARD)이 실제 승인된 수단과 다를 수 있다. 승인
+     * 확정 시점에 PG가 알려준 실제 값으로 덮어쓴다.
      */
-    public void approve(String pgTid, LocalDateTime paidAt) {
+    public void approve(String pgTid, LocalDateTime paidAt, PaymentMethod method) {
         if (!isPending() && !isUnknown()) {
             throw new IllegalStateException("승인 대기 또는 UNKNOWN 상태의 결제만 승인할 수 있습니다.");
         }
@@ -117,8 +130,12 @@ public class Payment extends BaseMutableTimeEntity {
         if (paidAt == null) {
             throw new IllegalArgumentException("paidAt 은 필수다");
         }
+        if (method == null) {
+            throw new IllegalArgumentException("method 는 필수다");
+        }
         this.pgTid = pgTid;
         this.paidAt = paidAt;
+        this.method = method;
         this.status = PaymentStatus.PAID;
     }
 
@@ -145,6 +162,31 @@ public class Payment extends BaseMutableTimeEntity {
             throw new IllegalStateException("승인 대기 상태의 결제만 UNKNOWN으로 전이할 수 있습니다.");
         }
         this.status = PaymentStatus.UNKNOWN;
+    }
+
+    /*
+     * [2026-09-27 KST] confirm 컨트롤러가 실제로 토스 confirm API를 부르기 "직전"에, 별도의 짧은
+     * 트랜잭션(PaymentService.beginConfirm)에서 호출한다. 아직 승인/거절이 확정되지 않은 상태
+     * (PENDING/UNKNOWN)에서만 pgTid를 앞당겨 반영하고, 이미 끝난 결제(PAID/FAILED)는 조용히
+     * 무시한다 — 그쪽은 호출한 쪽이 새로 PG를 부르지 않고 현재 상태를 그대로 반환한다.
+     *
+     * 이렇게 미리 저장해두는 이유는 결제창을 그냥 이탈한 경우(끝까지 pgTid가 비어 있다)와 confirm을
+     * 실제로 시도한 경우(pgTid가 있다)를 나중에 복구 배치가 구분하기 위해서다 — 이탈은 토스에
+     * 물어볼 거래 자체가 없으므로 조회 대상이 아니다.
+     */
+    public void recordConfirmAttempt(String paymentKey) {
+        if (!isPending() && !isUnknown()) {
+            return;
+        }
+        if (paymentKey == null || paymentKey.isBlank() || paymentKey.length() > PG_TID_MAX_LENGTH) {
+            throw new IllegalArgumentException("유효한 paymentKey 가 필요하다");
+        }
+        this.pgTid = paymentKey;
+    }
+
+    // 아직 끝나지 않은 결제에 다른 paymentKey로 confirm이 이미 한 번 진행 중인지 확인한다.
+    public boolean hasConflictingConfirmAttempt(String paymentKey) {
+        return (isPending() || isUnknown()) && pgTid != null && !pgTid.equals(paymentKey);
     }
 
     public boolean isPaid() {
@@ -193,9 +235,5 @@ public class Payment extends BaseMutableTimeEntity {
         return orderId.equals(request.orderId())
                 && amount == request.amount()
                 && method == request.method();
-    }
-
-    public PaymentRequest toRequest() {
-        return new PaymentRequest(orderId, amount, method);
     }
 }

@@ -22,21 +22,33 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     Optional<Payment> findByIdForUpdate(@Param("paymentId") Long paymentId);
 
     /*
+     * [2026-09-27 KST] confirm API(PaymentConfirmationService)가 결제 확정을 시작하기 전에 이
+     * 결제 행을 잠근다 — confirm 처리 도중, 복구 배치(PaymentReconciliationService)가 같은 행을
+     * 먼저 잠그고 UNKNOWN을 PAID/FAILED로 확정해버리는 경합을 막는다. findByIdForUpdate와 같은
+     * 락 방식이지만, confirm API는 결제 준비 응답에 담겼던 orderId만 알고 payment_id는 모른다
+     * (프론트가 굳이 payment_id를 따로 저장/전달할 이유가 없다).
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from Payment p where p.orderId = :orderId")
+    Optional<Payment> findByOrderIdForUpdate(@Param("orderId") Long orderId);
+
+    /*
      * uk_payment_order(order_id)를 원자적 "이미 있으면 아무것도 하지 않음" 연산으로 쓴다.
      * 조회 후 save 방식은 동시 요청 두 건이 모두 PENDING을 만들 수 있다.
      *
-     * 엔티티를 거치지 않는 네이티브 upsert라 pg_order_no도 호출하는 쪽(PaymentService)이
-     * Payment.pgOrderNoFor(orderId)로 미리 계산해서 넘겨야 한다 — Payment 생성자를 안 거치므로
-     * 여기서 대신 계산해줄 수 없다.
+     * [2026-09-27 KST] member_id, pg_order_no 컬럼을 추가했다 — 둘 다 Payment 엔티티 생성자에서
+     * 함께 계산/검증하는 값이라(Payment.prepare 참고), 네이티브 upsert에도 그대로 실어야 엔티티를
+     * 다시 읽어왔을 때(findByOrderId) 일관된 값을 얻는다.
      */
     @Modifying
     @Query(value = """
-            insert into payment (order_id, pg_order_no, method, amount, status, refunded_amount, created_at, updated_at)
-            values (:orderId, :pgOrderNo, :method, :amount, 'PENDING', 0, :now, :now)
+            insert into payment (order_id, pg_order_no, member_id, method, amount, status, refunded_amount, created_at, updated_at)
+            values (:orderId, :pgOrderNo, :memberId, :method, :amount, 'PENDING', 0, :now, :now)
             on duplicate key update order_id = order_id
             """, nativeQuery = true)
     int insertIfAbsent(@Param("orderId") Long orderId,
                        @Param("pgOrderNo") String pgOrderNo,
+                       @Param("memberId") Long memberId,
                        @Param("method") String method,
                        @Param("amount") int amount,
                        @Param("now") LocalDateTime now);
