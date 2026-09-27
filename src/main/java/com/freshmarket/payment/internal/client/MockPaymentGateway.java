@@ -41,7 +41,7 @@ public class MockPaymentGateway implements PaymentGateway {
      * 호출되면 request()와 같은 패턴으로 즉시 승인 응답을 준다.
      */
     @Override
-    public PaymentGatewayInquiryResult inquire(Long orderId) {
+    public PaymentGatewayInquiryResult inquire(String pgOrderNo) {
         return PaymentGatewayInquiryResult.approved("mock_" + UUID.randomUUID(), LocalDateTime.now(clock));
     }
 }

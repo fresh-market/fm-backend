@@ -49,8 +49,10 @@ class PaymentReconciliationServiceTest {
         when(paymentRepository.findByStatusAndReconciliationIsolatedFalseAndIdGreaterThanAndUpdatedAtBeforeOrderByIdAsc(
                 eq(PaymentStatus.UNKNOWN), anyLong(), any(), any()))
                 .thenReturn(List.of(first, second), List.of());
-        when(paymentGateway.inquire(100L)).thenReturn(PaymentGatewayInquiryResult.approved("pg_100", paidAt));
-        when(paymentGateway.inquire(200L)).thenReturn(PaymentGatewayInquiryResult.rejected("카드 거절"));
+        when(paymentGateway.inquire(Payment.pgOrderNoFor(100L)))
+                .thenReturn(PaymentGatewayInquiryResult.approved("pg_100", paidAt));
+        when(paymentGateway.inquire(Payment.pgOrderNoFor(200L)))
+                .thenReturn(PaymentGatewayInquiryResult.rejected("카드 거절"));
         when(paymentService.approvePayment(eq(10L), any()))
                 .thenThrow(new RuntimeException("outbox write failed"));
         when(paymentService.failPayment(20L, "카드 거절"))

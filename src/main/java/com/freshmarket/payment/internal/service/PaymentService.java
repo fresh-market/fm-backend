@@ -32,8 +32,9 @@ public class PaymentService {
     @Transactional
     public PaymentPreparation preparePayment(PaymentRequest request) {
         validateRequest(request);
-        boolean newlyPrepared = paymentRepository.insertIfAbsent(request.orderId(), request.method().name(),
-                request.amount(), LocalDateTime.now(clock)) == 1;
+        String pgOrderNo = Payment.pgOrderNoFor(request.orderId());
+        boolean newlyPrepared = paymentRepository.insertIfAbsent(request.orderId(), pgOrderNo,
+                request.method().name(), request.amount(), LocalDateTime.now(clock)) == 1;
         Payment payment = paymentRepository.findByOrderId(request.orderId())
                 .orElseThrow(() -> new PaymentException(PaymentErrorCode.PAYMENT_NOT_FOUND));
         if (!payment.matches(request)) {

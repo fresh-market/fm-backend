@@ -25,8 +25,21 @@ public class Payment extends BaseMutableTimeEntity {
     // 토스페이먼츠 paymentKey의 최대 길이는 200자다. 실제 PG 식별자를 그대로 보관한다.
     private static final int PG_TID_MAX_LENGTH = 200;
 
+    // "ORD-" + 8자리 0패딩. pgOrderNoFor() 참고.
+    private static final String PG_ORDER_NO_PREFIX = "ORD-";
+    private static final int PG_ORDER_NO_DIGITS = 8;
+
     @Column(name = "order_id", nullable = false)
     private Long orderId;
+
+    /*
+     * 토스페이먼츠에 보내는 가맹점 주문번호다. orders.order_no(정책상 orderId를 문자열로 그대로
+     * 담는다)는 초기 주문에서 토스 orderId 최소 길이(6자) 요건에 못 미칠 수 있어 재사용하지
+     * 않는다 — 자세한 이유는 V39 마이그레이션 주석 참고. order 도메인과 무관하게 payment
+     * 내부에서만 쓰는 값이라 공개 계약(PaymentRequest 등)에는 담지 않는다.
+     */
+    @Column(name = "pg_order_no", nullable = false, length = 20)
+    private String pgOrderNo;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "method", nullable = false, length = 30)
@@ -65,6 +78,7 @@ public class Payment extends BaseMutableTimeEntity {
             throw new IllegalArgumentException("amount 는 1 이상이어야 한다: " + amount);
         }
         this.orderId = orderId;
+        this.pgOrderNo = pgOrderNoFor(orderId);
         this.method = method;
         this.amount = amount;
         this.status = PaymentStatus.PENDING;
@@ -73,6 +87,19 @@ public class Payment extends BaseMutableTimeEntity {
 
     public static Payment prepare(Long orderId, PaymentMethod method, int amount) {
         return new Payment(orderId, method, amount);
+    }
+
+    /*
+     * orderId로부터 토스 orderId 규칙(6~64자)을 만족하는 가맹점 주문번호를 만든다. 순수하게
+     * orderId로만 결정되는 값이지만 컬럼에 저장해두는 이유는 클래스 주석(pgOrderNo 필드) 참고.
+     * insertIfAbsent()가 엔티티를 거치지 않는 네이티브 upsert라 PaymentService가 삽입 전에 같은
+     * 값을 미리 계산해야 해서 public static으로 둔다 — 그래야 계산 규칙이 한 곳(여기)에만 있다.
+     */
+    public static String pgOrderNoFor(Long orderId) {
+        if (orderId == null) {
+            throw new IllegalArgumentException("orderId 는 필수다");
+        }
+        return PG_ORDER_NO_PREFIX + String.format("%0" + PG_ORDER_NO_DIGITS + "d", orderId);
     }
 
     /*

@@ -62,7 +62,7 @@ public class FakePaymentGatewayIntegrationTest implements PaymentGateway {
     }
 
     @Override
-    public synchronized PaymentGatewayInquiryResult inquire(Long orderId) {
+    public synchronized PaymentGatewayInquiryResult inquire(String pgOrderNo) {
         inquireCallCount.incrementAndGet();
         InquiryScenario scenario = inquiryScenarios.poll();
         return (scenario == null ? InquiryScenario.stillProcessing() : scenario).resolve(clock);

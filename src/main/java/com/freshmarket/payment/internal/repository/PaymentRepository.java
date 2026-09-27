@@ -24,14 +24,19 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     /*
      * uk_payment_order(order_id)를 원자적 "이미 있으면 아무것도 하지 않음" 연산으로 쓴다.
      * 조회 후 save 방식은 동시 요청 두 건이 모두 PENDING을 만들 수 있다.
+     *
+     * 엔티티를 거치지 않는 네이티브 upsert라 pg_order_no도 호출하는 쪽(PaymentService)이
+     * Payment.pgOrderNoFor(orderId)로 미리 계산해서 넘겨야 한다 — Payment 생성자를 안 거치므로
+     * 여기서 대신 계산해줄 수 없다.
      */
     @Modifying
     @Query(value = """
-            insert into payment (order_id, method, amount, status, refunded_amount, created_at, updated_at)
-            values (:orderId, :method, :amount, 'PENDING', 0, :now, :now)
+            insert into payment (order_id, pg_order_no, method, amount, status, refunded_amount, created_at, updated_at)
+            values (:orderId, :pgOrderNo, :method, :amount, 'PENDING', 0, :now, :now)
             on duplicate key update order_id = order_id
             """, nativeQuery = true)
     int insertIfAbsent(@Param("orderId") Long orderId,
+                       @Param("pgOrderNo") String pgOrderNo,
                        @Param("method") String method,
                        @Param("amount") int amount,
                        @Param("now") LocalDateTime now);

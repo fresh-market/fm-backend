@@ -107,7 +107,7 @@ public class PaymentReconciliationService {
     private void reconcileOne(Payment payment) {
         PaymentGatewayInquiryResult result;
         try {
-            result = paymentGateway.inquire(payment.getOrderId());
+            result = paymentGateway.inquire(payment.getPgOrderNo());
         } catch (RuntimeException e) {
             recordUnresolvedAttempt(payment, "INQUIRE_FAILED", e);
             return;

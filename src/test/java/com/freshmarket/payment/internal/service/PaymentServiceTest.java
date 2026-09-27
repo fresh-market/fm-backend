@@ -55,20 +55,20 @@ class PaymentServiceTest {
     void 결제가_없으면_PENDING_결제를_원자적으로_만든다() {
         PaymentRequest request = new PaymentRequest(1L, 25800, PaymentMethod.CARD);
         Payment payment = payment(10L);
-        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyInt(), any())).thenReturn(1);
+        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyString(), anyInt(), any())).thenReturn(1);
         when(paymentRepository.findByOrderId(1L)).thenReturn(Optional.of(payment));
 
         PaymentPreparation result = sut.preparePayment(request);
 
         assertThat(result.payment()).isSameAs(payment);
         assertThat(result.newlyPrepared()).isTrue();
-        verify(paymentRepository).insertIfAbsent(anyLong(), anyString(), anyInt(), any());
+        verify(paymentRepository).insertIfAbsent(anyLong(), anyString(), anyString(), anyInt(), any());
     }
 
     @Test
     void 같은_주문의_결제가_이미_있으면_재사용한다() {
         Payment existing = payment(10L);
-        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyInt(), any())).thenReturn(0);
+        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyString(), anyInt(), any())).thenReturn(0);
         when(paymentRepository.findByOrderId(1L)).thenReturn(Optional.of(existing));
 
         PaymentPreparation result = sut.preparePayment(new PaymentRequest(1L, 25800, PaymentMethod.CARD));
@@ -79,7 +79,7 @@ class PaymentServiceTest {
 
     @Test
     void 기존_결제와_금액이나_수단이_다르면_거절한다() {
-        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyInt(), any())).thenReturn(0);
+        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyString(), anyInt(), any())).thenReturn(0);
         when(paymentRepository.findByOrderId(1L)).thenReturn(Optional.of(payment(10L)));
 
         assertThatThrownBy(() -> sut.preparePayment(new PaymentRequest(1L, 30000, PaymentMethod.CARD)))
@@ -90,7 +90,7 @@ class PaymentServiceTest {
 
     @Test
     void PENDING_결제를_만든_뒤_조회되지_않으면_예외가_발생한다() {
-        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyInt(), any())).thenReturn(1);
+        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyString(), anyInt(), any())).thenReturn(1);
         when(paymentRepository.findByOrderId(1L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> sut.preparePayment(new PaymentRequest(1L, 25800, PaymentMethod.CARD)))
