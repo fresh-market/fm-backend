@@ -28,8 +28,8 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
  * (ArchitectureTest.WebClient는_직접_생성하지_않는다).
  *
  * client 패키지는 @Transactional을 걸 수 없다(ArchitectureTest.client_에_트랜잭션이_없다) — PG
- * 호출은 항상 호출하는 쪽(PaymentConfirmationService/PaymentReconciliationService)이 트랜잭션 밖에서
- * 부른다는 전제를 이 클래스도 그대로 따른다.
+ * 호출은 항상 호출하는 쪽(PaymentConfirmationService/PaymentReconciliationService/
+ * PaymentCancellationService)이 트랜잭션 밖에서 부른다는 전제를 이 클래스도 그대로 따른다.
  */
 @Slf4j
 @Component
@@ -68,6 +68,15 @@ public class TossPaymentGateway implements PaymentGateway {
             "NOT_AVAILABLE_PAYMENT", "NOT_AVAILABLE_BANK",
             "UNAPPROVED_ORDER_ID", "NOT_REGISTERED_BUSINESS", "FDS_ERROR",
             "NOT_FOUND_PAYMENT_SESSION", "NOT_FOUND_PAYMENT");
+
+    /*
+     * [2026-09-27 KST] cancel() 전용 허용목록이다. DEFINITE_REJECT_CODES와 성격이 다르다 — 저건
+     * "거절로 단정해도 되는 코드", 이건 "이미 취소가 끝나 있다는 뜻이라 성공으로 흡수해도 되는
+     * 코드"다. 이벤트 재전달로 같은 취소 요청이 중복 호출될 수 있는데(OrderPaymentRefundRequestedEvent
+     * 참고), 토스는 이미 취소된 결제를 다시 취소하면 이 코드로 거절한다 — 호출하는 쪽 입장에서는
+     * "이미 원하는 상태(취소됨)에 도달해 있다"는 뜻이라 예외를 던지지 않고 조용히 성공 처리한다.
+     */
+    private static final Set<String> ALREADY_CANCELED_CODES = Set.of("ALREADY_CANCELED_PAYMENT");
 
     // 승인 성공(status=DONE) 응답의 approvedAt이 이 값이 아니면 방어적으로 UNKNOWN 처리한다.
     private static final String STATUS_DONE = "DONE";
@@ -168,6 +177,47 @@ public class TossPaymentGateway implements PaymentGateway {
         // 안전하게 "아직 결론 안 남"으로 다룬다 — 여기서 섣불리 승인/거절로 단정하지 않는다.
         log.info("event=TOSS_INQUIRE_STILL_PROCESSING pgOrderNo={} status={}", pgOrderNo, status);
         return PaymentGatewayInquiryResult.stillProcessing();
+    }
+
+    /*
+     * [2026-09-27 KST] order가 이미 취소된 주문에 뒤늦게 결제가 승인된 경우의 자동 환불에 쓴다
+     * (PaymentGateway.cancel() 주석 참고). 응답 바디는 취소 후 결제 상세를 돌려주지만, 이 메서드는
+     * "성공했는가"만 관심 대상이라 파싱하지 않는다(TossPaymentResponse.class로 역직렬화만 시도해
+     * 응답 자체는 소비한다 — 실패해도 이 메서드 결과에 영향 없다).
+     */
+    @Override
+    public void cancel(String paymentKey, String reason) {
+        try {
+            tossPaymentWebClient.post()
+                    .uri("/v1/payments/{paymentKey}/cancel", paymentKey)
+                    // confirm()과 같은 이유로 멱등키를 건다. paymentKey는 confirm의 Idempotency-Key와
+                    // 이미 겹치는 값이라, 접두사로 네임스페이스를 나눠 confirm 재시도와 섞이지 않게 한다.
+                    .header("Idempotency-Key", "cancel:" + paymentKey)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(new TossCancelRequest(reason))
+                    .retrieve()
+                    .bodyToMono(TossPaymentResponse.class)
+                    .block();
+        } catch (WebClientResponseException e) {
+            TossErrorResponse error = readErrorBody(e);
+            String code = error == null ? null : error.code();
+            String message = error == null ? e.getMessage() : error.message();
+            if (code != null && ALREADY_CANCELED_CODES.contains(code)) {
+                // 이벤트 재전달 등으로 같은 취소가 중복 호출된 경우다 — 이미 원하는 상태(취소됨)에
+                // 도달해 있으므로 멱등하게 흡수한다. Payment.cancel()도 이미 CANCELED면 조용히
+                // 넘어가므로 이중으로 안전하다.
+                log.info("event=TOSS_CANCEL_ALREADY_DONE paymentKey={} code={}", paymentKey, code);
+                return;
+            }
+            log.warn("event=TOSS_CANCEL_FAILED paymentKey={} status={} code={} message={}",
+                    e.getStatusCode(), code, message, e);
+            throw new PaymentGatewayUnknownException("토스 cancel 실패(code=" + code + "): " + message, e);
+        } catch (RuntimeException e) {
+            // 연결 자체가 안 되거나 응답 자체가 없는 경우 — 취소됐는지 여부를 전혀 알 수 없다. 여기서
+            // 삼키지 않고 그대로 예외를 던져 호출하는 쪽(PaymentCancellationService)이 트랜잭션을
+            // 확정하지 않게 한다 — 다음 이벤트 재전달이 다시 시도한다.
+            throw new PaymentGatewayUnknownException("토스 cancel 호출 실패: " + e.getMessage(), e);
+        }
     }
 
     private TossErrorResponse readErrorBody(WebClientResponseException e) {

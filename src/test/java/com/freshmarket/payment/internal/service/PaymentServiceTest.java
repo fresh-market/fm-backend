@@ -309,6 +309,88 @@ class PaymentServiceTest {
                 .isEqualTo(PaymentErrorCode.PAYMENT_NOT_FOUND);
     }
 
+    @Test
+    void PAID_결제는_취소_시작시_그대로_반환된다() {
+        Payment payment = payment(10L);
+        payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD);
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
+
+        Optional<Payment> result = sut.beginCancel(10L);
+
+        assertThat(result).isPresent();
+        assertThat(result.orElseThrow()).isSameAs(payment);
+    }
+
+    /*
+     * [2026-09-27 KST] PAID가 아니면(이미 CANCELED로 끝났거나 애초에 승인된 적 없음) 빈 값을
+     * 돌려줘 호출하는 쪽(PaymentCancellationService)이 PG를 다시 부르지 않게 한다.
+     */
+    @Test
+    void PAID가_아닌_결제는_취소_시작시_빈_값을_반환한다() {
+        Payment payment = payment(10L);
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
+
+        Optional<Payment> result = sut.beginCancel(10L);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void 취소_시작시_없는_결제는_예외가_발생한다() {
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sut.beginCancel(10L))
+                .isInstanceOf(PaymentException.class)
+                .extracting(e -> ((PaymentException) e).getErrorCode())
+                .isEqualTo(PaymentErrorCode.PAYMENT_NOT_FOUND);
+    }
+
+    @Test
+    void PG_취소_성공_뒤_결제를_CANCELED로_확정한다() {
+        Payment payment = payment(10L);
+        payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD);
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
+
+        sut.finishCancel(10L, "이미 취소된 주문에 뒤늦게 결제가 승인됨");
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELED);
+        assertThat(payment.getRefundedAmount()).isEqualTo(payment.getAmount());
+    }
+
+    @Test
+    void 취소_확정시_없는_결제는_예외가_발생한다() {
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sut.finishCancel(10L, "사유"))
+                .isInstanceOf(PaymentException.class)
+                .extracting(e -> ((PaymentException) e).getErrorCode())
+                .isEqualTo(PaymentErrorCode.PAYMENT_NOT_FOUND);
+    }
+
+    /*
+     * [2026-09-27 KST] 이벤트 재전달로 finishCancel()이 두 번 불려도(첫 호출이 이미 CANCELED로
+     * 확정한 뒤) Payment.cancel()의 멱등 가드 덕분에 예외 없이 조용히 넘어간다.
+     */
+    @Test
+    void 이미_취소된_결제를_다시_확정해도_예외가_나지_않는다() {
+        Payment payment = payment(10L);
+        payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD);
+        payment.cancel("첫 시도");
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
+
+        sut.finishCancel(10L, "재시도");
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELED);
+    }
+
+    @Test
+    void 결제_엔티티는_PAID가_아니면_직접_취소할_수_없다() {
+        Payment payment = payment(10L);
+
+        assertThatThrownBy(() -> payment.cancel("사유"))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
     private Payment payment(Long id) {
         Payment payment = Payment.prepare(1L, 7L, PaymentMethod.CARD, 25800);
         ReflectionTestUtils.setField(payment, "id", id);

@@ -2,12 +2,12 @@ package com.freshmarket.order.internal.service;
 
 import com.freshmarket.common.event.OrderPaymentApprovedEvent;
 import com.freshmarket.common.event.OrderPaymentFailedEvent;
+import com.freshmarket.common.event.OrderPaymentRefundRequestedEvent;
 import com.freshmarket.order.internal.PendingOrderResult;
 import com.freshmarket.order.internal.dto.OrderCreateRequest;
 import com.freshmarket.order.internal.dto.OrderCreateResponse;
 import com.freshmarket.order.internal.entity.Order;
 import com.freshmarket.order.internal.entity.OrderItem;
-import com.freshmarket.order.internal.entity.OrderStatus;
 import com.freshmarket.order.internal.repository.OrderItemRepository;
 import com.freshmarket.order.internal.repository.OrderRepository;
 import com.freshmarket.stock.StockApi;
@@ -15,6 +15,7 @@ import com.freshmarket.stock.StockOrderItemsRequest;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -48,6 +49,13 @@ import org.springframework.transaction.annotation.Transactional;
  * 결제 결과도 payment outbox가 payment 커밋 뒤에 발행한다. 따라서 이 리스너는 평범한
  * @EventListener로 받고 REQUIRES_NEW에서 order/stock을 함께 확정한다. 처리 실패는 publisher에
  * 전달되어 outbox가 미완료 상태로 남고, batch가 다시 전달한다.
+ *
+ * [2026-09-27 KST] onPaymentApproved()의 실제 DB 트랜잭션은 OrderPaymentApprovalTransactionService로
+ * 옮겼다 — 이미 CANCELED인 주문에 뒤늦게 승인이 온 경우 자동 환불을 위해
+ * OrderPaymentRefundRequestedEvent를 발행해야 하는데, 그 이벤트를 처리하는 쪽(payment 도메인)이
+ * 결국 PaymentGateway.cancel()이라는 PG 호출로 이어지므로 onPaymentApproved() 자신은 더 이상
+ * @Transactional을 걸지 않는다. 이벤트는 그 트랜잭션이 커밋되어 반환된 "뒤"에만 발행한다 — PG
+ * 호출이 열린 DB 트랜잭션 안에서 나가면 안 된다는 원칙(위 단락)을 여기서도 그대로 지킨다.
  */
 @Slf4j
 @Service
@@ -59,6 +67,8 @@ public class OrderCreateService {
     private final OrderItemRepository orderItemRepository;
     private final StockApi stockApi;
     private final OrderPaymentRequestOutboxDispatchService outboxDispatchService;
+    private final OrderPaymentApprovalTransactionService orderPaymentApprovalTransactionService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public OrderCreateResponse createOrder(Long memberId, OrderCreateRequest request) {
         PendingOrderResult pending = orderPendingCreationCoordinatorService.createPendingOrder(memberId, request);
@@ -70,61 +80,23 @@ public class OrderCreateService {
 
     /*
      * 결제 승인 뒤 payment 도메인이 발행한 이벤트를 받아 주문을 PAID로 바꾸고 재고를 확정한다.
-     * createOrder()의 a단계와는 별개의 새 트랜잭션이다(위 클래스 주석의 c단계).
+     * createOrder()의 a단계와는 별개의 새 트랜잭션이다(위 클래스 주석의 c단계) — 다만 그 트랜잭션은
+     * 이제 이 메서드가 아니라 OrderPaymentApprovalTransactionService가 연다(클래스 주석 참고).
+     *
+     * [2026-09-27 KST] 자동 환불: applyApproval()이 "이미 CANCELED인 주문에 뒤늦게 승인이 왔다"고
+     * 알려오면(true), 그 트랜잭션이 이미 커밋된 뒤이므로 안전하게 OrderPaymentRefundRequestedEvent를
+     * 발행한다. payment 도메인이 이를 받아 PaymentGateway.cancel()로 실제 환불을 시도한다 — 그 호출이
+     * 실패하면 예외가 여기까지 그대로 전파되어 이 메서드를 호출한 PaymentResultOutboxDispatchService
+     * 쪽에서 outbox를 미완료로 남기고, 다음 배치 주기에 OrderPaymentApprovedEvent가 다시 전달되어
+     * 환불도 자동으로 재시도된다.
      */
     @EventListener
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onPaymentApproved(OrderPaymentApprovedEvent event) {
-        /*
-         * [2026-09-06 KST] 이 orderId는 createOrder()에서 주문 저장 커밋이 끝난 뒤에야(오토인크리먼트로
-         * 값을 이미 받은 뒤에야) OrderPaymentRequestedEvent에 실려 나갔다가 결제 승인 이벤트에 그대로
-         * 돌아온 것이라, 정상 흐름에서는 여기서 주문을 못 찾는 경로가 없다 — 즉 이 예외가 실제로
-         * 던져진다면 재시도로 풀릴 일시적 문제가 아니라 버그 신호다(같은 id로 다시 조회해도 똑같이
-         * 없다). 그래서 그냥 던지지 않고 log.error로 남겨 알림이 가게 한다.
-         *
-         * findByIdForUpdate로 잠근다 — PAYMENT_PENDING 만료 배치(order.internal.batch.
-         * PendingOrderExpirationService)가 같은 주문을 동시에 CANCELED로 확정하려 할 수 있어서,
-         * Order 행 자체를 잠가 둘 중 하나만 먼저 끝나게 한다(OrderRepository.findByIdForUpdate 참고).
-         */
-        Order order = orderRepository.findByIdForUpdate(event.orderId())
-                .orElseThrow(() -> {
-                    log.error("event=ORDER_NOT_FOUND_FOR_PAYMENT_APPROVED orderId={} paymentId={}",
-                            event.orderId(), event.paymentId());
-                    return new IllegalStateException(
-                            "결제 승인된 주문을 찾을 수 없습니다. orderId=" + event.orderId());
-                });
-
-        /*
-         * [2026-09-06 KST] 만료 배치가 이 주문을 먼저 CANCELED로 확정한 뒤에 뒤늦은 PG 승인이 도착한
-         * 경우다. 재고는 이미 release()로 풀려서 다른 주문에 재배분됐을 수 있으므로 주문을 다시 PAID로
-         * 되돌리는 건 안전하지 않다 — order는 그대로 CANCELED로 두고 건드리지 않는다. 대신 PG는 실제로
-         * 승인했다(돈이 이미 나갔다)는 사실을 놓치면 안 되므로 ERROR로 남긴다.
-         * TODO: 자동 환불 로직 추가 — PaymentApi에 환불 계약(예: cancelPayment)이 생기면 여기서 바로
-         * 호출하도록 바꾼다. 지금은 그 계약이 없어(주문 인수인계 문서에도 후속 브랜치로 명시) 사람이
-         * 이 로그를 보고 수동 환불해야 한다.
-         */
-        if (order.getStatus() == OrderStatus.CANCELED) {
-            log.error("event=PAYMENT_APPROVED_AFTER_ORDER_CANCELED orderId={} paymentId={} amount={}",
-                    order.getId(), event.paymentId(), order.getTotalAmount());
-            return;
+        boolean refundNeeded = orderPaymentApprovalTransactionService.applyApproval(event.orderId(), event.paymentId());
+        if (refundNeeded) {
+            eventPublisher.publishEvent(new OrderPaymentRefundRequestedEvent(
+                    event.orderId(), event.paymentId(), "이미 취소된 주문에 뒤늦게 결제가 승인됨"));
         }
-
-        try {
-            order.markPaid();
-        } catch (IllegalStateException e) {
-            // CANCELED 외에 이론상 도달 불가능해야 하는 다른 상태 — 3번과 같은 이유로 던지기 전에 남긴다.
-            log.error("event=ORDER_MARK_PAID_FAILED orderId={} paymentId={} status={}",
-                    order.getId(), event.paymentId(), order.getStatus(), e);
-            throw e;
-        }
-
-        // 명령성 상태 변화 로그 — PII/토큰/pgTid 없이 orderId/금액만 남긴다.
-        log.info("event=order_paid orderId={} amount={}", order.getId(), order.getTotalAmount());
-
-        List<Long> orderItemIds = orderItemRepository.findAllByOrderIdOrderByIdAsc(order.getId()).stream()
-                .map(OrderItem::getId)
-                .toList();
-        stockApi.confirm(new StockOrderItemsRequest(order.getId(), orderItemIds));
     }
 
     /*

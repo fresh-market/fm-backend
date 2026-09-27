@@ -174,6 +174,50 @@ class TossPaymentGatewayTest {
                 .isInstanceOf(WebClientResponseException.class);
     }
 
+    @Test
+    void cancel_성공하면_예외없이_끝난다() {
+        TossPaymentGateway sut = gatewayReturning(HttpStatus.OK, """
+                {"paymentKey":"pk_abc","orderId":"ORD-00000001","status":"CANCELED"}
+                """);
+
+        sut.cancel("pk_abc", "이미 취소된 주문에 뒤늦게 결제가 승인됨");
+        // 예외 없이 끝나면 성공이다 — cancel()은 void 계약이라 반환값을 확인하지 않는다.
+    }
+
+    /*
+     * 이벤트 재전달 등으로 같은 취소가 중복 호출된 경우, 토스가 ALREADY_CANCELED_PAYMENT로 거절해도
+     * 이미 원하는 상태(취소됨)에 도달해 있으므로 예외를 던지지 않고 멱등하게 흡수한다
+     * (TossPaymentGateway.ALREADY_CANCELED_CODES 주석 참고).
+     */
+    @Test
+    void cancel_이미_취소된_결제는_예외없이_흡수한다() {
+        TossPaymentGateway sut = gatewayReturning(HttpStatus.BAD_REQUEST, """
+                {"code":"ALREADY_CANCELED_PAYMENT","message":"이미 취소된 결제입니다."}
+                """);
+
+        sut.cancel("pk_abc", "이미 취소된 주문에 뒤늦게 결제가 승인됨");
+    }
+
+    @Test
+    void cancel_그_외_실패는_UnknownException이다() {
+        TossPaymentGateway sut = gatewayReturning(HttpStatus.BAD_REQUEST, """
+                {"code":"NOT_CANCELABLE_AMOUNT","message":"취소할 수 없는 금액입니다."}
+                """);
+
+        assertThatThrownBy(() -> sut.cancel("pk_abc", "사유"))
+                .isInstanceOf(PaymentGatewayUnknownException.class);
+    }
+
+    @Test
+    void cancel_5xx는_UnknownException이다() {
+        TossPaymentGateway sut = gatewayReturning(HttpStatus.INTERNAL_SERVER_ERROR, """
+                {"code":"FAILED_INTERNAL_SYSTEM_PROCESSING","message":"내부 시스템 오류"}
+                """);
+
+        assertThatThrownBy(() -> sut.cancel("pk_abc", "사유"))
+                .isInstanceOf(PaymentGatewayUnknownException.class);
+    }
+
     private static TossPaymentGateway gatewayReturning(HttpStatus status, String body) {
         WebClient webClient = WebClient.builder()
                 .exchangeFunction(fakeExchangeFunction(status, body))

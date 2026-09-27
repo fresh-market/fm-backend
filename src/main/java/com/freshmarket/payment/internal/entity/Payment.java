@@ -165,6 +165,26 @@ public class Payment extends BaseMutableTimeEntity {
     }
 
     /*
+     * [2026-09-27 KST] order가 이미 CANCELED로 확정한 주문에 뒤늦게 결제가 승인된 경우의 자동
+     * 환불에서 쓴다(common.event.OrderPaymentRefundRequestedEvent 참고). PAID에서만 전이하고,
+     * 이미 CANCELED면 조용히 넘어간다 — 이벤트 재전달로 같은 결제에 대해 여러 번 불릴 수 있어서다
+     * (PaymentGateway.cancel() 구현체도 같은 이유로 각자 멱등하게 흡수한다 — 이중 방어).
+     *
+     * 부분 환불은 아직 지원하지 않는다(YAGNI, PaymentGateway.cancel() 주석 참고) — 전액을
+     * refundedAmount에 반영한다.
+     */
+    public void cancel(String reason) {
+        if (isCanceled()) {
+            return;
+        }
+        if (!isPaid()) {
+            throw new IllegalStateException("승인 완료 상태의 결제만 취소할 수 있습니다.");
+        }
+        this.status = PaymentStatus.CANCELED;
+        this.refundedAmount = amount;
+    }
+
+    /*
      * [2026-09-27 KST] confirm 컨트롤러가 실제로 토스 confirm API를 부르기 "직전"에, 별도의 짧은
      * 트랜잭션(PaymentService.beginConfirm)에서 호출한다. 아직 승인/거절이 확정되지 않은 상태
      * (PENDING/UNKNOWN)에서만 pgTid를 앞당겨 반영하고, 이미 끝난 결제(PAID/FAILED)는 조용히
@@ -203,6 +223,10 @@ public class Payment extends BaseMutableTimeEntity {
 
     public boolean isUnknown() {
         return status == PaymentStatus.UNKNOWN;
+    }
+
+    public boolean isCanceled() {
+        return status == PaymentStatus.CANCELED;
     }
 
     public boolean isReconciliationCandidate() {

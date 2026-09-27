@@ -28,4 +28,18 @@ public interface PaymentGateway {
      * 시도 때 보낸 식별자로 물어야 한다.
      */
     PaymentGatewayInquiryResult inquire(String pgOrderNo);
+
+    /*
+     * [2026-09-27 KST] order 쪽에서 이미 취소된 주문에 뒤늦게 결제가 승인된 경우의 자동 환불에
+     * 쓴다(common.event.OrderPaymentRefundRequestedEvent 참고). 전액 취소만 지원한다 — 부분
+     * 환불은 이 프로젝트가 아직 필요로 하지 않는다(YAGNI, 필요해지면 별도 금액 파라미터를 추가한
+     * 메서드를 새로 만든다).
+     *
+     * paymentKey는 이 결제를 승인할 때 PG가 돌려준 거래 식별자(Payment.pgTid)다 — confirm()에
+     * 보낸 것과 같은 값이며, 토스 취소 API는 이 값으로 대상 결제를 특정한다.
+     *
+     * 구현체는 이미 취소된 결제에 대한 중복 호출을 멱등하게 흡수해야 한다 — 이벤트 재전달로 같은
+     * 결제에 대해 여러 번 불릴 수 있다(호출하는 쪽도 Payment.cancel()의 멱등 가드로 이중 방어한다).
+     */
+    void cancel(String paymentKey, String reason);
 }

@@ -152,6 +152,41 @@ public class PaymentService {
         return PaymentResult.from(payment);
     }
 
+    /*
+     * [2026-09-27 KST] order가 이미 취소된 주문에 뒤늦게 승인이 온 경우의 자동 환불 흐름
+     * (PaymentCancellationService)에서, 실제 PaymentGateway.cancel() 호출 "전"에 짧은 트랜잭션으로
+     * 부른다. PAID가 아니면(이미 CANCELED로 끝났거나 애초에 승인된 적 없는 경우) 빈 Optional을
+     * 돌려줘 호출하는 쪽이 PG를 다시 부르지 않고 건너뛰게 한다 — 이벤트 재전달로 여러 번 들어와도
+     * 매번 PG를 호출하지 않는다.
+     *
+     * findByIdForUpdate로 잠근다 — 같은 결제에 대한 취소 요청이 동시에 두 번 들어와도(이벤트 재전달
+     * 등) 하나만 PG를 부르게 한다.
+     */
+    @Transactional
+    public Optional<Payment> beginCancel(Long paymentId) {
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+                .orElseThrow(() -> new PaymentException(PaymentErrorCode.PAYMENT_NOT_FOUND));
+        if (!payment.isPaid()) {
+            return Optional.empty();
+        }
+        return Optional.of(payment);
+    }
+
+    /*
+     * [2026-09-27 KST] PaymentGateway.cancel() 호출이 성공한 "뒤" 짧은 트랜잭션으로 상태를
+     * 확정한다. Payment.cancel()의 멱등 가드 덕분에 이미 CANCELED여도 안전하게 넘어간다. order는
+     * 이미 이 환불의 계기가 된 시점(주문이 먼저 CANCELED로 확정된 시점)에 알고 있으므로, 승인/실패
+     * 때와 달리 여기서는 별도로 order에 알리는 outbox/이벤트가 필요 없다.
+     */
+    @Transactional
+    public void finishCancel(Long paymentId, String reason) {
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+                .orElseThrow(() -> new PaymentException(PaymentErrorCode.PAYMENT_NOT_FOUND));
+        payment.cancel(reason);
+        log.info("event=PAYMENT_CANCELED paymentId={} orderId={} amount={} reason={}",
+                payment.getId(), payment.getOrderId(), payment.getAmount(), reason);
+    }
+
     public Optional<Payment> findPayment(Long orderId) {
         return paymentRepository.findByOrderId(orderId);
     }

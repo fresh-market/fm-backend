@@ -5,6 +5,7 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -20,6 +21,7 @@ import org.springframework.stereotype.Component;
  * integrationTest 는 FakePaymentGatewayIntegrationTest 가 따로 맡으므로 여기 넣지 않는다.
  * 넣으면 PaymentGateway 빈이 둘이 되어 통합 테스트 컨텍스트가 뜨지 않는다.
  */
+@Slf4j
 @Component
 @Profile("local")
 @RequiredArgsConstructor
@@ -42,5 +44,14 @@ public class MockPaymentGateway implements PaymentGateway {
     @Override
     public PaymentGatewayInquiryResult inquire(String pgOrderNo) {
         return PaymentGatewayInquiryResult.approved("mock_" + UUID.randomUUID(), LocalDateTime.now(clock), PaymentMethod.CARD);
+    }
+
+    /*
+     * [2026-09-27 KST] confirm()과 같은 이유로 로컬 개발에서는 실제 PG 취소를 부를 필요가 없다 —
+     * 항상 성공한 것으로 간주하고 로그만 남긴다.
+     */
+    @Override
+    public void cancel(String paymentKey, String reason) {
+        log.info("event=MOCK_PAYMENT_CANCELED paymentKey={} reason={}", paymentKey, reason);
     }
 }
