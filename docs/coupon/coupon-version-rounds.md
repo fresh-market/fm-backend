@@ -130,6 +130,36 @@ p99 만 재면 "v3 가 v2 보다 빠르다" 에서 끝나고 **왜인지 못 말
 
 ## 8. 회차마다 남길 것
 
+### 임계 판정을 전부 남긴다
+
+**`issue.js` 의 임계가 넷이다. 하나만 보면 나머지 셋이 잡은 것을 놓친다.**
+
+| 임계 | 무엇을 막나 |
+|---|---|
+| `coupon_settled_duration: p(99)<1000` | SLO 미달 |
+| `http_req_failed: rate<0.01` | 503 을 뺀 모든 실패 |
+| `coupon_unexpected: count==0` | 봐서는 안 되는 응답 |
+| `coupon_congested_rate: rate<0.01` | 거절로 도망가는 것 |
+
+**2026-09-27 회차에서 실제로 놓쳤다.** p99 와 DB 정합성만 뽑았더니, v1 이 요청의 80%에
+500 을 돌려주고 있다는 것을 열두 회차 중 한 회차에서 우연히 발견했다. `coupon_unexpected`
+가 16,039건으로 그 임계를 깨고 k6 가 exit 99 로 끝났는데 기록에 그 신호가 없었다.
+
+**k6 요약이 사라질 수 있으므로 Prometheus 에서도 뽑는다.** 생성기가 OOM 으로 죽으면 요약을
+못 찍는다. 아래 시계열이 같은 값을 갖는다.
+
+```
+k6_http_req_failed
+k6_coupon_unexpected_total
+k6_coupon_congested_total
+k6_coupon_issued_total
+k6_http_reqs_total
+```
+
+**회차가 끝나는 대로 뽑는다.** 전부 끝난 뒤에 몰아 뽑으면 그동안 값을 볼 수 없고, 인프라를
+내리면 사라진다. Prometheus 는 로컬 TSDB 를 쓰고 그 볼륨이 인스턴스와 함께 지워진다.
+
+
 [coupon-load-scenarios.md](coupon-load-scenarios.md) 10장에 더해 둘을 적는다.
 
 ```
