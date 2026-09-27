@@ -11,18 +11,17 @@ import org.springframework.stereotype.Component;
 /*
  * PG 대역이다. 항상 승인만 반환한다.
  *
- * 실제 PG 구현체가 아직 없어 운영(prod)도 이 대역을 쓴다. 운영에서 결제는 전부 승인된다.
- * prod 를 빼면 PaymentApiImpl 과 PaymentReconciliationService 가 주입받을 빈이 없어
- * 앱과 배치 인스턴스(prod,batch)가 기동하지 못한다 (#203 배포 실패).
+ * [2026-09-27 KST] 실제 PG 구현체(TossPaymentGateway)가 생기면서 prod를 뺐다 — 운영 결제는 이제
+ * TossPaymentGateway가 맡는다. 이 클래스는 local 프로필(로컬 개발/수동 테스트)에서만 뜬다.
+ * TossPaymentGateway에 @Profile("prod")를 거는 것과 여기서 prod를 빼는 것을 같은 커밋에서 했다 —
+ * 둘을 나누면 그 사이 배포에서 PaymentGateway 빈이 0개인 순간이 생겨 #203과 같은 방식으로 앱/배치
+ * 인스턴스가 기동하지 못한다.
  *
  * integrationTest 는 FakePaymentGatewayIntegrationTest 가 따로 맡으므로 여기 넣지 않는다.
  * 넣으면 PaymentGateway 빈이 둘이 되어 통합 테스트 컨텍스트가 뜨지 않는다.
- *
- * 실제 PG 구현체를 추가할 때는 그 구현체에 @Profile("prod") 를 거는 것과 여기서 prod 를 빼는 것을
- * 같은 커밋에서 한다. 둘을 나누면 운영에 PaymentGateway 가 0개인 순간이 생긴다.
  */
 @Component
-@Profile({"local", "prod"})
+@Profile("local")
 @RequiredArgsConstructor
 public class MockPaymentGateway implements PaymentGateway {
 

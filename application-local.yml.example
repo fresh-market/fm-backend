@@ -52,3 +52,10 @@ spring:
 # app:
 #   cors:
 #     allowed-origins: "http://localhost:5173"
+
+# [2026-09-27 KST] 토스페이먼츠 결제 승인/조회. TossPaymentGateway는 prod 프로필에서만 뜨므로
+# 로컬(local 프로필, MockPaymentGateway 사용)에서는 이 값이 없어도 기동에 영향이 없다. 로컬에서
+# 실제 토스 샌드박스로 수동 테스트하고 싶을 때만(예: spring.profiles.active=prod,local 조합 등으로
+# 강제 활성화) 채운다 — 토스 개발자센터 내 상점 > API 키에서 테스트 시크릿 키를 발급받는다.
+# toss:
+#   secret-key: ""
