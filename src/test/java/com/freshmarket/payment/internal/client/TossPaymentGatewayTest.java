@@ -1,6 +1,7 @@
 package com.freshmarket.payment.internal.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.freshmarket.payment.PaymentMethod;
@@ -180,8 +181,9 @@ class TossPaymentGatewayTest {
                 {"paymentKey":"pk_abc","orderId":"ORD-00000001","status":"CANCELED"}
                 """);
 
-        sut.cancel("pk_abc", "이미 취소된 주문에 뒤늦게 결제가 승인됨");
-        // 예외 없이 끝나면 성공이다 — cancel()은 void 계약이라 반환값을 확인하지 않는다.
+        // cancel()은 void 계약이라 반환값이 없다 — 예외 없이 끝나는 것 자체가 검증 대상이다.
+        assertThatCode(() -> sut.cancel("pk_abc", "이미 취소된 주문에 뒤늦게 결제가 승인됨"))
+                .doesNotThrowAnyException();
     }
 
     /*
@@ -195,7 +197,8 @@ class TossPaymentGatewayTest {
                 {"code":"ALREADY_CANCELED_PAYMENT","message":"이미 취소된 결제입니다."}
                 """);
 
-        sut.cancel("pk_abc", "이미 취소된 주문에 뒤늦게 결제가 승인됨");
+        assertThatCode(() -> sut.cancel("pk_abc", "이미 취소된 주문에 뒤늦게 결제가 승인됨"))
+                .doesNotThrowAnyException();
     }
 
     @Test
