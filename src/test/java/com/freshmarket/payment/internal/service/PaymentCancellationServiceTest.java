@@ -1,5 +1,7 @@
 package com.freshmarket.payment.internal.service;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -26,11 +28,14 @@ class PaymentCancellationServiceTest {
     @Mock
     private PaymentGateway paymentGateway;
 
+    @Mock
+    private PaymentRefundAttemptService refundAttemptService;
+
     private PaymentCancellationService sut;
 
     @BeforeEach
     void setUp() {
-        sut = new PaymentCancellationService(paymentService, paymentGateway);
+        sut = new PaymentCancellationService(paymentService, paymentGateway, refundAttemptService);
     }
 
     @Test
@@ -43,6 +48,7 @@ class PaymentCancellationServiceTest {
 
         verify(paymentGateway).cancel(eq("toss_key_1"), eq("이미 취소된 주문에 뒤늦게 결제가 승인됨"));
         verify(paymentService).finishCancel(10L, "이미 취소된 주문에 뒤늦게 결제가 승인됨");
+        verify(refundAttemptService, never()).recordUnresolvedAttempt(any(), org.mockito.ArgumentMatchers.anyInt());
     }
 
     /*
@@ -55,8 +61,65 @@ class PaymentCancellationServiceTest {
 
         sut.cancelForRefund(10L, "이미 취소된 주문에 뒤늦게 결제가 승인됨");
 
-        verify(paymentGateway, never()).cancel(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
-        verify(paymentService, never()).finishCancel(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        verify(paymentGateway, never()).cancel(any(), any());
+        verify(paymentService, never()).finishCancel(any(), any());
+    }
+
+    /*
+     * [2026-09-28 KST] 아직 상한(MAX_REFUND_ATTEMPTS)에 도달하지 않았다면, 예외를 다시 던져
+     * outbox 재전달로 다음 배치 주기에 재시도되도록 한다(클래스 주석 참고).
+     */
+    @Test
+    void 취소_실패가_상한에_못_미치면_예외를_다시_던져_다음_주기_재시도를_유도한다() {
+        Payment payment = payment(10L);
+        payment.approve("toss_key_1", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD);
+        when(paymentService.beginCancel(10L)).thenReturn(Optional.of(payment));
+        RuntimeException failure = new RuntimeException("취소 실패");
+        org.mockito.Mockito.doThrow(failure).when(paymentGateway).cancel(any(), any());
+        when(refundAttemptService.recordUnresolvedAttempt(10L, 3)).thenReturn(false);
+
+        assertThatThrownBy(() -> sut.cancelForRefund(10L, "사유"))
+                .isSameAs(failure);
+
+        verify(refundAttemptService).recordUnresolvedAttempt(10L, 3);
+        verify(paymentService, never()).finishCancel(any(), any());
+    }
+
+    /*
+     * [2026-09-28 KST] 상한을 넘겨 격리되면 더 이상 예외를 전파하지 않는다 — outbox가
+     * dispatched로 확정되어 무한 재시도가 멈추고, 이후는 운영자가 직접 확인한다.
+     */
+    @Test
+    void 취소_실패가_상한을_넘기면_격리하고_예외를_삼킨다() {
+        Payment payment = payment(10L);
+        payment.approve("toss_key_1", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD);
+        when(paymentService.beginCancel(10L)).thenReturn(Optional.of(payment));
+        org.mockito.Mockito.doThrow(new RuntimeException("취소 실패")).when(paymentGateway).cancel(any(), any());
+        when(refundAttemptService.recordUnresolvedAttempt(10L, 3)).thenReturn(true);
+
+        sut.cancelForRefund(10L, "사유");
+
+        verify(refundAttemptService).recordUnresolvedAttempt(10L, 3);
+        verify(paymentService, never()).finishCancel(any(), any());
+    }
+
+    /*
+     * [2026-09-28 KST] 이미 격리된 결제는(과거 주기에 이미 상한을 넘김) PG를 다시 부르지 않는다.
+     */
+    @Test
+    void 이미_격리된_결제는_PG를_다시_부르지_않는다() {
+        Payment payment = payment(10L);
+        payment.approve("toss_key_1", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD);
+        for (int i = 0; i < 3; i++) {
+            payment.recordUnresolvedRefundAttempt(3);
+        }
+        when(paymentService.beginCancel(10L)).thenReturn(Optional.of(payment));
+
+        sut.cancelForRefund(10L, "사유");
+
+        verify(paymentGateway, never()).cancel(any(), any());
+        verify(paymentService, never()).finishCancel(any(), any());
+        verify(refundAttemptService, never()).recordUnresolvedAttempt(any(), org.mockito.ArgumentMatchers.anyInt());
     }
 
     private Payment payment(Long id) {

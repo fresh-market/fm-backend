@@ -74,6 +74,12 @@ public class Payment extends BaseMutableTimeEntity {
     @Column(name = "reconciliation_isolated", nullable = false)
     private boolean reconciliationIsolated;
 
+    @Column(name = "refund_attempt_count", nullable = false)
+    private int refundAttemptCount;
+
+    @Column(name = "refund_isolated", nullable = false)
+    private boolean refundIsolated;
+
     private Payment(Long orderId, Long memberId, PaymentMethod method, int amount) {
         if (orderId == null) {
             throw new IllegalArgumentException("orderId 는 필수다");
@@ -247,6 +253,29 @@ public class Payment extends BaseMutableTimeEntity {
         reconciliationAttemptCount++;
         if (reconciliationAttemptCount >= maxAttempts) {
             reconciliationIsolated = true;
+            return true;
+        }
+        return false;
+    }
+
+    /*
+     * [2026-09-28 KST] PG 취소(환불) 호출이 실패했을 때만 호출한다. reconciliation과 같은
+     * 이유로 상한을 둔다 — 영구적으로 거절되는 취소(예: 취소 가능 금액 초과 등)를 매
+     * 배치 주기(outbox 재전달)마다 끝없이 재시도하면 로그만 쌓이고 아무도 못 알아챈다. 상한을 넘기면
+     * isolated로 표시해 PaymentCancellationService가 더 이상 PG를 호출하지 않게 하고, 이후 처리는 운영자가
+     * 직접 확인한다(payment는 PAID로, order는 CANCELED로 남는 불일치 상태이므로 수동 개입이
+     * 필요하다).
+     */
+    public boolean recordUnresolvedRefundAttempt(int maxAttempts) {
+        if (maxAttempts < 1) {
+            throw new IllegalArgumentException("maxAttempts 는 1 이상이어야 합니다.");
+        }
+        if (!isPaid() || refundIsolated) {
+            return false;
+        }
+        refundAttemptCount++;
+        if (refundAttemptCount >= maxAttempts) {
+            refundIsolated = true;
             return true;
         }
         return false;
