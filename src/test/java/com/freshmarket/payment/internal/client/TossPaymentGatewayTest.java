@@ -1,8 +1,8 @@
 package com.freshmarket.payment.internal.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.freshmarket.payment.PaymentMethod;
 import com.freshmarket.payment.internal.client.exception.PaymentGatewayRejectedException;
@@ -182,8 +182,11 @@ class TossPaymentGatewayTest {
                 """);
 
         // cancel()은 void 계약이라 반환값이 없다 — 예외 없이 끝나는 것 자체가 검증 대상이다.
-        assertThatCode(() -> sut.cancel("pk_abc", "이미 취소된 주문에 뒤늦게 결제가 승인됨"))
-                .doesNotThrowAnyException();
+        // assertThatCode(...).doesNotThrowAnyException()는 의미는 같지만 Sonar의 S2699가
+        // assertion으로 인식하지 못해(java:S2699) catchThrowable + isNull()로 대신 쓴다.
+        Throwable thrown = catchThrowable(() -> sut.cancel("pk_abc", "이미 취소된 주문에 뒤늦게 결제가 승인됨"));
+
+        assertThat(thrown).isNull();
     }
 
     /*
@@ -197,8 +200,9 @@ class TossPaymentGatewayTest {
                 {"code":"ALREADY_CANCELED_PAYMENT","message":"이미 취소된 결제입니다."}
                 """);
 
-        assertThatCode(() -> sut.cancel("pk_abc", "이미 취소된 주문에 뒤늦게 결제가 승인됨"))
-                .doesNotThrowAnyException();
+        Throwable thrown = catchThrowable(() -> sut.cancel("pk_abc", "이미 취소된 주문에 뒤늦게 결제가 승인됨"));
+
+        assertThat(thrown).isNull();
     }
 
     @Test
