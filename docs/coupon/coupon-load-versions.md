@@ -345,12 +345,38 @@ if (settled) { sleep(1); return; }     VU 당 45회 x 2만 = 90만 회
 v1-1 의 3,746 과 v1-2 의 4,020 과 같은 자리다. **v1 의 낮은 발급은 k6 가 일찍 죽어서가 아니다.**
 v2, v3, v4 는 열두 회차 모두 발급이 10,000 이라 재고를 다 털었다.
 
-### 다음 회차는 r7i.large 로 돈다
+### 인스턴스를 키우는 길은 막혀 있다
 
-`fm-infra` 가 2026-09-27 에 부하 생성 인스턴스를 `r7i.large`(2 vCPU / 16 GiB)로 올렸다.
-같은 문서의 「다음에 할 것」 5번이다.
+`r7i.large`(2 vCPU / 16 GiB)로 올리려다 되돌렸다. **프리 티어가 거부한다.**
 
-**`vCPU` 는 2 로 그대로라 CPU 축은 바뀌지 않는다.**
+```
+InvalidParameterCombination: The specified instance type is not eligible for Free Tier.
+```
+
+**`vCPU` 가 2 여도 프리 티어 목록에 없으면 안 된다.** 목록은 여덟 개이고 메모리가 가장 큰 것이
+`m7i-flex.large` 8 GiB 다. `describe-instance-types` 의 `free-tier-eligible` 필터로 얻는다.
+
+**`run-instances --dry-run` 으로 확인하면 안 된다.** 권한과 파라미터 형식만 보고
+`DryRunOperation` 을 돌려주므로 `r7i`, `r6i`, `r5` 가 모두 통과하고 실제로는 셋 다 거부된다.
+
+### 그래서 시나리오를 고쳤다
+
+**놀고 있는 반복을 없애는 것이 인스턴스를 키우지 않고 쓰는 유일한 길이었다.**
+
+```javascript
+if (settled) {
+  const elapsed = exec.instance.currentTestRunDuration;
+  const left = Number.isFinite(elapsed) ? TOTAL_SECONDS - elapsed / 1000 : 1;
+  sleep(Math.max(left, 1));
+  return;
+}
+```
+
+**반복이 90만에서 2만으로 줄어 계산상 2,440 MB 를 번다.** 최고점이 램프 끝의 5,227 MB 근처로
+내려가 `MemTotal` 7,776 MiB 안에 들어간다.
+
+**다만 이 수정이 p99 를 바꿀 수 있다.** 생성기가 하는 일이 줄어 CPU 부담이 빠지기 때문이다.
+그것을 가르는 대조 회차를 설계 10장에 절차로 두었다.
 
 ---
 
