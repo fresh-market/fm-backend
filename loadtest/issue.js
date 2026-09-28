@@ -11,7 +11,7 @@
 import http from 'k6/http';
 import { sleep } from 'k6';
 import exec from 'k6/execution';
-import { Counter, Trend } from 'k6/metrics';
+import { Counter, Rate, Trend } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
@@ -29,6 +29,21 @@ const VUS = parseInt(__ENV.VUS || '20000', 10);
 const RAMP = __ENV.RAMP || '60s';
 // 램프가 끝난 뒤 밀린 큐가 빠지는 것까지 본다
 const HOLD = __ENV.HOLD || '30s';
+
+/*
+ * k6 기간 표기를 초로 바꾼다. 위 두 값을 더해 회차 길이를 얻는 데만 쓴다.
+ *
+ * 판정을 받은 VU 가 남은 시간을 한 번에 자려면 회차가 언제 끝나는지 알아야 하는데 k6 가 그
+ * 값을 주지 않는다. 주는 것은 시작 후 경과 시간(exec.instance.currentTestRunDuration)뿐이다.
+ */
+function seconds(d) {
+  const m = /^(\d+(?:\.\d+)?)(ms|s|m|h)$/.exec(String(d).trim());
+  if (!m) {
+    throw new Error(`기간 표기를 읽을 수 없다: ${d}. 60s 나 1m 처럼 준다`);
+  }
+  return parseFloat(m[1]) * { ms: 0.001, s: 1, m: 60, h: 3600 }[m[2]];
+}
+const TOTAL_SECONDS = seconds(RAMP) + seconds(HOLD);
 
 /*
  * 503 을 받은 사람이 몇 번까지 다시 누르는가.
@@ -87,6 +102,18 @@ const soldOut = new Counter('coupon_sold_out');
  */
 const soldOutFinal = new Counter('coupon_sold_out_final');
 const congested = new Counter('coupon_congested');
+/*
+ * 혼잡을 비율로도 잰다. 임계를 걸 수 있는 모집단이 필요하기 때문이다.
+ *
+ * coupon.md 7장이 SLO 모집단에서 혼잡(503)을 뺐고, 같은 장이 "거절 비율을 따로 묶어야
+ * 한다. 안 그러면 앱이 전부 거절해서 p99 를 맞출 수 있다" 고 적었다. 그런데 그 임계가
+ * 없었다. 혼잡은 coupon_settled_duration 에서 빠지고, expectedStatuses 가 503 을 기대
+ * 상태로 두어 http_req_failed 에서도 빠진다. 세 임계 어디에도 걸리지 않는다.
+ *
+ * Counter 로는 못 건다. k6 의 Counter 임계는 개수와 초당 발생률만 보므로 부하 크기가
+ * 바뀌면 같은 숫자가 다른 뜻이 된다. Rate 는 전체 대비 비율이라 그대로 예산이 된다.
+ */
+const congestedRate = new Rate('coupon_congested_rate');
 const rejected = new Counter('coupon_rejected');
 const unexpected = new Counter('coupon_unexpected');
 /*
@@ -155,6 +182,18 @@ export const options = {
     http_req_failed: ['rate<0.01'],
     // ALB 가 낸 502/504 는 coupon_gateway_failed 로 따로 세므로 여기 안 들어온다
     coupon_unexpected: ['count==0'],
+    /*
+     * 거절 비율의 상한이다. coupon.md 7장이 요구한 임계다.
+     *
+     * 1% 는 http_req_failed 와 같은 값이다. 둘이 다른 숫자면 어느 쪽이 기준인지 설명해야
+     * 하는데 그럴 근거가 없다. 요구 부하에서 혼잡이 한 건도 안 나온 회차가 있으므로
+     * (2026-09-14 FINAL 회차) 1% 는 넉넉한 여유다.
+     *
+     * 장애 회차에서는 이 임계가 깨진다. 그것이 맞다. Redis 가 죽으면 앱이 새 요청을
+     * 혼잡으로 끊는 것이 설계이므로, 그 회차는 임계 통과가 아니라 발급 수와 gap 으로
+     * 판정한다. http_req_failed 주석이 502 와 504 에 대해 적어 둔 것과 같다.
+     */
+    coupon_congested_rate: ['rate<0.01'],
   },
 };
 
@@ -209,9 +248,22 @@ export default function () {
     return;
   }
 
-  // 이 사람은 이미 끝났다. 남은 시간 동안 접속만 유지한다
+  /*
+   * 이 사람은 이미 끝났다. 남은 시간을 한 번에 자며 접속만 유지한다.
+   *
+   * sleep(1) 로 두면 안 된다. k6 는 default 가 return 할 때마다 반복 하나를 세고 그때마다
+   * 남는 것이 있다. 2만 VU 가 1초마다 돌면 초당 2만 회이고, 2026-09-26 실측에서 램프가 끝난
+   * 뒤 45초 동안 2,440 MB 가 쌓여 커널이 k6 를 죽였다. 요청은 한 건도 안 보내는 구간이다.
+   * 반복당 약 2.7 KB 이고 근거는 fm-infra 의 docs/deploy/README.md 실측표 아래에 있다.
+   *
+   * 최소 1초를 두는 이유가 있다. 회차 끝에서 남은 시간이 0 이하가 되는데, 그때 sleep 없이
+   * return 하면 바쁜 대기가 된다.
+   */
   if (settled) {
-    sleep(1);
+    const elapsed = exec.instance.currentTestRunDuration;
+    // 그 값을 못 읽으면 sleep(1) 로 떨어진다. 메모리는 더 쓰지만 회차는 돈다
+    const left = Number.isFinite(elapsed) ? TOTAL_SECONDS - elapsed / 1000 : 1;
+    sleep(Math.max(left, 1));
     return;
   }
 
@@ -229,6 +281,8 @@ export default function () {
   if (res.status === 200 || res.status === 409 || res.status === 410) {
     settledDuration.add(res.timings.duration);
   }
+  // 모든 응답을 모집단으로 삼는다. 503 만 세면 비율이 안 나온다
+  congestedRate.add(res.status === 503);
 
   if (res.status === 200) {
     /*
