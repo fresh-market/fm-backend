@@ -839,7 +839,7 @@ api-contract migration  app-config test         archunit        build
 | [coupon/coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) | 회수 기준 시간을 60초로 둔 근거 |
 | [coupon/warmup.md](./docs/coupon/warmup.md) | 워밍업이 무엇을 데우고 무엇을 못 데우나 |
 | [coupon/rebuild-measurement-2026-09-21.md](./docs/coupon/rebuild-measurement-2026-09-21.md) | 재건을 실제로 일으켜 본 회차와 거기서 찾은 것 |
-| [coupon/rebuild-measurement-2026-09-21b.md](./docs/coupon/rebuild-measurement-2026-09-21b.md) | 캐시 유실을 직접 주입해 본 회차. 기여가 DB 읽기 뒤에 있다 |
+| [coupon/rebuild-measurement-2026-09-21b.md](./docs/coupon/rebuild-measurement-2026-09-21b.md) | 캐시 유실을 직접 주입해 본 회차. 인스턴스가 쥔 번호를 못 올린 이유 |
 | [coupon/rebuild-fix-verification-2026-09-21.md](./docs/coupon/rebuild-fix-verification-2026-09-21.md) | 두 고침이 실제로 도는지 본 회차. 3초가 여유 있는 값이 아니다 |
 | [coupon/rebuild-early-exit-2026-09-22.md](./docs/coupon/rebuild-early-exit-2026-09-22.md) | 조기 종료를 붙이고 돌려 본 회차. DB 장애가 길면 명부가 빈다 |
 | [coupon/rebuild-queue-contribution-2026-09-22.md](./docs/coupon/rebuild-queue-contribution-2026-09-22.md) | 큐가 실제로 재건에 쓰인 회차. 조기 종료가 2ms 에 끝났다 |
