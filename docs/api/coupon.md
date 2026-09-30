@@ -164,7 +164,7 @@ POST /v1/admin/coupons/{couponId}:activate
 POST /v1/admin/coupons/{couponId}:deactivate
 ```
 
-**`ITEM` 쿠폰은 활성 대상 옵션이 하나 이상 있어야 켤 수 있다.** 이 검사는 앱이 한다.
+**`ITEM` 쿠폰은 활성 대상 옵션이 하나 이상 있어야 켤 수 있다.** 이 검사는 스프링 서버가 한다.
 
 | 오류 | 코드 | 언제 |
 |---|---|---|

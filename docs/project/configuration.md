@@ -7,7 +7,7 @@
 |---|---|---|---|
 | `compose.yaml` | Docker Compose | MySQL 컨테이너를 **만든다** | O |
 | `application.yml` | Spring Boot | 환경과 무관한 공통 설정 | O |
-| `../src/main/resources/application-local.yml` | Spring Boot | 앱이 쓸 로컬 값. 비밀값이 여기 있다 | **X** |
+| `../src/main/resources/application-local.yml` | Spring Boot | 스프링 서버가 쓸 로컬 값. 비밀값이 여기 있다 | **X** |
 | `application-local.yml.example` | 사람 | 거기 무엇을 적는지 보여준다 | O |
 | `.env` | Docker Compose | `compose.yaml` 의 값을 **덮는다** | **X** |
 | `.env.example` | 사람 | `.env` 에 무엇을 적을 수 있는지 보여준다 | O |
@@ -119,7 +119,7 @@ cp .env.example .env     # 필요한 줄만 남기고 고친다
 ```
 
 **`.env` 는 Compose 만 읽는다. Spring 은 읽지 않는다.**
-`DB_URL` 같은 값을 `.env` 에 적어도 앱에 전달되지 않는다. 셸 환경변수로 줘야 한다.
+`DB_URL` 같은 값을 `.env` 에 적어도 스프링 서버에 전달되지 않는다. 셸 환경변수로 줘야 한다.
 
 ## 손으로 다룰 때
 
@@ -172,12 +172,12 @@ docker compose down -v
 Flyway 자동설정은 `spring-boot-flyway` 의존성이 있어야 붙는다.
 Boot 4 는 자동설정을 기술별 모듈로 쪼갰고, **`flyway-core` 만 있으면 마이그레이션이 조용히 건너뛰어진다.**
 
-## 앱이 쓰는 비밀값
+## 스프링 서버가 쓰는 비밀값
 
-위 표는 전부 DB 접속에 관한 것이다. 카카오 키나 JWT 서명 키처럼 **앱이 직접 쓰는 값은 경로가 다르다.**
+위 표는 전부 DB 접속에 관한 것이다. 카카오 키나 JWT 서명 키처럼 **스프링 서버가 직접 쓰는 값은 경로가 다르다.**
 
 `application.yml` 은 그런 키를 기본값 없이 `"${VAR}"` 로 둔다. 전부 비밀값이라 기본값을 주면
-값을 빼먹은 채로 뜨는 것을 못 막기 때문이다. **그래서 값을 주지 않으면 앱이 아예 뜨지 않는다.**
+값을 빼먹은 채로 뜨는 것을 못 막기 때문이다. **그래서 값을 주지 않으면 스프링 서버가 아예 뜨지 않는다.**
 
 | 환경 | 어디서 주나 |
 |---|---|
@@ -196,7 +196,7 @@ cp src/main/resources/application-local.yml.example src/main/resources/applicati
 파일이 없으면 조용히 넘어가고, 그 값을 쓰는 빈이 만들어질 때 기동이 막힌다.
 
 `.env` 와 헷갈리지 않는다. `.env` 는 Compose 만 읽고 컨테이너를 어떻게 띄울지에만 관여한다.
-카카오 키를 `.env` 에 적어도 앱에는 전달되지 않는다.
+카카오 키를 `.env` 에 적어도 스프링 서버에는 전달되지 않는다.
 
 **`src/main/resources` 는 jar 에 담기는 자리다.** `../src/main/resources/application-local.yml` 은 저장소에는 안 올라가지만,
 로컬에서 `bootJar` 를 만들면 그 값이 jar 안에 들어간다. 그렇게 만든 jar 는 남에게 주지 않는다.
