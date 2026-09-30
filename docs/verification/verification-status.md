@@ -99,11 +99,11 @@
 | `INF-12-01` | 코드 | `required_version` 과 AWS 프로바이더 버전이 고정되어 있는가 |
 | `INF-12-02` | 코드 | 상태 백엔드가 S3 이고 `encrypt` 와 `use_lockfile` 이 켜져 있는가 |
 | `INF-12-03` | 코드 | SSM `current-sha` 파라미터에 `ignore_changes = [value]` 가 걸려 있는가 |
-| `INF-12-04` | 코드 | 앱 ASG 에 `ignore_changes = [desired_capacity]` 가 걸려 있는가 |
-| `INF-12-05` | 코드 | 앱 ASG 가 `min_size` 0, `desired_capacity` 1, `max_size` 2, `health_check_type` `ELB` 인가 |
+| `INF-12-04` | 코드 | 스프링 서버 ASG 에 `ignore_changes = [desired_capacity]` 가 걸려 있는가 |
+| `INF-12-05` | 코드 | 스프링 서버 ASG 가 `min_size` 0, `desired_capacity` 1, `max_size` 2, `health_check_type` `ELB` 인가 |
 | `INF-12-06` | 코드 | ALB 에 `enable_deletion_protection` 과 `prevent_destroy` 가 둘 다 있는가 |
-| `INF-12-07` | 코드 | 앱 시작 템플릿의 user-data 에 `batch` 프로필이 없는가 |
-| `INF-12-08` | 코드 | 앱 시작 템플릿이 이미지 태그를 고정하지 않고 SSM 에서 읽는가 |
+| `INF-12-07` | 코드 | 스프링 서버 시작 템플릿의 user-data 에 `batch` 프로필이 없는가 |
+| `INF-12-08` | 코드 | 스프링 서버 시작 템플릿이 이미지 태그를 고정하지 않고 SSM 에서 읽는가 |
 | `INF-12-09` | 코드 | 모니터링 인스턴스가 ASG 밖에 있는가 |
 | `INF-12-10` | 코드 | NAT Gateway 리소스가 없는가 |
 | `INF-12-11` | 코드 | 22번 포트를 여는 인바운드 규칙이 없는가 |
