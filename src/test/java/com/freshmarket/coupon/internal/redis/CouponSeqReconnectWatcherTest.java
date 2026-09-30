@@ -75,6 +75,7 @@ class CouponSeqReconnectWatcherTest {
         when(couponRepository.findOpenLimitedEvents()).thenReturn(List.of(COUPON_ID));
         CouponSeqReconnectWatcher sut = 준비(Duration.ZERO);
 
+        이벤트(sut, activated());          // 기동
         이벤트(sut, disconnected());
         이벤트(sut, activated());
 
@@ -87,6 +88,7 @@ class CouponSeqReconnectWatcherTest {
         when(couponRepository.findOpenLimitedEvents()).thenReturn(List.of(COUPON_ID));
         CouponSeqReconnectWatcher sut = 준비(Duration.ofMinutes(1));
 
+        이벤트(sut, activated());          // 기동
         이벤트(sut, disconnected());
         이벤트(sut, activated());
         이벤트(sut, disconnected());
@@ -101,6 +103,7 @@ class CouponSeqReconnectWatcherTest {
         when(couponRepository.findOpenLimitedEvents()).thenThrow(new IllegalStateException("DB"));
         CouponSeqReconnectWatcher sut = 준비(Duration.ZERO);
 
+        이벤트(sut, activated());          // 기동
         이벤트(sut, disconnected());
         이벤트(sut, activated());
 
@@ -113,10 +116,38 @@ class CouponSeqReconnectWatcherTest {
         when(couponRepository.findOpenLimitedEvents()).thenReturn(List.of());
         CouponSeqReconnectWatcher sut = 준비(Duration.ZERO);
 
+        이벤트(sut, activated());          // 기동
         이벤트(sut, disconnected());
         이벤트(sut, activated());
 
         verify(trigger, never()).suspect(anyLong());
+    }
+
+    @Test
+    @DisplayName("기동 때 첫 연결이 실패한 것은 재연결이 아니다")
+    void 기동_실패_뒤의_활성화는_무시한다() {
+        CouponSeqReconnectWatcher sut = 준비(Duration.ZERO);
+
+        // 붙는 데 실패하면 Lettuce 가 끊김을 먼저 내고 다음 시도에서 활성화를 낸다
+        이벤트(sut, disconnected());
+        이벤트(sut, activated());
+
+        verifyNoInteractions(couponRepository);
+        verify(trigger, never()).suspect(anyLong());
+    }
+
+    @Test
+    @DisplayName("기동에 실패했어도 그 뒤의 재연결은 센다")
+    void 기동_실패_뒤에도_재연결은_띄운다() {
+        when(couponRepository.findOpenLimitedEvents()).thenReturn(List.of(COUPON_ID));
+        CouponSeqReconnectWatcher sut = 준비(Duration.ZERO);
+
+        이벤트(sut, disconnected());
+        이벤트(sut, activated());          // 기동. 여기서는 안 띄운다
+        이벤트(sut, disconnected());
+        이벤트(sut, activated());          // 진짜 재연결
+
+        verify(trigger).suspect(COUPON_ID);
     }
 
     private static final SocketAddress LOCAL = new InetSocketAddress("127.0.0.1", 50000);
