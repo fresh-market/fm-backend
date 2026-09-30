@@ -36,6 +36,8 @@ public record CouponIssueProperties(
         @DefaultValue("2147483647") int queueCapacity,
         @DefaultValue("2s") Duration commitWait,
         @DefaultValue("3s") Duration rebuildContributeWait,
+        @DefaultValue("true") boolean rebuildOnReconnect,
+        @DefaultValue("10s") Duration rebuildOnReconnectMinInterval,
         @DefaultValue("5s") Duration couponCacheTtl) {
 
     public CouponIssueProperties {
