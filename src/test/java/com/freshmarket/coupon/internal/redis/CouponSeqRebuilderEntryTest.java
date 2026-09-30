@@ -152,6 +152,8 @@ class CouponSeqRebuilderEntryTest {
                 Integer.MAX_VALUE,
                 Duration.ofSeconds(2),
                 Duration.ofMillis(1),
+                true,
+                Duration.ofSeconds(10),
                 Duration.ofSeconds(5));
     }
 }

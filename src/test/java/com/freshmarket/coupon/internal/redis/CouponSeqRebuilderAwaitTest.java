@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
@@ -20,8 +23,10 @@ import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.repository.CouponRepository;
 import com.freshmarket.coupon.internal.repository.MemberCouponSeqRepository;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -193,6 +198,62 @@ class CouponSeqRebuilderAwaitTest {
         assertThat(registry.timer("coupon.seq.rebuild.duration").count()).isZero();
     }
 
+
+    /*
+     * 승격 경로에서는 네 키에 옛 내용이 살아 있다. 덮어쓰기만 하면 어느 쪽에도 안 잡힌 항목이
+     * 그대로 남아, free 의 옛 번호가 주인이 정해진 뒤에도 다시 나간다.
+     */
+    @Test
+    @DisplayName("seq 와 free 는 비우고 쓴다")
+    void 다시_쓸_키를_먼저_비운다() {
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate).unlink("coupon:9001:seq");
+        verify(redisTemplate).unlink("coupon:9001:free");
+    }
+
+    /*
+     * pending 만 통째로 안 지운다. 살아남은 점수가 그 회원이 실제로 번호를 받은 시각이라,
+     * 재건 시각으로 덮으면 회수가 그만큼 뒤로 밀린다. 그리고 올라온 것이 비면 이 키가 텅 비어
+     * 소진 근처에서 스크립트가 최종 소진으로 판정해 재시도를 막는다.
+     */
+    @Test
+    @DisplayName("pending 은 통째로 안 지운다")
+    void pending_은_비우지_않는다() {
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate, never()).unlink("coupon:9001:pending");
+    }
+
+    /*
+     * 멈춤을 올리는 동안만이 아니라 쓰기가 끝날 때까지 끌고 간다. 락이 발급을 막고 있어 멈춰 둬도
+     * 큐가 자라지 않고, DB 를 읽은 뒤 네 키를 쓰기까지의 사이에 커밋된 티켓이 미확정으로 남는
+     * 창이 없어진다.
+     */
+    @Test
+    @DisplayName("멈춤을 쓰기가 끝날 때까지 끌고 간다")
+    void 쓰기까지_멈춘_채로_돈다() {
+        sut.rebuild(COUPON_ID);
+
+        InOrder 순서 = inOrder(flusher, contributor, seqInitializer);
+        순서.verify(flusher).pause(any(Duration.class));
+        순서.verify(contributor).uploadWhilePaused(COUPON_ID);
+        순서.verify(seqInitializer).applyTtl(anyLong(), any());
+        순서.verify(flusher).resume();
+    }
+
+    // 멈추지 못했으면 흔들리는 목록으로 재건하지 않는다
+    @Test
+    @DisplayName("멈추기가 실패하면 재건하지 않는다")
+    void 멈추기가_실패하면_안_쓴다() {
+        when(flusher.pause(any(Duration.class))).thenReturn(false);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(contributor, never()).uploadWhilePaused(anyLong());
+        verify(redisTemplate, never()).unlink(anyString());
+    }
+
     private long 재_보기() {
         long startedAt = System.nanoTime();
         sut.rebuild(COUPON_ID);
@@ -216,6 +277,8 @@ class CouponSeqRebuilderAwaitTest {
                 Integer.MAX_VALUE,
                 Duration.ofSeconds(2),
                 기다림,
+                true,
+                Duration.ofSeconds(10),
                 Duration.ofSeconds(5));
     }
 }
