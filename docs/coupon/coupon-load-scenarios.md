@@ -197,7 +197,7 @@ W-on    reset (기본값)
 |---|---|---|
 | F-1 | 앱 컨테이너 급사 | `docker kill`. SIGKILL 이라 큐가 안 비워진다 |
 | F-2 | 캐시 Multi-AZ 페일오버 | `aws elasticache test-failover` |
-| F-3 | 앱 급사 + 캐시 페일오버 | 위 둘을 함께 |
+| F-3 | 앱 급사 + 캐시 페일오버 | `docker kill` 과 `test-failover` 를 잇달아 |
 
 ### 장애를 언제 거나
 
