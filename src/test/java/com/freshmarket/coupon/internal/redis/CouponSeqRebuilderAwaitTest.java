@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Optional;
 
 import com.freshmarket.coupon.internal.entity.Coupon;
+import com.freshmarket.coupon.internal.issue.CouponIssueFlusher;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.repository.CouponRepository;
@@ -55,6 +56,9 @@ class CouponSeqRebuilderAwaitTest {
     private CouponSeqInitializer seqInitializer;
     @Mock
     private CouponSeqContributor contributor;
+
+    @Mock
+    private CouponIssueFlusher flusher;
     @Mock
     private CouponSeqInstances instances;
     @Mock
@@ -73,13 +77,15 @@ class CouponSeqRebuilderAwaitTest {
     void 준비() {
         registry = new SimpleMeterRegistry();
         sut = new CouponSeqRebuilder(redisTemplate, couponRepository, seqRepository,
-                seqInitializer, contributor, instances, 설정(기다림), registry);
+                seqInitializer, contributor, flusher, instances, 설정(기다림), registry);
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(true);
+        // 재건이 쓰기가 끝날 때까지 멈춘 채로 도므로 멈추기가 성공해야 본문에 들어간다
+        when(flusher.pause(any(Duration.class))).thenReturn(true);
         when(redisTemplate.hasKey(anyString())).thenReturn(false);
         when(hashOperations.entries(anyString())).thenReturn(java.util.Map.of());
         when(seqRepository.findIssuedSeqs(anyLong())).thenReturn(List.of());
@@ -148,7 +154,7 @@ class CouponSeqRebuilderAwaitTest {
         when(instances.live()).thenReturn(3);
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         assertThat(registry.timer("coupon.seq.rebuild.duration").count()).isEqualTo(1);
         assertThat(registry.timer("coupon.seq.rebuild.readwrite").count()).isEqualTo(1);
@@ -163,7 +169,7 @@ class CouponSeqRebuilderAwaitTest {
         when(instances.live()).thenReturn(3);
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         double 전체 = registry.timer("coupon.seq.rebuild.duration").totalTime(TimeUnit.MILLISECONDS);
         double 읽고쓰기 = registry.timer("coupon.seq.rebuild.readwrite").totalTime(TimeUnit.MILLISECONDS);
@@ -172,19 +178,24 @@ class CouponSeqRebuilderAwaitTest {
         assertThat(전체).isGreaterThanOrEqualTo(기다림.toMillis());
     }
 
-    // 재건을 안 하면 재지 않는다. 카운터가 멀쩡하면 문을 닫은 적이 없다
+    /*
+     * 재건을 안 하면 재지 않는다.
+     *
+     * 관리자가 안 연 이벤트가 그 경우다. 카운터의 존재로는 못 가른다. 승격 경로에서는 카운터가
+     * 원래 살아 있어, 그것으로 막으면 그 경우가 영영 안 걸린다.
+     */
     @Test
-    void 재건을_안_하면_안_잰다() {
-        when(redisTemplate.hasKey("coupon:9001:counter")).thenReturn(true);
+    void 열린_이벤트가_아니면_안_잰다() {
+        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.empty());
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         assertThat(registry.timer("coupon.seq.rebuild.duration").count()).isZero();
     }
 
     private long 재_보기() {
         long startedAt = System.nanoTime();
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
     }
 

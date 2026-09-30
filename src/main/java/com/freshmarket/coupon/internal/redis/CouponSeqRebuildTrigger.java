@@ -165,7 +165,7 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
         try {
             worker.execute(() -> {
                 try {
-                    rebuilder.rebuildIfLost(couponId);
+                    rebuilder.rebuild(couponId);
                 } catch (RuntimeException e) {
                     // 삼키면 안 되지만 이 스레드를 죽여서도 안 된다. 다음 요청이 다시 띄운다
                     log.error("event=COUPON_SEQ_REBUILD_FAILED couponId={}", couponId, e);

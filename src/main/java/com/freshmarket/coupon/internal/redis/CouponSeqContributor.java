@@ -100,30 +100,45 @@ public class CouponSeqContributor {
         long pausedAt = System.nanoTime();
         pauseWait.record(pausedAt - enteredAt, TimeUnit.NANOSECONDS);
         try {
-            Map<String, String> mine = mineFor(couponId);
-            if (mine.isEmpty()) {
-                /*
-                 * 올릴 것이 없어도 늦은 정도는 잰다.
-                 * 안 재면 "기여가 안 늦었다" 와 "올릴 것이 없었다" 가 지표에서 같아진다.
-                 * 2026-09-21 회차가 전부 후자였는데 표본이 0건이라 그 사실을 지표로는 못 봤다.
-                 */
-                markDone(couponId);
-                recordLag(couponId, 0, enteredAt, pausedAt);
-                return;
-            }
-            String key = CouponSeqKeys.rebuildQueued(couponId);
-            redisTemplate.opsForHash().putAll(key, mine);
-            /*
-             * 이 키는 다른 넷과 달리 counter 의 만료를 물려받을 자리가 없다.
-             * 지우는 것이 주도자의 정리 한 번뿐이라, 그 정리와 락 해제 사이에 올린 기여는
-             * 아무도 안 지운다. 그래서 여기서 직접 시한을 건다.
-             */
-            redisTemplate.expire(key, queuedTtl);
-            markDone(couponId);
-            recordLag(couponId, mine.size(), enteredAt, pausedAt);
+            upload(couponId, enteredAt, pausedAt);
         } finally {
             flusher.resume();
         }
+    }
+
+    /**
+     * 이미 멈춘 상태에서 올린다. 멈춤과 재개는 부르는 쪽이 맡는다.
+     *
+     * <p><b>주도하는 인스턴스가 쓴다.</b> 그쪽은 올린 뒤에도 읽고 쓸 것이 남아 있어, 그 구간까지
+     * 멈춘 채로 둬야 한다. 재건이 락으로 발급을 막고 있어 멈춰 둬도 큐가 자라지 않는다.
+     */
+    void uploadWhilePaused(long couponId) {
+        long now = System.nanoTime();
+        upload(couponId, now, now);
+    }
+
+    private void upload(long couponId, long enteredAt, long pausedAt) {
+        Map<String, String> mine = mineFor(couponId);
+        if (mine.isEmpty()) {
+            /*
+             * 올릴 것이 없어도 늦은 정도는 잰다.
+             * 안 재면 "올리기가 안 늦었다" 와 "올릴 것이 없었다" 가 지표에서 같아진다.
+             * 2026-09-21 회차가 전부 후자였는데 표본이 0건이라 그 사실을 지표로는 못 봤다.
+             */
+            markDone(couponId);
+            recordLag(couponId, 0, enteredAt, pausedAt);
+            return;
+        }
+        String key = CouponSeqKeys.rebuildQueued(couponId);
+        redisTemplate.opsForHash().putAll(key, mine);
+        /*
+         * 이 키는 다른 넷과 달리 counter 의 만료를 물려받을 자리가 없다.
+         * 지우는 것이 주도하는 인스턴스의 정리 한 번뿐이라, 그 정리와 락 해제 사이에 올린 것은
+         * 아무도 안 지운다. 그래서 여기서 직접 시한을 건다.
+         */
+        redisTemplate.expire(key, queuedTtl);
+        markDone(couponId);
+        recordLag(couponId, mine.size(), enteredAt, pausedAt);
     }
 
     /**
