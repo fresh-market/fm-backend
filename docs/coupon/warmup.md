@@ -214,14 +214,14 @@ Connection initialization timed out after 100 millisecond(s)
 ```
 COUPON_WARMUP_DONE              sent / ok / writeRows / elapsedMs
 COUPON_WARMUP_TIMEOUT           max-duration 에서 끊었다. sent 만 남는다
-COUPON_WARMUP_FAILED            워밍업이 통째로 실패했다. 앱은 정상 기동한다
+COUPON_WARMUP_FAILED            워밍업이 통째로 실패했다. 스프링 서버는 정상 기동한다
 COUPON_WARMUP_REDIS_CONNECTED   첫 커넥션에 재시도가 필요했다. attempts 가 몇 회였는지 남는다
 COUPON_WRITE_WARMUP_DONE        쓰기 경로를 데웠다. rows / chunk / elapsedMs
 COUPON_WRITE_WARMUP_FAILED      한 라운드가 실패해 거기서 멈췄다. 앞 라운드는 이미 지났다
 COUPON_WRITE_WARMUP_SKIPPED     기본 등급이나 워밍업 쿠폰이 없다. 마이그레이션을 확인한다
 ```
 
-**`FAILED` 가 나도 앱은 뜬다.** 다만 그 인스턴스는 차가운 채로 트래픽을 받으므로, 팀이 이벤트를 열기
+**`FAILED` 가 나도 스프링 서버는 뜬다.** 다만 그 인스턴스는 차가운 채로 트래픽을 받으므로, 팀이 이벤트를 열기
 전이라면 팀이 그 인스턴스를 교체하는 편이 낫다. **팀은 회차마다 세 인스턴스 모두를 확인해야 한다.**
 2026-08-31 에 셋 다 조용히 실패했는데 healthy 는 통과했다.
 
