@@ -24,11 +24,15 @@ import reactor.core.Disposable;
  * Redis 연결이 끊겼다 다시 붙으면 열려 있는 이벤트의 키를 다시 세우게 한다.
  *
  * <p><b>승격은 키를 지우지 않는다.</b> 복제가 밀린 채 승격되면 카운터는 살아 있고 값만 뒤로
- * 가므로, 스크립트가 {@code -2} 를 안 내고 기존 방아쇠가 영영 안 걸린다. 그래서 재연결 자체를
- * 두 번째 신호로 둔다 ({@code docs/coupon/rebuild-redesign.md} 2장).
+ * 가므로, 스크립트가 {@code -2} 를 안 내고 카운터가 사라진 것만 보는 재건은 승격을 못 본다.
+ * 그래서 재연결 자체를 두 번째 신호로 둔다 ({@code docs/coupon/rebuild-redesign.md} 2장).
  *
  * <p><b>처음 붙는 것은 신호가 아니다.</b> 기동과 배포에도 활성화 이벤트가 오므로, 끊긴 것을 본
  * 뒤의 활성화만 센다. 안 가리면 배포마다 열려 있는 이벤트의 발급을 멈춘다.
+ *
+ * <p><b>기동 때 첫 연결이 실패하면 그 표시만으로는 모자란다.</b> 끊김이 먼저 오고 다음 시도에서
+ * 활성화가 오므로 재연결과 모양이 같다. 그래서 한 번이라도 붙은 뒤인지를 함께 본다
+ * (2026-10-01 F-1 회차에서 캐시가 멀쩡한데 재건이 한 번 걸렸다).
  *
  * <p><b>이벤트는 연결마다 온다.</b> 이 Valkey 는 인증 캐시도 함께 쓰므로 한 번의 단절에 여러 개가
  * 몰린다. 그래서 최소 간격을 두고, 쿠폰별 중복은 {@link CouponSeqRebuildTrigger} 가 막는다.
@@ -46,6 +50,16 @@ public class CouponSeqReconnectWatcher {
 
     // 끊긴 것을 본 뒤의 활성화만 신호로 센다
     private final AtomicBoolean sawDisconnect = new AtomicBoolean(false);
+
+    /*
+     * 한 번이라도 붙은 뒤여야 재연결이다.
+     *
+     * 기동 때 첫 연결이 실패하면 Lettuce 가 끊김을 먼저 내고 다음 시도에서 활성화를 낸다. 그러면
+     * 위의 표시만으로는 재연결과 구별이 안 된다. 2026-10-01 F-1 회차에서 죽였다 되살린 인스턴스가
+     * 그렇게 재건을 한 번 띄웠고, 캐시는 멀쩡했다.
+     */
+    private final AtomicBoolean everConnected = new AtomicBoolean(false);
+
     private final AtomicLong lastFiredAtNanos = new AtomicLong(Long.MIN_VALUE);
 
     private Disposable subscription;
@@ -88,7 +102,12 @@ public class CouponSeqReconnectWatcher {
             sawDisconnect.set(true);
             return;
         }
-        if (event instanceof ConnectionActivatedEvent && sawDisconnect.compareAndSet(true, false)) {
+        if (!(event instanceof ConnectionActivatedEvent)) {
+            return;
+        }
+        boolean reconnected = sawDisconnect.compareAndSet(true, false);
+        // 첫 활성화는 기동이다. 그 앞의 끊김은 붙는 데 실패한 것이라 재연결이 아니다
+        if (!everConnected.compareAndSet(false, true) && reconnected) {
             reconcileOpenEvents();
         }
     }
@@ -97,7 +116,7 @@ public class CouponSeqReconnectWatcher {
      * 구독이 끊기면 다음 승격을 못 본다. 살려 두고 남긴다.
      *
      * 다시 구독하지는 않는다. 이 버스는 연결이 사는 동안 함께 사는 것이고, 오류가 나는 상황이면
-     * 그 연결 자체가 이미 문제다. 기존 방아쇠가 남아 있어 카운터가 사라지는 쪽은 계속 걸린다.
+     * 그 연결 자체가 이미 문제다. 카운터가 사라지는 쪽은 발급 스크립트가 여전히 잡는다.
      */
     private void onError(Throwable e) {
         log.error("event=COUPON_SEQ_RECONNECT_WATCH_FAILED", e);

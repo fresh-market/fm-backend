@@ -9,8 +9,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *
  * @param enabled       꺼 두면 러너가 아무것도 하지 않는다. 로컬과 시험에서 쓴다
  * @param couponId      워밍업 전용 쿠폰. 러너가 카운터를 소진 상태로 세워 두어 DB 에 아무것도 안 쓴다
- * @param requests      보낼 요청 수. 3,000 에서 p99 가 4.69초에서 1초 아래로 떨어졌다
- * @param concurrency   동시에 보낼 수. 순차로 보내면 실제 이벤트의 동시성을 못 흉내 낸다
+ * @param requests      보낼 요청 수. 실제 회차와 같은 20,000 이다. 3,000 으로는 덜 데운다
+ * @param concurrency   동시에 보낼 수. 램프가 초당 333개를 넣으므로 그쪽에 맞춘다
  * @param maxDuration   이 시간을 넘기면 못 채워도 끝낸다. 없으면 readiness 가 영영 안 올라간다
  * @param writeRows     쓰기 경로를 데울 때 넣었다 되돌릴 행 수. 0 이면 쓰기 워밍업을 안 한다
  * @param writeTimeout  쓰기 워밍업 한 라운드의 트랜잭션 상한. DB 가 응답을 안 할 때 기동을 안 붙잡는다
@@ -19,10 +19,10 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 public record CouponWarmupProperties(
         @DefaultValue("false") boolean enabled,
         @DefaultValue("1000000") long couponId,
-        @DefaultValue("3000") int requests,
-        @DefaultValue("20") int concurrency,
-        @DefaultValue("60s") Duration maxDuration,
-        @DefaultValue("5000") int writeRows,
+        @DefaultValue("20000") int requests,
+        @DefaultValue("300") int concurrency,
+        @DefaultValue("180s") Duration maxDuration,
+        @DefaultValue("10000") int writeRows,
         @DefaultValue("20s") Duration writeTimeout) {
 
     public CouponWarmupProperties {
