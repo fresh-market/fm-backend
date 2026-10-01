@@ -838,6 +838,8 @@ api-contract migration  app-config test         archunit        build
 | [coupon/rebuild-early-exit-2026-09-22.md](./docs/coupon/rebuild-early-exit-2026-09-22.md) | 조기 종료를 붙이고 돌려 본 회차. DB 장애가 길면 명부가 빈다 |
 | [coupon/rebuild-queue-contribution-2026-09-22.md](./docs/coupon/rebuild-queue-contribution-2026-09-22.md) | 큐가 실제로 재건에 쓰인 회차. 조기 종료가 2ms 에 끝났다 |
 | [coupon/rebuild-duration-2026-09-23.md](./docs/coupon/rebuild-duration-2026-09-23.md) | 재건 정지를 처음 잰 회차. 3.4초가 아니라 204ms 다 |
+| [coupon/rebuild-reconnect-and-fault-2026-10-01.md](./docs/coupon/rebuild-reconnect-and-fault-2026-10-01.md) | 재연결을 재건의 신호로 붙인 회차. 무장애 p99 가 열다섯 배로 흔들린다 |
+| [coupon/fault-injection-2026-10-02.md](./docs/coupon/fault-injection-2026-10-02.md) | 장애 3종을 워밍업 올린 뒤 다시 잰 회차. 승격 재건이 걸리고 pause-timeout 으로 건너뛴다 |
 | [coupon/virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) | 가상 스레드를 어떻게 쟀나 |
 | [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
 | [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |
