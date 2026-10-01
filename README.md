@@ -659,10 +659,10 @@ connecting, sending 거의 0
 coupon.warmup:
   enabled: true
   coupon-id: 1000000    # 전용 워밍업 쿠폰. 카운터를 소진 상태로 세워 member_coupon 에 안 쓴다
-  requests: 3000        # 여기서 p99 가 1초 아래로 떨어졌다 (0건이면 4.69초)
-  concurrency: 20       # 순차로 보내면 실제 이벤트의 동시성을 못 흉내 낸다
-  max-duration: 60s     # 못 채워도 끝낸다. 없으면 readiness 가 안 올라가 이벤트를 못 연다
-  write-rows: 5000      # 배치 INSERT 를 넣었다 되돌리며 데운다. 0 이면 안 한다
+  requests: 20000       # 실제 회차와 같은 수. 3,000 으로는 첫 회차가 0.460초다
+  concurrency: 300      # 램프가 초당 333개를 넣으므로 그쪽에 맞춘다
+  max-duration: 180s    # 못 채워도 끝낸다. 없으면 readiness 가 안 올라가 이벤트를 못 연다
+  write-rows: 10000     # 배치 INSERT 를 넣었다 되돌리며 데운다. 0 이면 안 한다
   write-timeout: 20s    # 한 라운드의 트랜잭션 상한
 ```
 
@@ -672,7 +672,9 @@ coupon.warmup:
 
 **큐 뒤는 둘을 합쳐도 못 데운다.** 큐 submit 과 플러시 스레드와 `markCommitted` 와 future 완료는 커밋이 성공해야만 도는 코드다. 롤백하면 그 앞에서 끝나고, 돌게 하려면 커밋해야 하고, 커밋하면 행이 남는다.
 
-설정값과 물렸던 것들은 [`docs/coupon/warmup.md`](./docs/coupon/warmup.md) 에 있다.
+**이 값은 2026-10-02 에 올린 것이다.** 3,000 에 동시성 20 으로 데운 직후의 첫 회차가 p99 0.460초였고, 20,000 에 동시성 300 으로 올리니 0.066초가 됐다. **컴파일 양은 비슷한데 7배 차이라, 문제는 얼마나 컴파일하나가 아니라 요청이 올 때 발급 경로가 이미 컴파일돼 있나다.** 대가로 기동이 25~30초에서 61~66초로 늘었다.
+
+설정값과 그것을 정한 근거와 물렸던 것들은 [`docs/coupon/warmup.md`](./docs/coupon/warmup.md) 에 있다.
 
 ### 6.4 시험 중에 고친 것
 
