@@ -1,145 +1,70 @@
 package com.freshmarket.stock.internal.batch;
 
-import com.freshmarket.stock.internal.TurnoverRateCalculator;
-import com.freshmarket.stock.internal.dto.CampaignTargetLotCandidate;
-import com.freshmarket.stock.internal.dto.LotDisposedQty;
-import com.freshmarket.stock.internal.entity.CampaignTargetLot;
-import com.freshmarket.stock.internal.repository.CampaignTargetLotRepository;
-import com.freshmarket.stock.internal.repository.StockLotQueryRepository;
-import com.freshmarket.stock.internal.repository.StockMovementRepository;
-import java.math.BigDecimal;
-import java.time.Clock;
-import java.time.LocalDate;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+
+import com.freshmarket.stock.internal.ExpiringSoonPolicy;
+import com.freshmarket.stock.internal.exception.StockErrorCode;
+import com.freshmarket.stock.internal.exception.StockException;
 
 /*
- * 선착순 쿠폰 캠페인 대상 로트를 매일 자정에 확정한다.
+ * 캠페인 대상 로트 확정을 매일 자정에 건다.
  *
- * 조건: 소비기한 임박(D-13 ~ D-10) + 잔여재고(availableQty) 30 이상인 후보 중
- * 소진율 오름차순 하위 10% 전체. 건수 상한은 두지 않으므로 후보가 늘면 대상도 함께 는다.
+ * 확정 로직은 CampaignTargetLotRebuildService 가 갖고 이 클래스는 시각만 정한다.
+ * 둘을 나눈 이유가 있다 — 같은 일을 관리자 재실행 API 도 불러야 하는데, 그쪽은 API
+ * 인스턴스에서 들어오므로 batch 프로필에 묶인 빈을 주입받을 수 없다.
+ * (CouponConsistencyScheduler / OptionAvailabilitySyncScheduler 와 같은 구조다.)
  *
- * 소비기한 구간의 하한이 판매 마감 기한(D-10)인 것이 핵심이다. 그보다 소비기한이 가까운
- * 로트는 이미 팔 수 없어서 쿠폰을 붙여도 쓸 수가 없다. 회원용 소비기한 임박 조회
- * (ExpiringSoonService)가 보는 구간과 같아야 "대상과 노출이 어긋나지 않는다".
+ * batch 프로필에서만 뜬다 (INF-1-10, ArchitectureTest 로 강제됨). 다만 이 배치에서는
+ * 프로필이 유일한 방어선이 아니다 — 확정 자체가 campaign_rebuild_lock 을 잡고 시작하므로
+ * 프로필이 빠져 여러 대가 깨어나도 한 대만 확정한다. 다른 스케줄러는 아직 프로필뿐이다.
  *
- * batch 프로필에서만 뜬다 (INF-1-10, ArchitectureTest 로 강제됨). 분산 락이 없어
- * 프로필이 유일한 방어선이라, 이게 빠지면 앱 서버 여러 대가 같은 로트를 동시에 집는다.
- *
- * 배치 분류: 재계산형(같은 입력이면 같은 결과, 재실행 시 당일분을 지우고 다시
- * 계산한다). 동시 실행 방어는 KakaoUnlinkRetryScheduler 와 같은 판단이다 —
- * 지금은 배치 전용 인스턴스가 단일이라 문제없고, 인스턴스가 여러 대로 늘어나면
- * 그때 ShedLock 등 분산 실행 제어를 도입한다.
+ * zone 을 명시한다. 이 기능의 "자정" 은 호스트가 아니라 한국 자정이고, 기준일을 세는
+ * ExpiringSoonPolicy.businessToday() 도 같은 시간대를 본다. 둘이 갈리면 배치가 확정한
+ * 기준일과 조회가 찾는 기준일이 하루 어긋난다.
  *
  * 실행/소요시간 로그는 SchedulerLoggingAspect 가 @Scheduled 메서드마다 자동으로 남긴다.
  */
+@Slf4j
 @Component
 @Profile("batch")
 @RequiredArgsConstructor
 public class CampaignTargetLotBatch {
 
+    private final CampaignTargetLotRebuildService campaignTargetLotRebuildService;
+
     /*
-     * 판매 마감 기한 = 소비기한 - 10일, 그 앞 3일이 임박 구간이다(팀 통일 규칙).
-     * Product.saleAvailableDaysFromExpiry 가 전 상품 10 으로 통일된 것에 기대는 값이라,
-     * 카테고리별로 값이 갈리면 여기도 함께 바뀌어야 한다.
+     * 잠금을 못 잡은 것은 실패가 아니다.
      *
-     * long 으로 두는 이유는 LocalDate.plusDays(long) 에 그대로 넘기기 때문이다.
-     * int 로 두면 둘을 더하는 시점에 int 덧셈이 일어난 뒤 long 으로 넓혀져
-     * 오버플로 가능성을 지적받는다 (S2184).
+     * SchedulerLoggingAspect 는 예외가 올라오면 SCHEDULER_FAILED 를 남기고
+     * batch.job.last.success.timestamp 를 갱신하지 않는다. 그 값이 낡는 것으로 알람이 울리므로,
+     * 확정을 다른 쪽이 이미 하고 있어 양보한 경우까지 올려 보내면 멀쩡한 날에 알람이 울린다.
+     * 이 스케줄의 목적은 "오늘 대상이 확정되어 있게 하는 것" 이고, 남이 하고 있으면 그 목적은
+     * 달성된다. 그래서 여기서 삼키고 정상 종료한다.
+     *
+     * 삼키는 것은 이 한 가지 코드뿐이다. 나머지 실패는 그대로 올려 보내야 알람이 울린다.
+     *
+     * 이 판단은 스케줄 쪽 사정이라 여기에 둔다. 확정 로직에 넣으면 관리자 재실행 API 도 함께
+     * 조용해져서, 버튼을 눌러도 아무 일이 없는 것처럼 보인다 — 그쪽은 409 를 받아야 한다.
+     *
+     * 남는 구멍이 하나 있다. 이긴 쪽이 그 뒤에 실패하면 아무도 확정하지 않았는데 여기서는
+     * 성공으로 셈한다. 이긴 쪽도 자기 자리에서 실패를 남기므로(스케줄이면 SCHEDULER_FAILED,
+     * 관리자 재실행이면 500) 신호가 아주 사라지지는 않는다. 겹침이 잦아지면 확정본 존재
+     * 여부를 직접 보는 감시로 바꾸는 것이 맞다.
      */
-    private static final long SALE_CLOSE_DAYS = 10;
-    private static final long EXPIRING_SOON_DAYS = 3;
-    private static final int MIN_AVAILABLE_QTY = 30;
-    // 하위 10% = 1/10. double 0.1 곱셈은 부동소수점 오차로 ceil() 결과가 하나 더 잘릴 수 있어
-    // 정수 나눗셈으로 대신한다 (EJ-8-04)
-    private static final int LOW_TURNOVER_PERCENTILE_DIVISOR = 10;
-
-    private final StockLotQueryRepository stockLotQueryRepository;
-    private final CampaignTargetLotRepository campaignTargetLotRepository;
-    private final StockMovementRepository stockMovementRepository;
-    private final Clock clock;
-
-    @Scheduled(cron = "0 0 0 * * *")
-    @Transactional
+    @Scheduled(cron = "0 0 0 * * *", zone = ExpiringSoonPolicy.BUSINESS_ZONE_ID)
     public void run() {
-        LocalDate today = LocalDate.now(clock);
-
-        campaignTargetLotRepository.deleteByTargetDate(today); // 재실행 시 동일 일자 집계는 덮어쓴다
-
-        /*
-         * 판매 마감 기한(today+10) 부터 임박 시작선(today+13) 까지.
-         * 하한이 있어야 팔 수 있는 로트만 남는다.
-         *
-         * 확보 재고와 잔여재고 하한도 함께 넘겨 SQL 에서 거른다 — 행 하나만 보고 판정되는
-         * 조건이라 자바로 가져와 버릴 이유가 없다.
-         */
-        List<CampaignTargetLotCandidate> candidates = stockLotQueryRepository.findCandidatesExpiringBetween(
-                today.plusDays(SALE_CLOSE_DAYS),
-                today.plusDays(SALE_CLOSE_DAYS + EXPIRING_SOON_DAYS),
-                MIN_AVAILABLE_QTY);
-        if (candidates.isEmpty()) {
-            return;
+        try {
+            campaignTargetLotRebuildService.rebuild();
+        } catch (StockException e) {
+            if (e.getErrorCode() != StockErrorCode.CAMPAIGN_REBUILD_IN_PROGRESS) {
+                throw e;
+            }
+            log.warn("event=CAMPAIGN_TARGET_LOT_REBUILD_SKIPPED reason=ALREADY_RUNNING"
+                    + " — 다른 쪽이 확정 중이라 양보한다");
         }
-
-        Map<Long, Long> disposedByLotId = findDisposedQtyByLotId(candidates);
-
-        List<TurnoverRatedCandidate> rated = candidates.stream()
-                .map(c -> new TurnoverRatedCandidate(c, turnoverRateOf(c, disposedByLotId)))
-                .sorted(Comparator.comparing(TurnoverRatedCandidate::turnoverRate))
-                .toList();
-
-        // ceil(n / 10) 를 정수 나눗셈으로 계산한다: (n + divisor - 1) / divisor
-        int lowTurnoverCutoff = (rated.size() + LOW_TURNOVER_PERCENTILE_DIVISOR - 1) / LOW_TURNOVER_PERCENTILE_DIVISOR;
-        List<TurnoverRatedCandidate> targets = rated.subList(
-                0, Math.min(lowTurnoverCutoff, rated.size()));
-
-        for (int rank = 0; rank < targets.size(); rank++) {
-            TurnoverRatedCandidate target = targets.get(rank);
-            campaignTargetLotRepository.save(CampaignTargetLot.register(
-                    today,
-                    target.candidate().stockLotId(),
-                    target.turnoverRate(),
-                    target.candidate().availableQty(),
-                    rank + 1));
-        }
-    }
-
-    // 후보 로트들의 폐기 누계를 한 번에 조회한다. 폐기 이력이 없는 로트는 결과에 없으므로 0 으로 본다
-    private Map<Long, Long> findDisposedQtyByLotId(List<CampaignTargetLotCandidate> candidates) {
-        List<Long> stockLotIds = candidates.stream()
-                .map(CampaignTargetLotCandidate::stockLotId)
-                .toList();
-        return stockMovementRepository.findDisposedQtyByStockLotIds(stockLotIds).stream()
-                .collect(Collectors.toMap(LotDisposedQty::stockLotId, LotDisposedQty::disposedQty));
-    }
-
-    /*
-     * 폐기분을 걷어낸 소진율.
-     *
-     * 폐기는 availableQty 를 줄이지만 팔린 것이 아니다. 그대로 두면 일부만 폐기된 로트가
-     * "그만큼 팔린" 것으로 보여 소진율이 부풀고, 정작 안 팔리는 재고가 대상에서 빠진다.
-     *
-     * 분모를 "팔 수 있었던 수량"(입고 - 폐기)으로 바꾸면
-     *   (입고 - 잔여 - 폐기) / (입고 - 폐기)
-     * 가 그대로 나와, 계산기는 손대지 않고 폐기만 걷어낼 수 있다.
-     *
-     * 분모는 항상 잔여재고 이상이고(잔여 = 입고 - 예약 - 폐기), 잔여재고 30 이상을 이미
-     * 걸렀으므로 0 으로 나눌 일은 없다.
-     */
-    private BigDecimal turnoverRateOf(CampaignTargetLotCandidate candidate, Map<Long, Long> disposedByLotId) {
-        long disposedQty = disposedByLotId.getOrDefault(candidate.stockLotId(), 0L);
-        int sellableQty = candidate.initialQty() - (int) disposedQty;
-        return TurnoverRateCalculator.calculate(sellableQty, candidate.availableQty());
-    }
-
-    // 소진율까지 계산해 붙인 후보. 정렬/컷오프 계산에만 쓰는 배치 내부 전용 값이다
-    private record TurnoverRatedCandidate(CampaignTargetLotCandidate candidate, BigDecimal turnoverRate) {
     }
 }

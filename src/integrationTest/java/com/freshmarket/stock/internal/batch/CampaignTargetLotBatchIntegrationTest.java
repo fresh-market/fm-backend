@@ -8,6 +8,7 @@ import com.freshmarket.product.internal.entity.StorageType;
 import com.freshmarket.product.internal.repository.CategoryRepository;
 import com.freshmarket.product.internal.repository.ProductOptionRepository;
 import com.freshmarket.product.internal.repository.ProductRepository;
+import com.freshmarket.stock.internal.ExpiringSoonPolicy;
 import com.freshmarket.stock.internal.entity.CampaignTargetLot;
 import com.freshmarket.stock.internal.entity.StockLot;
 import com.freshmarket.stock.internal.entity.DisposalReason;
@@ -16,6 +17,7 @@ import com.freshmarket.stock.internal.repository.CampaignTargetLotRepository;
 import com.freshmarket.stock.internal.repository.StockLotRepository;
 import com.freshmarket.stock.internal.repository.StockMovementRepository;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -71,9 +73,23 @@ class CampaignTargetLotBatchIntegrationTest {
     @Autowired
     private StockMovementRepository stockMovementRepository;
 
+    @Autowired
+    private Clock clock;
+
     private static final Long SUPPLIER_ID = 999999L;
     private static final Long ADMIN_ID = 999999L;
-    private static final LocalDate TODAY = LocalDate.now();
+
+    /*
+     * 배치와 조회가 보는 기준일이다. 호스트 시간대가 무엇이든 한국 날짜를 준다.
+     *
+     * LocalDate.now() 를 쓰면 안 된다. 시험 JVM 은 build.gradle 이 user.timezone 을 UTC 로
+     * 박아 두어 늘 UTC 이고, 배치는 ExpiringSoonPolicy 가 정한 Asia/Seoul 로 기준일을 센다.
+     * 둘이 갈리는 UTC 15시부터 24시 사이(한국 자정부터 아침 아홉 시)에는 배치가 확정한 날짜와
+     * 시험이 찾는 날짜가 하루 어긋나 대상이 통째로 비어 보인다.
+     */
+    private LocalDate today() {
+        return ExpiringSoonPolicy.businessToday(clock);
+    }
 
     private Long fruitCategoryId() {
         return categoryRepository.findAll().stream()
@@ -93,7 +109,7 @@ class CampaignTargetLotBatchIntegrationTest {
         ProductOption option = productOptionRepository.save(
                 ProductOption.register(product.getId(), "1kg", 10000));
         StockLot lot = stockLotRepository.save(StockLot.register(
-                "lot-req-" + name, option.getId(), TODAY.minusDays(1), expiryDate, initialQty));
+                "lot-req-" + name, option.getId(), today().minusDays(1), expiryDate, initialQty));
         if (soldQty > 0) {
             stockLotRepository.decreaseAvailableQty(lot.getId(), soldQty);
         }
@@ -115,28 +131,28 @@ class CampaignTargetLotBatchIntegrationTest {
         // given — 15건, 하위 10% = ceil(15/10) = 2건이 대상이다.
         // 소진량을 1~15 로 달리해 소진율을 전부 다르게 만든다. 소진량이 적을수록(=안 팔릴수록)
         // 소진율이 낮아 대상 우선순위가 높다. 재고는 1000 이라 어느 쪽도 30 미만으로 안 떨어진다.
-        Long lowest = saveLot("l1", TODAY.plusDays(12), 1000, 1);   // 소진율 0.0010, 1순위
-        Long second = saveLot("l2", TODAY.plusDays(12), 1000, 2);   // 소진율 0.0020, 2순위
+        Long lowest = saveLot("l1", today().plusDays(12), 1000, 1);   // 소진율 0.0010, 1순위
+        Long second = saveLot("l2", today().plusDays(12), 1000, 2);   // 소진율 0.0020, 2순위
         // 나머지 13건. 소진율만 위 두 건보다 높으면 되므로 정확한 값은 결과에 영향 없다 (UT-3-04)
-        saveLot("l3", TODAY.plusDays(12), 1000, 3);
-        saveLot("l4", TODAY.plusDays(12), 1000, 4);
-        saveLot("l5", TODAY.plusDays(12), 1000, 5);
-        saveLot("l6", TODAY.plusDays(12), 1000, 6);
-        saveLot("l7", TODAY.plusDays(12), 1000, 7);
-        saveLot("l8", TODAY.plusDays(12), 1000, 8);
-        saveLot("l9", TODAY.plusDays(12), 1000, 9);
-        saveLot("l10", TODAY.plusDays(12), 1000, 10);
-        saveLot("l11", TODAY.plusDays(12), 1000, 11);
-        saveLot("l12", TODAY.plusDays(12), 1000, 12);
-        saveLot("l13", TODAY.plusDays(12), 1000, 13);
-        saveLot("l14", TODAY.plusDays(12), 1000, 14);
-        saveLot("l15", TODAY.plusDays(12), 1000, 15);
+        saveLot("l3", today().plusDays(12), 1000, 3);
+        saveLot("l4", today().plusDays(12), 1000, 4);
+        saveLot("l5", today().plusDays(12), 1000, 5);
+        saveLot("l6", today().plusDays(12), 1000, 6);
+        saveLot("l7", today().plusDays(12), 1000, 7);
+        saveLot("l8", today().plusDays(12), 1000, 8);
+        saveLot("l9", today().plusDays(12), 1000, 9);
+        saveLot("l10", today().plusDays(12), 1000, 10);
+        saveLot("l11", today().plusDays(12), 1000, 11);
+        saveLot("l12", today().plusDays(12), 1000, 12);
+        saveLot("l13", today().plusDays(12), 1000, 13);
+        saveLot("l14", today().plusDays(12), 1000, 14);
+        saveLot("l15", today().plusDays(12), 1000, 15);
 
         // when
         campaignTargetLotBatch.run();
 
         // then
-        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(TODAY);
+        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(today());
         assertThat(saved).hasSize(2);
         assertThat(saved.get(0).getStockLotId()).isEqualTo(lowest);
         assertThat(saved.get(0).getTargetRank()).isEqualTo(1);
@@ -151,14 +167,14 @@ class CampaignTargetLotBatchIntegrationTest {
         // given — D+10 이 판매 마감 기한선이다. 그보다 소비기한이 가까우면 이미 팔 수 없어
         // 쿠폰을 붙여도 쓸 수가 없다. 경계(D+10)는 포함, 하루 앞(D+9)은 제외다.
         // 소진량 50 이라 잔여재고 50 으로, 이 테스트가 재고 필터가 아니라 날짜 필터만 보게 한다.
-        Long onBoundary = saveLot("경계안", TODAY.plusDays(10), 100, 50);
-        saveLot("마감지남", TODAY.plusDays(9), 100, 50);
+        Long onBoundary = saveLot("경계안", today().plusDays(10), 100, 50);
+        saveLot("마감지남", today().plusDays(9), 100, 50);
 
         // when
         campaignTargetLotBatch.run();
 
         // then — 후보가 경계 안 로트 하나뿐이라 하위 10%(ceil(1/10)=1)에 그 하나만 든다
-        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(TODAY);
+        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(today());
         assertThat(saved).hasSize(1);
         assertThat(saved.get(0).getStockLotId()).isEqualTo(onBoundary);
     }
@@ -166,14 +182,14 @@ class CampaignTargetLotBatchIntegrationTest {
     @Test
     void 아직_임박하지_않은_로트는_대상에서_빠진다() {
         // given — D+13 이 임박 시작선이다. 경계(D+13)는 포함, 하루 뒤(D+14)는 아직 임박이 아니다
-        Long onBoundary = saveLot("경계안", TODAY.plusDays(13), 100, 50);
-        saveLot("아직", TODAY.plusDays(14), 100, 50);
+        Long onBoundary = saveLot("경계안", today().plusDays(13), 100, 50);
+        saveLot("아직", today().plusDays(14), 100, 50);
 
         // when
         campaignTargetLotBatch.run();
 
         // then
-        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(TODAY);
+        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(today());
         assertThat(saved).hasSize(1);
         assertThat(saved.get(0).getStockLotId()).isEqualTo(onBoundary);
     }
@@ -181,13 +197,13 @@ class CampaignTargetLotBatchIntegrationTest {
     @Test
     void 잔여재고가_30_미만이면_대상에서_빠진다() {
         // given — 소진율은 0.71 로 낮지 않지만(하위 10% 판단과 무관하게), 잔여재고 29 로 하한 미달
-        saveLot("재고부족", TODAY.plusDays(12), 100, 71);
+        saveLot("재고부족", today().plusDays(12), 100, 71);
 
         // when
         campaignTargetLotBatch.run();
 
         // then
-        assertThat(campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(TODAY)).isEmpty();
+        assertThat(campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(today())).isEmpty();
     }
 
     /*
@@ -198,14 +214,14 @@ class CampaignTargetLotBatchIntegrationTest {
     @Test
     void 회수품_폐기는_소진율_계산에서_빼지_않는다() {
         // given — 입고 100, RETURNED 폐기 20, 판매 0. 잔여재고는 100 그대로다
-        Long lotId = saveLot("회수품", TODAY.plusDays(12), 100, 0);
+        Long lotId = saveLot("회수품", today().plusDays(12), 100, 0);
         saveDisposal(lotId, 20, DisposalReason.RETURNED, 100, 100);
 
         // when — 예외 없이 끝나야 한다
         campaignTargetLotBatch.run();
 
         // then — 한 개도 안 팔렸으므로 소진율 0
-        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(TODAY);
+        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(today());
         assertThat(saved).hasSize(1);
         assertThat(saved.get(0).getStockLotId()).isEqualTo(lotId);
         assertThat(saved.get(0).getTurnoverRate()).isEqualByComparingTo(new BigDecimal("0.0000"));
@@ -216,14 +232,14 @@ class CampaignTargetLotBatchIntegrationTest {
         // given — 입고 100, DAMAGED 폐기 30(잔여 70 으로 줄어든다), 판매 0
         //   교정 전: (100-70)/100 = 0.30  ← 30% 팔린 것처럼 보인다
         //   교정 후: (70-70)/70   = 0.00  ← 실제로 0% 다
-        Long lotId = saveLot("손상품", TODAY.plusDays(12), 100, 30);
+        Long lotId = saveLot("손상품", today().plusDays(12), 100, 30);
         saveDisposal(lotId, 30, DisposalReason.DAMAGED, 100, 70);
 
         // when
         campaignTargetLotBatch.run();
 
         // then
-        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(TODAY);
+        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(today());
         assertThat(saved).hasSize(1);
         assertThat(saved.get(0).getTurnoverRate()).isEqualByComparingTo(new BigDecimal("0.0000"));
     }
@@ -231,7 +247,7 @@ class CampaignTargetLotBatchIntegrationTest {
     @Test
     void 같은_기준일에_재실행하면_이전_대상을_지우고_다시_확정한다() {
         // given
-        Long lotId = saveLot("재실행", TODAY.plusDays(12), 100, 50);
+        Long lotId = saveLot("재실행", today().plusDays(12), 100, 50);
 
         // when — 두 번 연속 실행. deleteByTargetDate 가 @Modifying 벌크 삭제라 호출 즉시 DB 에
         // 반영되므로, 같은 트랜잭션 안에서 재실행해도 뒤이은 save() 의 INSERT 와 순서가 꼬이지 않는다.
@@ -239,7 +255,7 @@ class CampaignTargetLotBatchIntegrationTest {
         campaignTargetLotBatch.run();
 
         // then — 중복 누적되지 않고 오늘자 대상이 한 건만 남는다 (deleteByTargetDate)
-        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(TODAY);
+        List<CampaignTargetLot> saved = campaignTargetLotRepository.findByTargetDateOrderByTargetRankAsc(today());
         assertThat(saved).hasSize(1);
         assertThat(saved.get(0).getStockLotId()).isEqualTo(lotId);
     }
