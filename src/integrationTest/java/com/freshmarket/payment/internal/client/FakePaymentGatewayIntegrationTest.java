@@ -1,6 +1,6 @@
 package com.freshmarket.payment.internal.client;
 
-import com.freshmarket.payment.PaymentRequest;
+import com.freshmarket.payment.PaymentMethod;
 import com.freshmarket.payment.internal.client.exception.PaymentGatewayRejectedException;
 import com.freshmarket.payment.internal.client.exception.PaymentGatewayUnknownException;
 
@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
  * 목적이 다르다. Spring singleton으로 재사용되므로 시나리오 큐·호출 횟수를 다루는 공개 메서드는 모두
  * 동기화한다. 따라서 병렬 호출에서도 시나리오 소비 순서와 reset()의 원자성이 보장된다.
  *
- * willApprove/willReject/willTimeout/willLoseResponse로 시나리오를 미리 등록해두면, request()가
+ * willApprove/willReject/willTimeout/willLoseResponse로 시나리오를 미리 등록해두면, confirm()이
  * 호출될 때마다 등록한 순서대로 하나씩 소비하며 그대로 응답하거나 예외를 던진다. 등록된 시나리오가
  * 없으면 기본값인 승인으로 응답한다 — 재시도 흐름에서 "첫 호출은 timeout, 재확인 결과는 승인"처럼
  * 호출마다 다른 결과를 주는 시나리오도 표현할 수 있다.
@@ -27,11 +27,20 @@ import org.springframework.stereotype.Component;
  * callCount()로 실제 호출 횟수를 확인할 수 있다. idempotency key 적용 후 "같은 요청을 재시도해도
  * PG가 중복 호출되지 않는다"를 검증하는 데 쓴다.
  *
- * [2026-09-05 18:28 KST] inquire() 시나리오 큐를 별도로 추가했다. request()와 기본값을 다르게
- * 뒀다 — request()는 시나리오가 없으면 승인으로 기본 동작하지만, inquire()는 STILL_PROCESSING으로
+ * [2026-09-05 18:28 KST] inquire() 시나리오 큐를 별도로 추가했다. confirm()과 기본값을 다르게
+ * 뒀다 — confirm()은 시나리오가 없으면 승인으로 기본 동작하지만, inquire()는 STILL_PROCESSING으로
  * 기본 동작한다. inquire()를 호출하는 건 결국 복구 배치 테스트뿐인데, 그 테스트가 시나리오를
  * 깜빡 등록 안 했을 때 조용히 승인 처리되어 버그를 가리는 것보다, 아무 것도 확정되지 않아 테스트가
  * 눈에 띄게 실패하는 쪽이 안전하다.
+ *
+ * [2026-09-27 KST] request(PaymentRequest)가 confirm(paymentKey, pgOrderNo, amount)로,
+ * inquire(Long orderId)가 inquire(String pgOrderNo)로 계약이 바뀌었다(PaymentGateway 클래스 주석
+ * 참고) — 이 대역은 시나리오 큐만 소비하므로 새 파라미터는 그대로 무시한다.
+ *
+ * [2026-09-27 KST] cancel() 시나리오 큐를 추가했다. confirm()과 같은 이유로 기본값은 성공(흡수)이다
+ * — cancel을 호출하는 쪽(PaymentCancellationService)은 order가 이미 취소된 뒤의 자동 환불 하나뿐이라,
+ * 시나리오를 등록하지 않고 그냥 흘러가는 대다수 테스트가 매번 willCancelSucceed()를 등록할 필요는
+ * 없다. 실패를 검증하고 싶은 테스트만 willCancelFail()로 명시한다.
  *
  * [2026-09-06 KST] 원래 이름은 FakePaymentGateway였는데 PlacementIntegrationTest(
  * 이름이_IntegrationTest_로_끝난다)가 위반으로 잡았다 — src/integrationTest 아래 최상위 클래스는
@@ -47,25 +56,34 @@ public class FakePaymentGatewayIntegrationTest implements PaymentGateway {
     private final Clock clock;
     private final Deque<Scenario> scenarios = new ArrayDeque<>();
     private final Deque<InquiryScenario> inquiryScenarios = new ArrayDeque<>();
+    private final Deque<CancelScenario> cancelScenarios = new ArrayDeque<>();
     private final AtomicInteger callCount = new AtomicInteger();
     private final AtomicInteger inquireCallCount = new AtomicInteger();
+    private final AtomicInteger cancelCallCount = new AtomicInteger();
 
     public FakePaymentGatewayIntegrationTest(Clock clock) {
         this.clock = clock;
     }
 
     @Override
-    public synchronized PaymentGatewayApproval request(PaymentRequest request) {
+    public synchronized PaymentGatewayApproval confirm(String paymentKey, String pgOrderNo, int amount) {
         callCount.incrementAndGet();
         Scenario scenario = scenarios.poll();
         return (scenario == null ? Scenario.approve() : scenario).resolve(clock);
     }
 
     @Override
-    public synchronized PaymentGatewayInquiryResult inquire(Long orderId) {
+    public synchronized PaymentGatewayInquiryResult inquire(String pgOrderNo) {
         inquireCallCount.incrementAndGet();
         InquiryScenario scenario = inquiryScenarios.poll();
         return (scenario == null ? InquiryScenario.stillProcessing() : scenario).resolve(clock);
+    }
+
+    @Override
+    public synchronized void cancel(String paymentKey, String reason) {
+        cancelCallCount.incrementAndGet();
+        CancelScenario scenario = cancelScenarios.poll();
+        (scenario == null ? CancelScenario.succeed() : scenario).resolve();
     }
 
     public synchronized int callCount() {
@@ -74,6 +92,10 @@ public class FakePaymentGatewayIntegrationTest implements PaymentGateway {
 
     public synchronized int inquireCallCount() {
         return inquireCallCount.get();
+    }
+
+    public synchronized int cancelCallCount() {
+        return cancelCallCount.get();
     }
 
     public synchronized void willApprove() {
@@ -104,12 +126,22 @@ public class FakePaymentGatewayIntegrationTest implements PaymentGateway {
         inquiryScenarios.add(InquiryScenario.stillProcessing());
     }
 
+    public synchronized void willCancelSucceed() {
+        cancelScenarios.add(CancelScenario.succeed());
+    }
+
+    public synchronized void willCancelFail() {
+        cancelScenarios.add(CancelScenario.fail());
+    }
+
     // 테스트 간 상태가 새지 않도록 시나리오 큐와 호출 횟수를 초기화한다. 빈으로 재사용할 때 @BeforeEach에서 부른다.
     public synchronized void reset() {
         scenarios.clear();
         inquiryScenarios.clear();
+        cancelScenarios.clear();
         callCount.set(0);
         inquireCallCount.set(0);
+        cancelCallCount.set(0);
     }
 
     private record Scenario(Type type, String reason) {
@@ -134,7 +166,8 @@ public class FakePaymentGatewayIntegrationTest implements PaymentGateway {
 
         PaymentGatewayApproval resolve(Clock clock) {
             return switch (type) {
-                case APPROVE -> new PaymentGatewayApproval("fake_" + UUID.randomUUID(), LocalDateTime.now(clock));
+                case APPROVE -> new PaymentGatewayApproval(
+                        "fake_" + UUID.randomUUID(), LocalDateTime.now(clock), PaymentMethod.CARD);
                 case REJECT -> throw new PaymentGatewayRejectedException(reason);
                 case TIMEOUT -> throw new PaymentGatewayUnknownException("PG 응답 timeout", null);
                 case LOSE_RESPONSE -> throw new PaymentGatewayUnknownException("PG 응답 유실", null);
@@ -161,10 +194,29 @@ public class FakePaymentGatewayIntegrationTest implements PaymentGateway {
         PaymentGatewayInquiryResult resolve(Clock clock) {
             return switch (type) {
                 case APPROVE -> PaymentGatewayInquiryResult.approved(
-                        "fake_" + UUID.randomUUID(), LocalDateTime.now(clock));
+                        "fake_" + UUID.randomUUID(), LocalDateTime.now(clock), PaymentMethod.CARD);
                 case REJECT -> PaymentGatewayInquiryResult.rejected(reason);
                 case STILL_PROCESSING -> PaymentGatewayInquiryResult.stillProcessing();
             };
+        }
+    }
+
+    private record CancelScenario(Type type) {
+
+        enum Type {SUCCEED, FAIL}
+
+        static CancelScenario succeed() {
+            return new CancelScenario(Type.SUCCEED);
+        }
+
+        static CancelScenario fail() {
+            return new CancelScenario(Type.FAIL);
+        }
+
+        void resolve() {
+            if (type == Type.FAIL) {
+                throw new PaymentGatewayUnknownException("fake cancel 실패", null);
+            }
         }
     }
 }

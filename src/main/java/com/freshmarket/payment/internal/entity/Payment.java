@@ -1,6 +1,7 @@
 package com.freshmarket.payment.internal.entity;
 
 import com.freshmarket.common.entity.BaseMutableTimeEntity;
+import com.freshmarket.common.pg.MerchantOrderNoGenerator;
 import com.freshmarket.payment.PaymentMethod;
 import com.freshmarket.payment.PaymentRequest;
 import com.freshmarket.payment.PaymentStatus;
@@ -28,6 +29,25 @@ public class Payment extends BaseMutableTimeEntity {
     @Column(name = "order_id", nullable = false)
     private Long orderId;
 
+    /*
+     * [2026-09-27 KST] 토스페이먼츠에 보내는 가맹점 주문번호다. orders.order_no(정책상 orderId를
+     * 문자열로 그대로 담는다 — Order.assignOrderNo 클래스 주석 참고)는 초기 주문에서 토스 orderId
+     * 최소 길이(6자) 요건에 못 미칠 수 있어 재사용하지 않는다 — 자세한 이유는 V39 마이그레이션 주석
+     * 참고. 계산 자체는 order와 공유하는 순수 함수(MerchantOrderNoGenerator)라 order도 주문 생성
+     * 응답에서 독립적으로 같은 값을 낼 수 있다 — 이 필드는 그 계산 결과를 고정해서 보관만 한다.
+     */
+    @Column(name = "pg_order_no", nullable = false, length = 20)
+    private String pgOrderNo;
+
+    /*
+     * [2026-09-27 KST] 주문 소유자다. order/payment 둘 다 L2라 confirm 시점에 payment가 order를
+     * 다시 조회해 소유자를 확인할 수 없다(ArchitectureTest.도메인은_아래로만_부른다) — 그래서 결제
+     * 준비 시점에 order가 이미 아는 memberId를 이벤트로 함께 실어 보내 이 컬럼에 스냅샷해둔다.
+     * amount를 orders.total_amount에서 스냅샷하는 것과 같은 방식이다.
+     */
+    @Column(name = "member_id", nullable = false)
+    private Long memberId;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "method", nullable = false, length = 30)
     private PaymentMethod method;
@@ -54,9 +74,18 @@ public class Payment extends BaseMutableTimeEntity {
     @Column(name = "reconciliation_isolated", nullable = false)
     private boolean reconciliationIsolated;
 
-    private Payment(Long orderId, PaymentMethod method, int amount) {
+    @Column(name = "refund_attempt_count", nullable = false)
+    private int refundAttemptCount;
+
+    @Column(name = "refund_isolated", nullable = false)
+    private boolean refundIsolated;
+
+    private Payment(Long orderId, Long memberId, PaymentMethod method, int amount) {
         if (orderId == null) {
             throw new IllegalArgumentException("orderId 는 필수다");
+        }
+        if (memberId == null) {
+            throw new IllegalArgumentException("memberId 는 필수다");
         }
         if (method == null) {
             throw new IllegalArgumentException("method 는 필수다");
@@ -65,22 +94,39 @@ public class Payment extends BaseMutableTimeEntity {
             throw new IllegalArgumentException("amount 는 1 이상이어야 한다: " + amount);
         }
         this.orderId = orderId;
+        this.pgOrderNo = pgOrderNoFor(orderId);
+        this.memberId = memberId;
         this.method = method;
         this.amount = amount;
         this.status = PaymentStatus.PENDING;
         this.refundedAmount = 0;
     }
 
-    public static Payment prepare(Long orderId, PaymentMethod method, int amount) {
-        return new Payment(orderId, method, amount);
+    public static Payment prepare(Long orderId, Long memberId, PaymentMethod method, int amount) {
+        return new Payment(orderId, memberId, method, amount);
+    }
+
+    /*
+     * orderId로부터 토스 orderId 규칙을 만족하는 가맹점 주문번호를 만든다. 실제 계산은
+     * MerchantOrderNoGenerator(common)에 있다 — order도 같은 계산이 필요해서(주문 생성 응답에
+     * 담아 프론트에 돌려준다) 공유 위치에 둔 것이지 payment 고유 로직이 아니다. insertIfAbsent()가
+     * 엔티티를 거치지 않는 네이티브 upsert라 PaymentService가 삽입 전에 같은 값을 미리 계산해야
+     * 해서 이 위임 메서드를 public static으로 둔다.
+     */
+    public static String pgOrderNoFor(Long orderId) {
+        return MerchantOrderNoGenerator.from(orderId);
     }
 
     /*
      * [2026-09-05 18:28 KST] 복구 배치(PaymentReconciliationService)가 UNKNOWN을 뒤늦게 PAID로
      * 확정할 때도 이 메서드를 그대로 재사용한다 — PENDING에서의 최초 승인과 UNKNOWN에서의 뒤늦은
      * 확정은 "PG가 승인했다"는 같은 사실을 반영하는 것뿐이라 별도 메서드를 두지 않았다.
+     *
+     * [2026-09-27 KST] method 파라미터를 추가했다 — 토스 결제창은 사용자가 결제수단을 직접
+     * 고르므로, 준비 단계에 고정해둔 값(현재는 CARD)이 실제 승인된 수단과 다를 수 있다. 승인
+     * 확정 시점에 PG가 알려준 실제 값으로 덮어쓴다.
      */
-    public void approve(String pgTid, LocalDateTime paidAt) {
+    public void approve(String pgTid, LocalDateTime paidAt, PaymentMethod method) {
         if (!isPending() && !isUnknown()) {
             throw new IllegalStateException("승인 대기 또는 UNKNOWN 상태의 결제만 승인할 수 있습니다.");
         }
@@ -90,8 +136,12 @@ public class Payment extends BaseMutableTimeEntity {
         if (paidAt == null) {
             throw new IllegalArgumentException("paidAt 은 필수다");
         }
+        if (method == null) {
+            throw new IllegalArgumentException("method 는 필수다");
+        }
         this.pgTid = pgTid;
         this.paidAt = paidAt;
+        this.method = method;
         this.status = PaymentStatus.PAID;
     }
 
@@ -120,6 +170,51 @@ public class Payment extends BaseMutableTimeEntity {
         this.status = PaymentStatus.UNKNOWN;
     }
 
+    /*
+     * [2026-09-27 KST] order가 이미 CANCELED로 확정한 주문에 뒤늦게 결제가 승인된 경우의 자동
+     * 환불에서 쓴다(common.event.OrderPaymentRefundRequestedEvent 참고). PAID에서만 전이하고,
+     * 이미 CANCELED면 조용히 넘어간다 — 이벤트 재전달로 같은 결제에 대해 여러 번 불릴 수 있어서다
+     * (PaymentGateway.cancel() 구현체도 같은 이유로 각자 멱등하게 흡수한다 — 이중 방어).
+     *
+     * 부분 환불은 아직 지원하지 않는다(YAGNI, PaymentGateway.cancel() 주석 참고) — 전액을
+     * refundedAmount에 반영한다.
+     */
+    public void cancel(String reason) {
+        if (isCanceled()) {
+            return;
+        }
+        if (!isPaid()) {
+            throw new IllegalStateException("승인 완료 상태의 결제만 취소할 수 있습니다.");
+        }
+        this.status = PaymentStatus.CANCELED;
+        this.refundedAmount = amount;
+    }
+
+    /*
+     * [2026-09-27 KST] confirm 컨트롤러가 실제로 토스 confirm API를 부르기 "직전"에, 별도의 짧은
+     * 트랜잭션(PaymentService.beginConfirm)에서 호출한다. 아직 승인/거절이 확정되지 않은 상태
+     * (PENDING/UNKNOWN)에서만 pgTid를 앞당겨 반영하고, 이미 끝난 결제(PAID/FAILED)는 조용히
+     * 무시한다 — 그쪽은 호출한 쪽이 새로 PG를 부르지 않고 현재 상태를 그대로 반환한다.
+     *
+     * 이렇게 미리 저장해두는 이유는 결제창을 그냥 이탈한 경우(끝까지 pgTid가 비어 있다)와 confirm을
+     * 실제로 시도한 경우(pgTid가 있다)를 나중에 복구 배치가 구분하기 위해서다 — 이탈은 토스에
+     * 물어볼 거래 자체가 없으므로 조회 대상이 아니다.
+     */
+    public void recordConfirmAttempt(String paymentKey) {
+        if (!isPending() && !isUnknown()) {
+            return;
+        }
+        if (paymentKey == null || paymentKey.isBlank() || paymentKey.length() > PG_TID_MAX_LENGTH) {
+            throw new IllegalArgumentException("유효한 paymentKey 가 필요하다");
+        }
+        this.pgTid = paymentKey;
+    }
+
+    // 아직 끝나지 않은 결제에 다른 paymentKey로 confirm이 이미 한 번 진행 중인지 확인한다.
+    public boolean hasConflictingConfirmAttempt(String paymentKey) {
+        return (isPending() || isUnknown()) && pgTid != null && !pgTid.equals(paymentKey);
+    }
+
     public boolean isPaid() {
         return status == PaymentStatus.PAID;
     }
@@ -134,6 +229,10 @@ public class Payment extends BaseMutableTimeEntity {
 
     public boolean isUnknown() {
         return status == PaymentStatus.UNKNOWN;
+    }
+
+    public boolean isCanceled() {
+        return status == PaymentStatus.CANCELED;
     }
 
     public boolean isReconciliationCandidate() {
@@ -159,6 +258,29 @@ public class Payment extends BaseMutableTimeEntity {
         return false;
     }
 
+    /*
+     * [2026-09-28 KST] PG 취소(환불) 호출이 실패했을 때만 호출한다. reconciliation과 같은
+     * 이유로 상한을 둔다 — 영구적으로 거절되는 취소(예: 취소 가능 금액 초과 등)를 매
+     * 배치 주기(outbox 재전달)마다 끝없이 재시도하면 로그만 쌓이고 아무도 못 알아챈다. 상한을 넘기면
+     * isolated로 표시해 PaymentCancellationService가 더 이상 PG를 호출하지 않게 하고, 이후 처리는 운영자가
+     * 직접 확인한다(payment는 PAID로, order는 CANCELED로 남는 불일치 상태이므로 수동 개입이
+     * 필요하다).
+     */
+    public boolean recordUnresolvedRefundAttempt(int maxAttempts) {
+        if (maxAttempts < 1) {
+            throw new IllegalArgumentException("maxAttempts 는 1 이상이어야 합니다.");
+        }
+        if (!isPaid() || refundIsolated) {
+            return false;
+        }
+        refundAttemptCount++;
+        if (refundAttemptCount >= maxAttempts) {
+            refundIsolated = true;
+            return true;
+        }
+        return false;
+    }
+
     public boolean matches(PaymentRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("payment request 는 필수다");
@@ -166,9 +288,5 @@ public class Payment extends BaseMutableTimeEntity {
         return orderId.equals(request.orderId())
                 && amount == request.amount()
                 && method == request.method();
-    }
-
-    public PaymentRequest toRequest() {
-        return new PaymentRequest(orderId, amount, method);
     }
 }

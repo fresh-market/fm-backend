@@ -53,25 +53,27 @@ class PaymentServiceTest {
 
     @Test
     void 결제가_없으면_PENDING_결제를_원자적으로_만든다() {
-        PaymentRequest request = new PaymentRequest(1L, 25800, PaymentMethod.CARD);
+        PaymentRequest request = new PaymentRequest(1L, 7L, 25800, PaymentMethod.CARD);
         Payment payment = payment(10L);
-        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyInt(), any())).thenReturn(1);
+        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyLong(), anyString(), anyInt(), any()))
+                .thenReturn(1);
         when(paymentRepository.findByOrderId(1L)).thenReturn(Optional.of(payment));
 
         PaymentPreparation result = sut.preparePayment(request);
 
         assertThat(result.payment()).isSameAs(payment);
         assertThat(result.newlyPrepared()).isTrue();
-        verify(paymentRepository).insertIfAbsent(anyLong(), anyString(), anyInt(), any());
+        verify(paymentRepository).insertIfAbsent(anyLong(), anyString(), anyLong(), anyString(), anyInt(), any());
     }
 
     @Test
     void 같은_주문의_결제가_이미_있으면_재사용한다() {
         Payment existing = payment(10L);
-        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyInt(), any())).thenReturn(0);
+        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyLong(), anyString(), anyInt(), any()))
+                .thenReturn(0);
         when(paymentRepository.findByOrderId(1L)).thenReturn(Optional.of(existing));
 
-        PaymentPreparation result = sut.preparePayment(new PaymentRequest(1L, 25800, PaymentMethod.CARD));
+        PaymentPreparation result = sut.preparePayment(new PaymentRequest(1L, 7L, 25800, PaymentMethod.CARD));
 
         assertThat(result.payment()).isSameAs(existing);
         assertThat(result.newlyPrepared()).isFalse();
@@ -79,10 +81,11 @@ class PaymentServiceTest {
 
     @Test
     void 기존_결제와_금액이나_수단이_다르면_거절한다() {
-        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyInt(), any())).thenReturn(0);
+        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyLong(), anyString(), anyInt(), any()))
+                .thenReturn(0);
         when(paymentRepository.findByOrderId(1L)).thenReturn(Optional.of(payment(10L)));
 
-        assertThatThrownBy(() -> sut.preparePayment(new PaymentRequest(1L, 30000, PaymentMethod.CARD)))
+        assertThatThrownBy(() -> sut.preparePayment(new PaymentRequest(1L, 7L, 30000, PaymentMethod.CARD)))
                 .isInstanceOf(PaymentException.class)
                 .extracting(e -> ((PaymentException) e).getErrorCode())
                 .isEqualTo(PaymentErrorCode.PAYMENT_REQUEST_MISMATCH);
@@ -90,10 +93,11 @@ class PaymentServiceTest {
 
     @Test
     void PENDING_결제를_만든_뒤_조회되지_않으면_예외가_발생한다() {
-        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyInt(), any())).thenReturn(1);
+        when(paymentRepository.insertIfAbsent(anyLong(), anyString(), anyLong(), anyString(), anyInt(), any()))
+                .thenReturn(1);
         when(paymentRepository.findByOrderId(1L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> sut.preparePayment(new PaymentRequest(1L, 25800, PaymentMethod.CARD)))
+        assertThatThrownBy(() -> sut.preparePayment(new PaymentRequest(1L, 7L, 25800, PaymentMethod.CARD)))
                 .isInstanceOf(PaymentException.class)
                 .extracting(e -> ((PaymentException) e).getErrorCode())
                 .isEqualTo(PaymentErrorCode.PAYMENT_NOT_FOUND);
@@ -105,7 +109,7 @@ class PaymentServiceTest {
         when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
         LocalDateTime paidAt = LocalDateTime.of(2026, 8, 21, 15, 30);
 
-        PaymentResult result = sut.approvePayment(10L, new PaymentGatewayApproval("mock_123", paidAt));
+        PaymentResult result = sut.approvePayment(10L, new PaymentGatewayApproval("mock_123", paidAt, PaymentMethod.CARD));
 
         assertThat(result.status()).isEqualTo(PaymentStatus.PAID);
         assertThat(result.pgTid()).isEqualTo("mock_123");
@@ -118,7 +122,7 @@ class PaymentServiceTest {
         when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> sut.approvePayment(10L,
-                new PaymentGatewayApproval("mock_123", LocalDateTime.now())))
+                new PaymentGatewayApproval("mock_123", LocalDateTime.now(), PaymentMethod.CARD)))
                 .isInstanceOf(PaymentException.class)
                 .extracting(e -> ((PaymentException) e).getErrorCode())
                 .isEqualTo(PaymentErrorCode.PAYMENT_NOT_FOUND);
@@ -127,11 +131,11 @@ class PaymentServiceTest {
     @Test
     void 이미_승인된_결제는_다시_승인하지_않는다() {
         Payment payment = payment(10L);
-        payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30));
+        payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD);
         when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
 
         PaymentResult result = sut.approvePayment(10L,
-                new PaymentGatewayApproval("different_tid", LocalDateTime.of(2026, 8, 21, 16, 0)));
+                new PaymentGatewayApproval("different_tid", LocalDateTime.of(2026, 8, 21, 16, 0), PaymentMethod.CARD));
 
         assertThat(result.pgTid()).isEqualTo("mock_123");
         verify(paymentResultOutboxRepository, never()).save(any());
@@ -144,7 +148,7 @@ class PaymentServiceTest {
         when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
 
         assertThatThrownBy(() -> sut.approvePayment(10L,
-                new PaymentGatewayApproval("mock_123", LocalDateTime.now())))
+                new PaymentGatewayApproval("mock_123", LocalDateTime.now(), PaymentMethod.CARD)))
                 .isInstanceOf(PaymentException.class)
                 .extracting(e -> ((PaymentException) e).getErrorCode())
                 .isEqualTo(PaymentErrorCode.PAYMENT_NOT_PENDING);
@@ -225,14 +229,14 @@ class PaymentServiceTest {
         Payment payment = payment(10L);
         ReflectionTestUtils.setField(payment, "status", PaymentStatus.CANCELED);
 
-        assertThatThrownBy(() -> payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30)))
+        assertThatThrownBy(() -> payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD))
                 .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
     void 주문_ID로_결제_상세_표시용_정보를_조회한다() {
         Payment payment = payment(10L);
-        payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30));
+        payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD);
         when(paymentRepository.findByOrderId(1L)).thenReturn(Optional.of(payment));
 
         Optional<Payment> result = sut.findPayment(1L);
@@ -251,8 +255,144 @@ class PaymentServiceTest {
         assertThat(result).isEmpty();
     }
 
+    @Test
+    void confirm_시작시_본인_주문이면_paymentKey를_기록한다() {
+        Payment payment = payment(10L);
+        when(paymentRepository.findByOrderIdForUpdate(1L)).thenReturn(Optional.of(payment));
+
+        Payment result = sut.beginConfirm(1L, 7L, 25800, "tosspayments_key_1");
+
+        assertThat(result.getPgTid()).isEqualTo("tosspayments_key_1");
+    }
+
+    @Test
+    void confirm_시작시_본인_주문이_아니면_거절한다() {
+        Payment payment = payment(10L);
+        when(paymentRepository.findByOrderIdForUpdate(1L)).thenReturn(Optional.of(payment));
+
+        assertThatThrownBy(() -> sut.beginConfirm(1L, 999L, 25800, "tosspayments_key_1"))
+                .isInstanceOf(PaymentException.class)
+                .extracting(e -> ((PaymentException) e).getErrorCode())
+                .isEqualTo(PaymentErrorCode.PAYMENT_FORBIDDEN);
+    }
+
+    @Test
+    void confirm_시작시_금액이_다르면_거절한다() {
+        Payment payment = payment(10L);
+        when(paymentRepository.findByOrderIdForUpdate(1L)).thenReturn(Optional.of(payment));
+
+        assertThatThrownBy(() -> sut.beginConfirm(1L, 7L, 99_999, "tosspayments_key_1"))
+                .isInstanceOf(PaymentException.class)
+                .extracting(e -> ((PaymentException) e).getErrorCode())
+                .isEqualTo(PaymentErrorCode.PAYMENT_REQUEST_MISMATCH);
+    }
+
+    @Test
+    void confirm_시작시_다른_paymentKey로_이미_진행중이면_거절한다() {
+        Payment payment = payment(10L);
+        payment.recordConfirmAttempt("first_key");
+        when(paymentRepository.findByOrderIdForUpdate(1L)).thenReturn(Optional.of(payment));
+
+        assertThatThrownBy(() -> sut.beginConfirm(1L, 7L, 25800, "second_key"))
+                .isInstanceOf(PaymentException.class)
+                .extracting(e -> ((PaymentException) e).getErrorCode())
+                .isEqualTo(PaymentErrorCode.PAYMENT_CONFIRM_IN_PROGRESS);
+    }
+
+    @Test
+    void confirm_시작시_없는_결제는_예외가_발생한다() {
+        when(paymentRepository.findByOrderIdForUpdate(1L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sut.beginConfirm(1L, 7L, 25800, "tosspayments_key_1"))
+                .isInstanceOf(PaymentException.class)
+                .extracting(e -> ((PaymentException) e).getErrorCode())
+                .isEqualTo(PaymentErrorCode.PAYMENT_NOT_FOUND);
+    }
+
+    @Test
+    void PAID_결제는_취소_시작시_그대로_반환된다() {
+        Payment payment = payment(10L);
+        payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD);
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
+
+        Optional<Payment> result = sut.beginCancel(10L);
+
+        assertThat(result).isPresent();
+        assertThat(result.orElseThrow()).isSameAs(payment);
+    }
+
+    /*
+     * [2026-09-27 KST] PAID가 아니면(이미 CANCELED로 끝났거나 애초에 승인된 적 없음) 빈 값을
+     * 돌려줘 호출하는 쪽(PaymentCancellationService)이 PG를 다시 부르지 않게 한다.
+     */
+    @Test
+    void PAID가_아닌_결제는_취소_시작시_빈_값을_반환한다() {
+        Payment payment = payment(10L);
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
+
+        Optional<Payment> result = sut.beginCancel(10L);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void 취소_시작시_없는_결제는_예외가_발생한다() {
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sut.beginCancel(10L))
+                .isInstanceOf(PaymentException.class)
+                .extracting(e -> ((PaymentException) e).getErrorCode())
+                .isEqualTo(PaymentErrorCode.PAYMENT_NOT_FOUND);
+    }
+
+    @Test
+    void PG_취소_성공_뒤_결제를_CANCELED로_확정한다() {
+        Payment payment = payment(10L);
+        payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD);
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
+
+        sut.finishCancel(10L, "이미 취소된 주문에 뒤늦게 결제가 승인됨");
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELED);
+        assertThat(payment.getRefundedAmount()).isEqualTo(payment.getAmount());
+    }
+
+    @Test
+    void 취소_확정시_없는_결제는_예외가_발생한다() {
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sut.finishCancel(10L, "사유"))
+                .isInstanceOf(PaymentException.class)
+                .extracting(e -> ((PaymentException) e).getErrorCode())
+                .isEqualTo(PaymentErrorCode.PAYMENT_NOT_FOUND);
+    }
+
+    /*
+     * [2026-09-27 KST] 이벤트 재전달로 finishCancel()이 두 번 불려도(첫 호출이 이미 CANCELED로
+     * 확정한 뒤) Payment.cancel()의 멱등 가드 덕분에 예외 없이 조용히 넘어간다.
+     */
+    @Test
+    void 이미_취소된_결제를_다시_확정해도_예외가_나지_않는다() {
+        Payment payment = payment(10L);
+        payment.approve("mock_123", LocalDateTime.of(2026, 8, 21, 15, 30), PaymentMethod.CARD);
+        payment.cancel("첫 시도");
+        when(paymentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(payment));
+
+        sut.finishCancel(10L, "재시도");
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELED);
+    }
+
+    @Test
+    void 결제_엔티티는_PAID가_아니면_직접_취소할_수_없다() {
+        Payment payment = payment(10L);
+
+        assertThatThrownBy(() -> payment.cancel("사유"))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
     private Payment payment(Long id) {
-        Payment payment = Payment.prepare(1L, PaymentMethod.CARD, 25800);
+        Payment payment = Payment.prepare(1L, 7L, PaymentMethod.CARD, 25800);
         ReflectionTestUtils.setField(payment, "id", id);
         return payment;
     }

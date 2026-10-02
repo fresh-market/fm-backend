@@ -8,9 +8,10 @@ import com.freshmarket.order.internal.dto.OrderCreateRequest;
 import com.freshmarket.order.internal.dto.OrderCreateResponse;
 import com.freshmarket.order.internal.entity.OrderStatus;
 import com.freshmarket.order.internal.service.OrderCreateService;
+import com.freshmarket.payment.PaymentResult;
 import com.freshmarket.payment.internal.client.FakePaymentGatewayIntegrationTest;
+import com.freshmarket.payment.internal.service.PaymentConfirmationService;
 
-import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -22,24 +23,33 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /*
- * 주문 생성 -> 결제 요청 이벤트 -> PG 응답 -> 결제/주문/재고 확정까지, order/payment/stock 세 도메인이
- * 실제 스프링 빈과 실제 MySQL로 맞물리는지 검증한다. OrderCreateService.createOrder()를 컨트롤러를
- * 거치지 않고 직접 호출한다 — 이 테스트의 관심사는 HTTP/보안 계층이 아니라 결제 이벤트 체인이므로,
- * @AuthenticationPrincipal 인증 셋업 없이 바로 서비스 빈을 부르는 쪽이 더 간단하고 목적에 맞는다.
+ * 주문 생성 -> 결제 준비(PENDING) -> confirm 확정(PG 응답) -> 결제/주문/재고 확정까지, order/payment/
+ * stock 세 도메인이 실제 스프링 빈과 실제 MySQL로 맞물리는지 검증한다. OrderCreateService.createOrder()와
+ * PaymentConfirmationService.confirm()을 컨트롤러를 거치지 않고 직접 호출한다 — 이 테스트의 관심사는
+ * HTTP/보안 계층이 아니라 결제 이벤트 체인이므로, @AuthenticationPrincipal 인증 셋업 없이 바로 서비스
+ * 빈을 부르는 쪽이 더 간단하고 목적에 맞는다.
  *
  * cartItemIds 대신 items(바로구매)로 요청을 만든다 — CartApi/cart/cart_item까지 채울 필요 없이
  * ProductApi/product_option만 준비하면 되기 때문이다.
  *
- * onPaymentRequested/onPaymentApproved/onPaymentFailed 세 리스너 모두 @Async 없이 완전 동기
- * (같은 스레드)로 실행된다(PaymentRequestedEventListener 클래스 주석 참고) — 그래서 createOrder()
- * 호출이 리턴하는 시점엔 이미 최종 상태까지 반영돼 있다. 폴링(Awaitility 등) 없이 바로 assert한다.
- * 나중에 이 체인 어딘가 @Async가 붙는 결정이 실제로 나면, 그때 이 테스트들도 폴링 방식으로 바꾼다.
+ * [2026-09-27 KST] 토스 연동으로 PG 승인 호출이 주문 생성 시점에서 confirm 시점으로 옮겨가면서, 이
+ * 테스트도 두 단계로 나눴다 — createOrder() 직후에는 결제가 PENDING으로만 준비되고 PG는 아직 호출되지
+ * 않았음을 먼저 확인하고, 그 다음 PaymentConfirmationService.confirm()을 명시적으로 호출해 승인/거절/
+ * timeout 각 시나리오를 재현한다. onPaymentRequested/onPaymentApproved/onPaymentFailed 리스너
+ * 모두 @Async 없이 완전 동기(같은 스레드)로 실행되므로(PaymentRequestedEventListener 클래스 주석
+ * 참고), 각 호출이 리턴하는 시점엔 이미 그 단계의 최종 상태까지 반영돼 있다. 폴링(Awaitility 등) 없이
+ * 바로 assert한다.
  */
 @SpringBootTest
 class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
 
+    private static final String PAYMENT_KEY = "test_payment_key";
+
     @Autowired
     private OrderCreateService orderCreateService;
+
+    @Autowired
+    private PaymentConfirmationService paymentConfirmationService;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -70,13 +80,32 @@ class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
         cleanUp();
     }
 
+    /*
+     * [2026-09-27 KST] 예전에는 이 지점(createOrder 리턴 시점)에서 이미 PG 승인까지 끝나 있었다.
+     * 토스 연동으로 PG 호출이 confirm 시점으로 옮겨가면서, 주문 생성 직후에는 결제가 PENDING으로만
+     * 준비되고 PG는 아직 한 번도 불리지 않았음을 먼저 확인한다.
+     */
     @Test
-    void 결제가_승인되면_주문은_PAID_재고는_CONFIRMED가_된다() {
-        fakePaymentGateway.willApprove();
-
+    void 주문_생성은_결제를_PENDING으로만_준비하고_PG를_부르지_않는다() {
         OrderCreateResponse response = orderCreateService.createOrder(memberId, request());
         orderId = response.orderId();
 
+        assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.PAYMENT_PENDING);
+        assertThat(paymentStatus(orderId)).isEqualTo("PENDING");
+        assertThat(stockAllocationStatuses(orderId)).containsOnly("RESERVED");
+        assertThat(orderPaymentRequestOutboxDispatched(orderId)).isTrue();
+        assertThat(fakePaymentGateway.callCount()).isZero();
+    }
+
+    @Test
+    void 결제가_승인되면_주문은_PAID_재고는_CONFIRMED가_된다() {
+        OrderCreateResponse response = orderCreateService.createOrder(memberId, request());
+        orderId = response.orderId();
+        fakePaymentGateway.willApprove();
+
+        PaymentResult result = paymentConfirmationService.confirm(orderId, memberId, response.totalAmount(), PAYMENT_KEY);
+
+        assertThat(result.status().name()).isEqualTo("PAID");
         assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.PAID);
         assertThat(paymentStatus(orderId)).isEqualTo("PAID");
         assertThat(stockAllocationStatuses(orderId)).containsOnly("CONFIRMED");
@@ -87,11 +116,13 @@ class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
 
     @Test
     void 결제가_거절되면_주문은_CANCELED_재고는_RELEASED가_된다() {
-        fakePaymentGateway.willReject("카드 한도 초과");
-
         OrderCreateResponse response = orderCreateService.createOrder(memberId, request());
         orderId = response.orderId();
+        fakePaymentGateway.willReject("카드 한도 초과");
 
+        PaymentResult result = paymentConfirmationService.confirm(orderId, memberId, response.totalAmount(), PAYMENT_KEY);
+
+        assertThat(result.status().name()).isEqualTo("FAILED");
         assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.CANCELED);
         assertThat(paymentStatus(orderId)).isEqualTo("FAILED");
         assertThat(stockAllocationStatuses(orderId)).containsOnly("RELEASED");
@@ -102,17 +133,21 @@ class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
     /*
      * PG timeout/응답유실이면 결제는 UNKNOWN으로 남고 order/재고는 아무 판단도 하지 않는다 —
      * 이 경우를 해소하는 건 리컨실 배치의 몫이다(PaymentReconciliationService, 별도 테스트에서 검증).
-     * 여기서는 "성급하게 확정하지 않는다"만 확인한다.
+     * 여기서는 "성급하게 확정하지 않는다"만 확인한다. confirm 시도 자체는 있었으므로(paymentKey를
+     * 미리 반영해뒀다 — Payment.recordConfirmAttempt 클래스 주석 참고) pg_tid는 채워져 있어야 한다.
      */
     @Test
     void PG_응답이_불확실하면_주문과_재고는_그대로_대기한다() {
-        fakePaymentGateway.willTimeout();
-
         OrderCreateResponse response = orderCreateService.createOrder(memberId, request());
         orderId = response.orderId();
+        fakePaymentGateway.willTimeout();
 
+        PaymentResult result = paymentConfirmationService.confirm(orderId, memberId, response.totalAmount(), PAYMENT_KEY);
+
+        assertThat(result.status().name()).isEqualTo("UNKNOWN");
         assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.PAYMENT_PENDING);
         assertThat(paymentStatus(orderId)).isEqualTo("UNKNOWN");
+        assertThat(paymentPgTid(orderId)).isEqualTo(PAYMENT_KEY);
         assertThat(stockAllocationStatuses(orderId)).containsOnly("RESERVED");
         assertThat(orderPaymentRequestOutboxDispatched(orderId)).isTrue();
     }
@@ -135,6 +170,11 @@ class OrderPaymentFlowIntegrationTest extends IntegrationTestSupport {
     private String paymentStatus(Long orderId) {
         return jdbcTemplate.queryForObject(
                 "SELECT status FROM payment WHERE order_id = ?", String.class, orderId);
+    }
+
+    private String paymentPgTid(Long orderId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT pg_tid FROM payment WHERE order_id = ?", String.class, orderId);
     }
 
     private List<String> stockAllocationStatuses(Long orderId) {
