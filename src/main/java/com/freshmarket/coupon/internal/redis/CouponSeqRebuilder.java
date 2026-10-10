@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -80,7 +81,7 @@ public class CouponSeqRebuilder {
     private final Timer duration;
     private final Timer readWrite;
 
-    public CouponSeqRebuilder(StringRedisTemplate redisTemplate,
+    public CouponSeqRebuilder(CouponSeqRebuildRedis rebuildRedis,
                               CouponRepository couponRepository,
                               MemberCouponSeqRepository seqRepository,
                               CouponSeqInitializer seqInitializer,
@@ -89,7 +90,7 @@ public class CouponSeqRebuilder {
                               CouponSeqInstances instances,
                               CouponIssueProperties properties,
                               MeterRegistry registry) {
-        this.redisTemplate = redisTemplate;
+        this.redisTemplate = rebuildRedis.template();
         this.couponRepository = couponRepository;
         this.seqRepository = seqRepository;
         this.seqInitializer = seqInitializer;
@@ -261,24 +262,33 @@ public class CouponSeqRebuilder {
      *
      * <p><b>천장은 없앨 수 없다.</b> 죽었거나 먹통인 인스턴스는 영영 표시를 안 남긴다.
      *
-     * <p><b>명부를 못 읽으면 기다림을 안 줄인다.</b> 살아 있는 수를 0 으로 받았을 때 "다 모였다"
-     * 로 읽으면 아무도 안 기다린 채 키를 세우게 된다. 모르는 채로 일찍 끝내는 것이 이 기능에서
-     * 가장 나쁜 결과다.
+     * <p><b>명부를 못 읽으면 기다림을 안 줄인다.</b> 센 값을 못 받았을 때 "다 모였다" 로 읽으면
+     * 아무도 안 기다린 채 키를 세우게 된다. 모르는 채로 일찍 끝내는 것이 이 기능에서 가장 나쁜
+     * 결과다.
+     *
+     * <p><b>명부가 비어 있으면 기다리지 않는다.</b> 그것은 큐를 쥔 인스턴스가 없다는 뜻이라
+     * 올라올 것이 없다. 못 읽은 것과 같은 0 으로 받던 때는 이 경우에도 3초를 다 기다렸다
+     * ({@code docs/coupon/budget-breakdown-2026-10-10.md}).
      */
     private void awaitContributions(long couponId) throws InterruptedException {
         long deadline = System.nanoTime() + contributeWait.toNanos();
         while (System.nanoTime() < deadline) {
-            int live = instances.live();
-            if (live > 0 && doneCount(couponId) >= live) {
+            OptionalInt live = instances.live();
+            if (live.isPresent() && doneCount(couponId) >= live.getAsInt()) {
                 log.info("event=COUPON_SEQ_CONTRIBUTIONS_COMPLETE couponId={} instances={} waitedMillis={}",
-                        couponId, live,
+                        couponId, live.getAsInt(),
                         contributeWait.toMillis() - TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
                 return;
             }
             Thread.sleep(AWAIT_POLL_MILLIS);
         }
         log.warn("event=COUPON_SEQ_CONTRIBUTIONS_TIMEOUT couponId={} instances={} done={} waitedMillis={}",
-                couponId, instances.live(), doneCount(couponId), contributeWait.toMillis());
+                couponId, describe(instances.live()), doneCount(couponId), contributeWait.toMillis());
+    }
+
+    // 못 센 것을 0 으로 적으면 로그를 읽는 사람이 "아무도 없었다" 로 잘못 읽는다
+    private static String describe(OptionalInt live) {
+        return live.isPresent() ? String.valueOf(live.getAsInt()) : "unknown";
     }
 
     private int doneCount(long couponId) {

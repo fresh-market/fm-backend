@@ -52,13 +52,13 @@ public class CouponSeqContributor {
     private final Timer pauseWait;
     private final Timer write;
 
-    public CouponSeqContributor(StringRedisTemplate redisTemplate,
+    public CouponSeqContributor(CouponSeqRebuildRedis rebuildRedis,
                                 CouponIssueQueue queue,
                                 CouponIssueFlusher flusher,
                                 CouponSeqInstances instances,
                                 CouponIssueProperties properties,
                                 MeterRegistry registry) {
-        this.redisTemplate = redisTemplate;
+        this.redisTemplate = rebuildRedis.template();
         this.queue = queue;
         this.flusher = flusher;
         this.instances = instances;

@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 import com.freshmarket.coupon.internal.entity.Coupon;
 import com.freshmarket.coupon.internal.issue.CouponIssueFlusher;
@@ -81,7 +82,9 @@ class CouponSeqRebuilderAwaitTest {
     @BeforeEach
     void 준비() {
         registry = new SimpleMeterRegistry();
-        sut = new CouponSeqRebuilder(redisTemplate, couponRepository, seqRepository,
+        CouponSeqRebuildRedis rebuildRedis = mock(CouponSeqRebuildRedis.class);
+        when(rebuildRedis.template()).thenReturn(redisTemplate);
+        sut = new CouponSeqRebuilder(rebuildRedis, couponRepository, seqRepository,
                 seqInitializer, contributor, flusher, instances, 설정(기다림), registry);
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
@@ -102,7 +105,7 @@ class CouponSeqRebuilderAwaitTest {
     // 다 모이면 정해진 시간을 다 안 쓴다. 이 변경의 목적이다
     @Test
     void 명부만큼_모이면_일찍_끝낸다() {
-        when(instances.live()).thenReturn(3);
+        when(instances.live()).thenReturn(OptionalInt.of(3));
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
 
         long elapsed = 재_보기();
@@ -117,7 +120,7 @@ class CouponSeqRebuilderAwaitTest {
      */
     @Test
     void 한_대가_안_올렸으면_끝까지_기다린다() {
-        when(instances.live()).thenReturn(3);
+        when(instances.live()).thenReturn(OptionalInt.of(3));
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
 
         long elapsed = 재_보기();
@@ -131,7 +134,7 @@ class CouponSeqRebuilderAwaitTest {
      */
     @Test
     void 명부를_못_읽으면_일찍_안_끝낸다() {
-        when(instances.live()).thenReturn(0);
+        when(instances.live()).thenReturn(OptionalInt.empty());
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(5L);
 
         long elapsed = 재_보기();
@@ -139,10 +142,26 @@ class CouponSeqRebuilderAwaitTest {
         assertThat(elapsed).isGreaterThanOrEqualTo(기다림.toMillis());
     }
 
+    /*
+     * 명부가 비어 있으면 올라올 것이 없으므로 기다리지 않는다.
+     *
+     * 못 읽은 것과 같은 0 으로 받던 때는 이 경우에도 정해진 시간을 다 기다렸다. 2026-10-10
+     * J-3 회차에서 재건이 기여자 0명을 3초 기다린 뒤 실패로 끝난 것이 그 때문이다.
+     */
+    @Test
+    void 명부가_비어_있으면_기다리지_않는다() {
+        when(instances.live()).thenReturn(OptionalInt.of(0));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(0L);
+
+        long elapsed = 재_보기();
+
+        assertThat(elapsed).isLessThan(기다림.toMillis());
+    }
+
     // 표시가 명부보다 많아도 끝낸다. 명부에서 막 빠진 인스턴스가 남긴 것일 수 있다
     @Test
     void 표시가_명부보다_많아도_끝낸다() {
-        when(instances.live()).thenReturn(2);
+        when(instances.live()).thenReturn(OptionalInt.of(2));
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
 
         assertThat(재_보기()).isLessThan(기다림.toMillis());
@@ -156,7 +175,7 @@ class CouponSeqRebuilderAwaitTest {
      */
     @Test
     void 재건이_문을_닫아_둔_시간을_잰다() {
-        when(instances.live()).thenReturn(3);
+        when(instances.live()).thenReturn(OptionalInt.of(3));
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
 
         sut.rebuild(COUPON_ID);
@@ -171,7 +190,7 @@ class CouponSeqRebuilderAwaitTest {
      */
     @Test
     void 읽고_쓰기는_전체의_일부다() {
-        when(instances.live()).thenReturn(3);
+        when(instances.live()).thenReturn(OptionalInt.of(3));
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
 
         sut.rebuild(COUPON_ID);

@@ -1,5 +1,6 @@
 package com.freshmarket.coupon.internal.redis;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,6 +35,12 @@ import org.springframework.stereotype.Component;
 public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
 
     private static final String COUNTER_BEHIND = "coupon.seq.counter.behind";
+
+    // 재건을 몇 번까지 해 보나. 승격 직후의 타임아웃은 한 번 쉬면 사라진다
+    private static final int REBUILD_ATTEMPTS = 3;
+
+    // 첫 쉼이다. 시도 횟수를 곱해 점점 길어진다
+    private static final Duration REBUILD_BACKOFF = Duration.ofMillis(200);
 
     private final Set<Long> inProgress = ConcurrentHashMap.newKeySet();
 
@@ -165,10 +172,7 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
         try {
             worker.execute(() -> {
                 try {
-                    rebuilder.rebuild(couponId);
-                } catch (RuntimeException e) {
-                    // 삼키면 안 되지만 이 스레드를 죽여서도 안 된다. 다음 요청이 다시 띄운다
-                    log.error("event=COUPON_SEQ_REBUILD_FAILED couponId={}", couponId, e);
+                    rebuildWithRetry(couponId);
                 } finally {
                     inProgress.remove(couponId);
                 }
@@ -176,6 +180,51 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
         } catch (RejectedExecutionException e) {
             // 종료 중이다. 표시를 남기면 다음 기동에서도 안 뜨므로 지운다
             inProgress.remove(couponId);
+        }
+    }
+
+    /*
+     * 물러나며 다시 해 본다. 한 번 실패하고 끝내면 그 장애에서 재건이 영영 안 돈다.
+     *
+     * "다음 요청이 다시 띄운다" 에 기대던 자리인데 재연결 경로에는 그 다음이 없다. 감시가
+     * 재연결마다 한 번만 깨우므로 그 한 번이 실패하면 끝이다. 2026-10-10 J-2 회차가 그렇게
+     * 끝났고 재고 10,000장 중 1,030장이 안 나갔다.
+     *
+     * 여러 번 돌려도 결과가 같다. 재건은 네 키를 비우고 다시 세우며, 실패하면 락이 풀리므로
+     * 다음 시도가 처음부터 한다.
+     */
+    private void rebuildWithRetry(long couponId) {
+        for (int attempt = 1; attempt <= REBUILD_ATTEMPTS; attempt++) {
+            try {
+                rebuilder.rebuild(couponId);
+                return;
+            } catch (RuntimeException e) {
+                if (attempt == REBUILD_ATTEMPTS) {
+                    // 삼키면 안 되지만 이 스레드를 죽여서도 안 된다
+                    log.error("event=COUPON_SEQ_REBUILD_FAILED couponId={} attempts={}", couponId, attempt, e);
+                    return;
+                }
+                log.warn("event=COUPON_SEQ_REBUILD_RETRY couponId={} attempt={} reason={}",
+                        couponId, attempt, e.getClass().getSimpleName());
+                if (!backOff(attempt)) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /*
+     * 점점 길게 쉰다. 승격 직후의 새 프라이머리는 몇백 밀리초가 지나면 자리를 잡는다.
+     *
+     * 거짓으로 돌아오면 종료 중이므로 부르는 쪽이 그만둔다.
+     */
+    private boolean backOff(int attempt) {
+        try {
+            Thread.sleep(REBUILD_BACKOFF.multipliedBy(attempt).toMillis());
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

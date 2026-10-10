@@ -98,14 +98,25 @@ class CouponSeqInstancesTest {
     /*
      * 이 시험이 이 클래스의 핵심이다.
      * 못 세었을 때 큰 수를 주면 주도자가 영영 안 끝내고, 실제 수를 아는 척하면 덜 기다린다.
-     * 0 을 주어야 부르는 쪽이 "모른다" 로 읽고 조기 종료를 포기한다.
+     * 빈 값을 주어야 부르는 쪽이 "모른다" 로 읽고 조기 종료를 포기한다.
      */
     @Test
-    void 못_세면_0_을_준다() {
+    void 못_세면_빈_값을_준다() {
         when(zSetOperations.count(anyString(), anyDouble(), anyDouble()))
                 .thenThrow(new RedisConnectionFailureException("Redis 가 답하지 않는다"));
 
-        assertThat(sut.live()).isZero();
+        assertThat(sut.live()).isEmpty();
+    }
+
+    /*
+     * 못 센 것과 0명인 것을 가른다. 둘을 같은 0 으로 주면 부르는 쪽이 둘 다 "모른다" 로 다뤄
+     * 명부가 진짜로 빈 경우에도 정해진 시간을 다 기다린다.
+     */
+    @Test
+    void 아무도_없으면_0_명을_준다() {
+        when(zSetOperations.count(anyString(), anyDouble(), anyDouble())).thenReturn(0L);
+
+        assertThat(sut.live()).hasValue(0);
     }
 
     // 갱신이 실패해도 부른 쪽은 방금 배치를 성공으로 끝낸 플러시 스레드다

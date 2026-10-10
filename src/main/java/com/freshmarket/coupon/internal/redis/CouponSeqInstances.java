@@ -1,6 +1,7 @@
 package com.freshmarket.coupon.internal.redis;
 
 import java.time.Duration;
+import java.util.OptionalInt;
 import java.util.UUID;
 
 import lombok.extern.slf4j.Slf4j;
@@ -102,19 +103,24 @@ class CouponSeqInstances {
     }
 
     /**
-     * 지금 살아 있는 인스턴스 수다.
+     * 지금 살아 있는 인스턴스 수다. <b>못 세면 빈 값을 준다.</b>
      *
-     * <p><b>못 세면 0 을 준다.</b> 부르는 쪽은 그때 조기 종료를 포기하고 정해진 시간을 다
-     * 기다려야 한다. 모르는 채로 일찍 끝내는 것이 이 기능에서 가장 나쁜 결과다.
+     * <p><b>못 센 것과 0명인 것을 가른다.</b> 둘을 같은 0 으로 주던 때는 부르는 쪽이 둘 다
+     * "모른다" 로 다룰 수밖에 없어, 명부가 진짜로 빈 경우에도 정해진 시간을 다 기다렸다.
+     * 2026-10-10 J-3 회차에서 재건이 기여자 0명을 3초 기다린 뒤 끝난 것이 그 때문이다.
+     *
+     * <p>빈 값을 받은 쪽은 조기 종료를 포기하고 정해진 시간을 다 기다려야 한다. 모르는 채로
+     * 일찍 끝내는 것이 이 기능에서 가장 나쁜 결과다.
      */
-    int live() {
+    OptionalInt live() {
         try {
             Long count = redisTemplate.opsForZSet()
                     .count(KEY, (double) System.currentTimeMillis() - STALE_AFTER.toMillis(), Double.MAX_VALUE);
-            return count == null ? 0 : count.intValue();
+            // null 은 커넥션이 파이프라인이나 트랜잭션 안에 있을 때라 센 것이 아니다
+            return count == null ? OptionalInt.empty() : OptionalInt.of(count.intValue());
         } catch (DataAccessException e) {
             log.debug("event=COUPON_SEQ_INSTANCE_COUNT_FAILED", e);
-            return 0;
+            return OptionalInt.empty();
         }
     }
 }
