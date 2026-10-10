@@ -14,7 +14,20 @@
  * coupon_id 를 직접 준다.
  * k6 시나리오가 경로에 이 값을 박아 쓰고, AUTO_INCREMENT 에 맡기면 실행할 때마다 달라진다.
  */
-SET @coupon_id = 900001;
+
+/*
+ * 부르는 쪽이 @coupon_id_in 으로 다른 값을 줄 수 있다.
+ *
+ * 회차를 거듭할 때 같은 쿠폰을 쓰면 앱이 든 값과 어긋난다. CouponSeqRebuildTrigger 가
+ * 여태 본 최대 순번을 JVM 메모리(highWater)에 들고 있는데, 재시드는 DB 만 비우고 Redis
+ * 카운터는 이벤트를 다시 열 때 0 으로 새로 선다. 그래서 둘째 회차부터 모든 배치가
+ * COUPON_SEQ_COUNTER_BEHIND 를 찍는다. 2026-10-10 J-3 회차에서 장애가 없는데도 1,130건이
+ * 났다 (fm-backend docs/coupon/budget-breakdown-2026-10-10.md 6장).
+ *
+ * 운영에는 없는 어긋남이다. 같은 쿠폰을 발급 이력째 비우고 다시 여는 것은 시험 절차뿐이다.
+ * 그래서 앱을 고치지 않고 회차마다 다른 쿠폰을 쓰는 쪽으로 푼다.
+ */
+SET @coupon_id = COALESCE(@coupon_id_in, 900001);
 
 /*
  * 다시 돌릴 수 있어야 한다.

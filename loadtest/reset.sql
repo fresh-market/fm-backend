@@ -7,7 +7,8 @@
 -- is_active 를 FALSE 로 내리는 것이 그래서 필요하다. 켜져 있으면 여는 API 가 "이미 열렸다" 로
 -- 그냥 돌아가고, 지난 회차의 카운터와 매핑이 그대로 남는다.
 
-SET @coupon_id = 900001;
+-- 부르는 쪽이 @coupon_id_in 으로 다른 값을 줄 수 있다. 근거는 seed-coupon.sql 주석에 있다.
+SET @coupon_id = COALESCE(@coupon_id_in, 900001);
 
 DELETE FROM member_coupon_status_history
  WHERE member_coupon_id IN (SELECT member_coupon_id FROM member_coupon WHERE coupon_id = @coupon_id);
