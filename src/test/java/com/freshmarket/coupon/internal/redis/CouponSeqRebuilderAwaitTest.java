@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -36,6 +38,7 @@ import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.core.ZSetOperations;
 
 /*
@@ -201,6 +204,35 @@ class CouponSeqRebuilderAwaitTest {
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
 
         assertThat(재_보기()).isLessThan(기다림.toMillis());
+    }
+
+    /*
+     * 문을 열 때 카운터를 덮으면 안 된다. 올리기만 해야 한다.
+     *
+     * 재건은 한 장애에 여러 번 돈다. 재연결 감시가 인스턴스마다 띄우고 락은 동시 실행만 막으므로
+     * 앞 재건이 락을 풀면 다음 인스턴스가 또 주도자가 된다. 부하 중에는 나중 재건이 더 이른
+     * 스냅샷을 읽을 수 있고, set 으로 덮으면 그 낮은 값이 앞서 선 카운터를 뒤로 민다.
+     * 2026-10-10 N-2 회차에서 5,859 다음에 5,784 가 써졌다.
+     */
+    @Test
+    void 문을_열_때_카운터를_덮지_않는다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(valueOperations, never()).set(eq("coupon:9001:counter"), anyString());
+    }
+
+    // 비교와 쓰기를 한 번에 해야 한다. 읽고 나서 쓰면 그 사이에 남의 재건이나 발급이 끼어든다
+    @Test
+    void 문을_여는_것은_스크립트_하나다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate).execute(any(RedisScript.class), anyList(), any(Object[].class));
     }
 
     /*

@@ -1,5 +1,8 @@
 package com.freshmarket.coupon.internal.redis;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -23,8 +26,10 @@ import com.freshmarket.coupon.internal.repository.MemberCouponSeqRepository.Issu
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations.TypedTuple;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 
 /**
@@ -63,6 +68,8 @@ public class CouponSeqRebuilder {
 
     private static final String COMMITTED_SUFFIX = ":1";
 
+    private static final String OPEN_GATE_SCRIPT_PATH = "redis/scripts/coupon-open-gate.lua";
+
     // 다 모였는지 보는 주기다. 짧아야 다 모인 순간과 끝내는 순간의 차이가 작다
     private static final long AWAIT_POLL_MILLIS = 20;
 
@@ -80,6 +87,7 @@ public class CouponSeqRebuilder {
     private final Duration lockTtl;
     private final Timer duration;
     private final Timer readWrite;
+    private final RedisScript<Long> openGateScript;
 
     public CouponSeqRebuilder(CouponSeqRebuildRedis rebuildRedis,
                               CouponRepository couponRepository,
@@ -118,6 +126,20 @@ public class CouponSeqRebuilder {
                 .description("DB 를 읽고 네 키를 세운 시간. 항목 수에 비례해 늘어난다")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
+        this.openGateScript = loadScript(OPEN_GATE_SCRIPT_PATH);
+    }
+
+    /*
+     * 기동 때 읽는다. 못 읽으면 기동이 실패한다.
+     * CouponSeqCommitter 와 CouponSeqAllocator 가 같은 이유로 같은 모양을 쓴다.
+     */
+    private static RedisScript<Long> loadScript(String path) {
+        ClassPathResource resource = new ClassPathResource(path);
+        try (InputStream in = resource.getInputStream()) {
+            return RedisScript.of(new String(in.readAllBytes(), StandardCharsets.UTF_8), Long.class);
+        } catch (IOException e) {
+            throw new IllegalStateException(path + " 를 읽지 못했다", e);
+        }
     }
 
     /**
@@ -399,9 +421,23 @@ public class CouponSeqRebuilder {
      *
      * <p>행이 하나도 없고 큐도 비었으면 0 이다. 이벤트를 여는 {@code prepare} 가 세우는 값과
      * 같아진다.
+     *
+     * <p><b>올리기만 한다.</b> 재건은 한 장애에 여러 번 돌 수 있고(재연결 감시가 인스턴스마다
+     * 띄우며 락은 동시 실행만 막는다), 부하 중에는 나중 재건이 더 이른 스냅샷을 읽을 수 있다.
+     * 그 낮은 값으로 덮으면 {@code measureBehind} 가 적어 둔 불변식 "재건이 살아 있는 티켓보다
+     * 낮게 문을 열면 깨진다" 를 재건이 스스로 깬다. 2026-10-10 N-2 회차에서 5,859 다음에
+     * 5,784 가 써졌다 ({@code docs/coupon/budget-breakdown-2026-10-10.md}).
+     *
+     * <p>비교와 쓰기를 스크립트 하나에 담는다. 읽고 나서 쓰면 그 사이에 남의 재건이나 발급이
+     * 끼어든다.
      */
     private void openGate(long couponId, int maxSeq, LocalDateTime issueEndAt) {
-        redisTemplate.opsForValue().set(CouponSeqKeys.counter(couponId), String.valueOf(maxSeq));
+        Long opened = redisTemplate.execute(openGateScript,
+                List.of(CouponSeqKeys.counter(couponId)), String.valueOf(maxSeq));
+        if (opened != null && opened > maxSeq) {
+            log.warn("event=COUPON_SEQ_GATE_KEPT_HIGHER couponId={} mine={} kept={}",
+                    couponId, maxSeq, opened);
+        }
         seqInitializer.applyTtl(couponId, issueEndAt);
         inheritCounterTtl(couponId, CouponSeqKeys.seq(couponId), CouponSeqKeys.free(couponId),
                 CouponSeqKeys.pending(couponId));
