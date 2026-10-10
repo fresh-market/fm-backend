@@ -61,6 +61,20 @@ class CouponSeqInstances {
     private static final Duration PRUNE_AFTER = Duration.ofMinutes(10);
 
     private final StringRedisTemplate redisTemplate;
+
+    /*
+     * live 만 이 통로로 센다. refresh 는 위 통로를 그대로 쓴다.
+     *
+     * 둘이 불리는 경로가 다르다. refresh 는 플러시가 배치를 집을 때 부르므로 발급 예산 안에
+     * 있고, live 는 재건 주도자만 부르므로 그 예산 밖이다.
+     *
+     * 발급 통로의 100밀리초로 세면 승격 직후에 실패한다. 2026-10-10 J-5 에서 그 실패가
+     * instances=unknown 으로 나타나 재건이 조기 종료를 포기하고 천장 3초를 태웠고, 같은 회차의
+     * 다른 재건은 명부를 읽어 685밀리초에 끝났다. 재건이 가장 필요한 순간에 조기 종료가 가장
+     * 안 듣던 것이 이 한 줄 때문이다 (docs/coupon/budget-breakdown-2026-10-10.md 10장).
+     */
+    private final StringRedisTemplate rebuildTemplate;
+
     private final String id = UUID.randomUUID().toString();
 
     /*
@@ -70,8 +84,9 @@ class CouponSeqInstances {
      */
     private volatile long refreshedAtNanos = System.nanoTime() - REFRESH_EVERY.toNanos();
 
-    CouponSeqInstances(StringRedisTemplate redisTemplate) {
+    CouponSeqInstances(StringRedisTemplate redisTemplate, CouponSeqRebuildRedis rebuildRedis) {
         this.redisTemplate = redisTemplate;
+        this.rebuildTemplate = rebuildRedis.template();
     }
 
     String id() {
@@ -114,7 +129,7 @@ class CouponSeqInstances {
      */
     OptionalInt live() {
         try {
-            Long count = redisTemplate.opsForZSet()
+            Long count = rebuildTemplate.opsForZSet()
                     .count(KEY, (double) System.currentTimeMillis() - STALE_AFTER.toMillis(), Double.MAX_VALUE);
             // null 은 커넥션이 파이프라인이나 트랜잭션 안에 있을 때라 센 것이 아니다
             return count == null ? OptionalInt.empty() : OptionalInt.of(count.intValue());
