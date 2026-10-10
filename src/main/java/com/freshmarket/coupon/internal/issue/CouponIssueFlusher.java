@@ -14,6 +14,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.freshmarket.coupon.internal.exception.DataAccessFailures;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import com.freshmarket.coupon.internal.redis.CouponSeqCommitter;
 import com.freshmarket.coupon.internal.repository.MemberCouponBulkRepository;
 import lombok.RequiredArgsConstructor;
@@ -60,6 +62,21 @@ public class CouponIssueFlusher implements SmartLifecycle {
      * 알려 준다" 는 바깥 방향이라 기동 시점에 있을 이유가 없다.
      */
     private final ObjectProvider<CouponSeqRebuildSignal> rebuildSignal;
+    private final MeterRegistry registry;
+
+    /*
+     * commit-wait 예산 720ms 가 어디로 가는지 보려고 붙였다 (2026-10-10).
+     *
+     * 그전에는 커넥션 획득만 HikariCP 가 재고 나머지는 아무도 안 쟀다. 무장애 회차가 p99
+     * 541밀리초인데 그 시간이 어디 있는지 못 짚었다. 셋을 가르면 예산 항목과 맞출 수 있다.
+     *
+     *   큐 대기    티켓을 넣은 뒤 플러시가 집을 때까지.  예산에서 유일하게 상한이 없다
+     *   배치 쓰기  INSERT 실행과 커밋.  socketTimeout 300ms 가 맞는지 본다
+     *   확정 표시  markCommitted 한 번.  redis timeout 100ms 와 견준다
+     */
+    private Timer queueWait;
+    private Timer batchWrite;
+    private Timer markCommit;
 
     private volatile boolean running;
 
@@ -78,6 +95,22 @@ public class CouponIssueFlusher implements SmartLifecycle {
     @Override
     public void start() {
         int threads = properties.flushThreads();
+        /*
+         * 기동 때 만들어 둔다. 첫 표본에서 만들면 "표본이 0 건" 과 "계량기가 없다" 가 안 갈린다.
+         * 이 저장소가 계량기를 기동 때 다 만들어 두는 규칙을 따른다.
+         */
+        queueWait = Timer.builder("coupon.issue.queue.wait")
+                .description("티켓이 큐에서 기다린 시간. commit-wait 예산에서 상한이 없는 항목이다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+        batchWrite = Timer.builder("coupon.issue.batch.write")
+                .description("벌크 INSERT 의 실행과 커밋. socketTimeout 300ms 와 견준다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+        markCommit = Timer.builder("coupon.issue.mark.commit")
+                .description("확정 표시 한 번. redis timeout 100ms 와 견준다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
         running = true;
         executor = Executors.newFixedThreadPool(threads, namedThreadFactory());
         for (int i = 0; i < threads; i++) {
@@ -218,6 +251,10 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 fillWithinWindow(batch, batchSize, windowNanos);
 
                 long couponId = batch.get(0).couponId();
+                long pickedAt = System.nanoTime();
+                for (IssueTicket ticket : batch) {
+                    queueWait.record(pickedAt - ticket.queuedAtNanos(), TimeUnit.NANOSECONDS);
+                }
 
                 /*
                  * 큐를 쥐었다는 것을 쓰기보다 먼저 알린다.
@@ -278,10 +315,12 @@ public class CouponIssueFlusher implements SmartLifecycle {
 
     private void flush(List<IssueTicket> batch) {
         try {
+            long writeStartedAt = System.nanoTime();
             writeCircuit.write(() -> {
                 bulkRepository.insertAll(batch);
                 return null;
             });
+            batchWrite.record(System.nanoTime() - writeStartedAt, TimeUnit.NANOSECONDS);
         } catch (DataAccessException e) {
             /*
              * 벌크 쓰기가 통째로 실패했다. DB 는 어느 행 때문에 걸렸는지 알려주지 않는다.
@@ -466,7 +505,9 @@ public class CouponIssueFlusher implements SmartLifecycle {
         for (IssueTicket ticket : issued) {
             mark(marks, ticket.couponId(), ticket.memberId(), ticket.issueSeq());
         }
+        long markStartedAt = System.nanoTime();
         marks.forEach(committer::markCommitted);
+        markCommit.record(System.nanoTime() - markStartedAt, TimeUnit.NANOSECONDS);
         for (IssueTicket ticket : issued) {
             ticket.complete(new IssueOutcome.Issued(ticket.issueSeq()));
         }
