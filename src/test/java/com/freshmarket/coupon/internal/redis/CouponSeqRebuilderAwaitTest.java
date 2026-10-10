@@ -158,6 +158,42 @@ class CouponSeqRebuilderAwaitTest {
         assertThat(elapsed).isLessThan(기다림.toMillis());
     }
 
+    /*
+     * 이 시험이 이 클래스에서 가장 값지다.
+     *
+     * 명부를 갱신하는 것은 플러시가 배치를 집을 때인데 재건은 그 플러시를 멈춘다. 그래서 멈춘
+     * 뒤에 세면 재건이 스스로 비운 명부를 보고 "올라올 것이 없다" 로 읽는다. 2026-10-10 J-4
+     * 회차가 instances=0 에 waitedMillis=25 로 끝났고, 부하 중이었다면 남이 쥔 번호를 되살려
+     * 결번을 만들었을 자리다.
+     */
+    @Test
+    void 명부는_멈추기_전에_읽는다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        sut.rebuild(COUPON_ID);
+
+        InOrder 순서 = inOrder(instances, flusher);
+        순서.verify(instances).live();
+        순서.verify(flusher).pause(any(Duration.class));
+    }
+
+    /*
+     * 기다리는 동안 명부가 비어도 판정이 흔들리지 않아야 한다.
+     * 멈추기 전에 읽은 수를 쓰므로, 그 뒤 명부가 비는 것은 기다림에 영향을 주지 않는다.
+     */
+    @Test
+    void 기다리는_동안_명부가_비어도_일찍_안_끝낸다() {
+        when(instances.live())
+                .thenReturn(OptionalInt.of(3))
+                .thenReturn(OptionalInt.of(0));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
+
+        long elapsed = 재_보기();
+
+        assertThat(elapsed).isGreaterThanOrEqualTo(기다림.toMillis());
+    }
+
     // 표시가 명부보다 많아도 끝낸다. 명부에서 막 빠진 인스턴스가 남긴 것일 수 있다
     @Test
     void 표시가_명부보다_많아도_끝낸다() {

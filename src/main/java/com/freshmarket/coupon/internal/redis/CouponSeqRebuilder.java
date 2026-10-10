@@ -190,6 +190,23 @@ public class CouponSeqRebuilder {
         long startedAt = System.nanoTime();
 
         /*
+         * 기다릴 인스턴스 수를 멈추기 전에 읽어 둔다.
+         *
+         * 명부를 갱신하는 것은 플러시가 배치를 집을 때인데, 재건은 바로 아래에서 그 플러시를
+         * 멈춘다. 그래서 멈춘 뒤에 세면 아무도 갱신하지 않는 명부를 보게 되고, 그것이 비는
+         * 순간 주도자는 "올라올 것이 없다" 로 읽는다. 재건이 스스로 명부를 비우고 그 빈 명부를
+         * 근거로 기다림을 건너뛰는 꼴이다.
+         *
+         * 2026-10-10 J-4 회차에서 그것이 실제로 났다. instances=0 에 waitedMillis=25 로 끝났다.
+         * 그 25밀리초 안에 남의 큐가 올라올 수 없으므로, 부하 중에 이 경로를 타면 남이 쥔
+         * 티켓의 번호를 free 로 되살려 결번과 중복을 만든다.
+         *
+         * 멈추기 전에는 플러시가 돌고 있어 명부가 최신이다. 그 수를 고정하면 기다리는 동안
+         * 명부가 비어도 판정이 흔들리지 않는다.
+         */
+        OptionalInt expected = instances.live();
+
+        /*
          * 멈춤을 올리는 동안만이 아니라 쓰기가 끝날 때까지 끌고 간다.
          *
          * 락이 발급을 막고 있어 새 티켓이 안 들어온다. 그래서 멈춰 둬도 큐가 자라지 않는다.
@@ -201,17 +218,18 @@ public class CouponSeqRebuilder {
             return;
         }
         try {
-            leadWhilePaused(couponId, coupon, startedAt);
+            leadWhilePaused(couponId, coupon, startedAt, expected);
         } finally {
             flusher.resume();
             clearContributions(couponId);
         }
     }
 
-    private void leadWhilePaused(long couponId, Coupon coupon, long startedAt) throws InterruptedException {
+    private void leadWhilePaused(long couponId, Coupon coupon, long startedAt, OptionalInt expected)
+            throws InterruptedException {
         contributor.uploadWhilePaused(couponId);
         long contributedAt = System.nanoTime();
-        awaitContributions(couponId);
+        awaitContributions(couponId, expected);
         long awaitedAt = System.nanoTime();
 
         /*
@@ -269,21 +287,23 @@ public class CouponSeqRebuilder {
      * <p><b>명부가 비어 있으면 기다리지 않는다.</b> 그것은 큐를 쥔 인스턴스가 없다는 뜻이라
      * 올라올 것이 없다. 못 읽은 것과 같은 0 으로 받던 때는 이 경우에도 3초를 다 기다렸다
      * ({@code docs/coupon/budget-breakdown-2026-10-10.md}).
+     *
+     * <p><b>세는 것은 여기서 하지 않는다.</b> {@code expected} 는 플러시를 멈추기 전에 읽은
+     * 값이다. 이 안에서 다시 세면 재건이 멈춘 플러시 때문에 비어 가는 명부를 보게 된다.
      */
-    private void awaitContributions(long couponId) throws InterruptedException {
+    private void awaitContributions(long couponId, OptionalInt expected) throws InterruptedException {
         long deadline = System.nanoTime() + contributeWait.toNanos();
         while (System.nanoTime() < deadline) {
-            OptionalInt live = instances.live();
-            if (live.isPresent() && doneCount(couponId) >= live.getAsInt()) {
+            if (expected.isPresent() && doneCount(couponId) >= expected.getAsInt()) {
                 log.info("event=COUPON_SEQ_CONTRIBUTIONS_COMPLETE couponId={} instances={} waitedMillis={}",
-                        couponId, live.getAsInt(),
+                        couponId, expected.getAsInt(),
                         contributeWait.toMillis() - TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
                 return;
             }
             Thread.sleep(AWAIT_POLL_MILLIS);
         }
         log.warn("event=COUPON_SEQ_CONTRIBUTIONS_TIMEOUT couponId={} instances={} done={} waitedMillis={}",
-                couponId, describe(instances.live()), doneCount(couponId), contributeWait.toMillis());
+                couponId, describe(expected), doneCount(couponId), contributeWait.toMillis());
     }
 
     // 못 센 것을 0 으로 적으면 로그를 읽는 사람이 "아무도 없었다" 로 잘못 읽는다
