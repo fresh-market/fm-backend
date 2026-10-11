@@ -317,15 +317,15 @@ public class CouponSeqRebuilder {
         long deadline = System.nanoTime() + contributeWait.toNanos();
         while (System.nanoTime() < deadline) {
             if (expected.isPresent() && doneCount(couponId) >= expected.getAsInt()) {
-                log.info("event=COUPON_SEQ_CONTRIBUTIONS_COMPLETE couponId={} instances={} waitedMillis={}",
-                        couponId, expected.getAsInt(),
+                log.info("event=COUPON_SEQ_CONTRIBUTIONS_COMPLETE couponId={} instances={} done={} waitedMillis={}",
+                        couponId, expected.getAsInt(), doneMembers(couponId),
                         contributeWait.toMillis() - TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
                 return;
             }
             Thread.sleep(AWAIT_POLL_MILLIS);
         }
         log.warn("event=COUPON_SEQ_CONTRIBUTIONS_TIMEOUT couponId={} instances={} done={} waitedMillis={}",
-                couponId, describe(expected), doneCount(couponId), contributeWait.toMillis());
+                couponId, describe(expected), doneMembers(couponId), contributeWait.toMillis());
     }
 
     // 못 센 것을 0 으로 적으면 로그를 읽는 사람이 "아무도 없었다" 로 잘못 읽는다
@@ -336,6 +336,25 @@ public class CouponSeqRebuilder {
     private int doneCount(long couponId) {
         Long done = redisTemplate.opsForSet().size(CouponSeqKeys.rebuildDone(couponId));
         return done == null ? 0 : done.intValue();
+    }
+
+    /*
+     * 누가 올렸는지 함께 남긴다. 수만 적으면 "다 받았나" 를 뒤에 가릴 수 없다.
+     *
+     * 2026-10-10 N-2 회차에서 두 재건이 모두 instances=2 로 끝났는데, 전용 서버가 3대였고
+     * 셋 다 발급을 처리하는 중이었다. 빠진 대가 큐를 쥐고 있었는지 아닌지를 끝내 가리지
+     * 못했다 (docs/coupon/fault-injection-2026-10-10.md).
+     *
+     * 못 읽으면 빈 목록을 준다. 이것은 관측이므로 재건을 멈춰서는 안 된다.
+     */
+    private Set<String> doneMembers(long couponId) {
+        try {
+            Set<String> members = redisTemplate.opsForSet().members(CouponSeqKeys.rebuildDone(couponId));
+            return members == null ? Set.of() : members;
+        } catch (RuntimeException e) {
+            log.debug("event=COUPON_SEQ_DONE_MEMBERS_UNREADABLE couponId={}", couponId, e);
+            return Set.of();
+        }
     }
 
     /*

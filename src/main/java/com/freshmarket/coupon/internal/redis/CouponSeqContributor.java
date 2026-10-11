@@ -163,8 +163,8 @@ public class CouponSeqContributor {
             log.debug("event=COUPON_SEQ_CONTRIBUTE_LAG_UNKNOWN couponId={}", couponId, e);
         }
         if (startedAt.isEmpty()) {
-            log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={} pauseMillis={} writeMillis={}",
-                    couponId, size, pauseMillis, writeMillis);
+            log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} instance={} size={} pauseMillis={} writeMillis={}",
+                    couponId, instances.id(), size, pauseMillis, writeMillis);
             return;
         }
         long lagMillis = Math.max(0, System.currentTimeMillis() - startedAt.getAsLong());
@@ -173,9 +173,15 @@ public class CouponSeqContributor {
          * 셋을 한 줄에 같이 낸다.
          * lag 에서 pause 와 write 를 빼면 이 메서드에 들어오기까지 기다린 시간이고, 그 값이
          * 크면 고칠 자리가 기여가 아니라 그 앞이다. 지표를 못 보는 자리에서도 읽히게 한다.
+         *
+         * instance 를 함께 낸다. 어느 대가 올렸는지가 없으면 여러 대의 로그를 모아도 "다 올렸나"
+         * 를 가릴 수 없다. 2026-10-10 N-2 회차에서 3대가 발급을 처리하는 중에 재건이 2대의
+         * 기여만 기다리고 끝났는데, 빠진 대가 올렸는지 아닌지를 끝내 가리지 못했다
+         * (docs/coupon/fault-injection-2026-10-10.md).
          */
-        log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={} lagMillis={} pauseMillis={} writeMillis={} waitMillis={}",
-                couponId, size, lagMillis, pauseMillis, writeMillis,
+        log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} instance={} size={} lagMillis={}"
+                        + " pauseMillis={} writeMillis={} waitMillis={}",
+                couponId, instances.id(), size, lagMillis, pauseMillis, writeMillis,
                 Math.max(0, lagMillis - pauseMillis - writeMillis));
     }
 
