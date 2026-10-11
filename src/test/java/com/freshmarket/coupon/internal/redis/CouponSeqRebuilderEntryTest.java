@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
@@ -64,7 +65,9 @@ class CouponSeqRebuilderEntryTest {
 
     @BeforeEach
     void 준비() {
-        sut = new CouponSeqRebuilder(redisTemplate, couponRepository, seqRepository,
+        CouponSeqRebuildRedis rebuildRedis = mock(CouponSeqRebuildRedis.class);
+        when(rebuildRedis.template()).thenReturn(redisTemplate);
+        sut = new CouponSeqRebuilder(rebuildRedis, couponRepository, seqRepository,
                 seqInitializer, contributor, flusher, instances, 기본_설정(), new SimpleMeterRegistry());
     }
 

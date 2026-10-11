@@ -1,6 +1,7 @@
 package com.freshmarket.coupon.internal.redis;
 
 import java.time.Duration;
+import java.util.OptionalInt;
 import java.util.UUID;
 
 import lombok.extern.slf4j.Slf4j;
@@ -60,6 +61,20 @@ class CouponSeqInstances {
     private static final Duration PRUNE_AFTER = Duration.ofMinutes(10);
 
     private final StringRedisTemplate redisTemplate;
+
+    /*
+     * live 만 이 통로로 센다. refresh 는 위 통로를 그대로 쓴다.
+     *
+     * 둘이 불리는 경로가 다르다. refresh 는 플러시가 배치를 집을 때 부르므로 발급 예산 안에
+     * 있고, live 는 재건 주도자만 부르므로 그 예산 밖이다.
+     *
+     * 발급 통로의 100밀리초로 세면 승격 직후에 실패한다. 2026-10-10 J-5 에서 그 실패가
+     * instances=unknown 으로 나타나 재건이 조기 종료를 포기하고 천장 3초를 태웠고, 같은 회차의
+     * 다른 재건은 명부를 읽어 685밀리초에 끝났다. 재건이 가장 필요한 순간에 조기 종료가 가장
+     * 안 듣던 것이 이 한 줄 때문이다 (docs/coupon/budget-breakdown-2026-10-10.md 10장).
+     */
+    private final StringRedisTemplate rebuildTemplate;
+
     private final String id = UUID.randomUUID().toString();
 
     /*
@@ -69,8 +84,9 @@ class CouponSeqInstances {
      */
     private volatile long refreshedAtNanos = System.nanoTime() - REFRESH_EVERY.toNanos();
 
-    CouponSeqInstances(StringRedisTemplate redisTemplate) {
+    CouponSeqInstances(StringRedisTemplate redisTemplate, CouponSeqRebuildRedis rebuildRedis) {
         this.redisTemplate = redisTemplate;
+        this.rebuildTemplate = rebuildRedis.template();
     }
 
     String id() {
@@ -102,19 +118,24 @@ class CouponSeqInstances {
     }
 
     /**
-     * 지금 살아 있는 인스턴스 수다.
+     * 지금 살아 있는 인스턴스 수다. <b>못 세면 빈 값을 준다.</b>
      *
-     * <p><b>못 세면 0 을 준다.</b> 부르는 쪽은 그때 조기 종료를 포기하고 정해진 시간을 다
-     * 기다려야 한다. 모르는 채로 일찍 끝내는 것이 이 기능에서 가장 나쁜 결과다.
+     * <p><b>못 센 것과 0명인 것을 가른다.</b> 둘을 같은 0 으로 주던 때는 부르는 쪽이 둘 다
+     * "모른다" 로 다룰 수밖에 없어, 명부가 진짜로 빈 경우에도 정해진 시간을 다 기다렸다.
+     * 2026-10-10 J-3 회차에서 재건이 기여자 0명을 3초 기다린 뒤 끝난 것이 그 때문이다.
+     *
+     * <p>빈 값을 받은 쪽은 조기 종료를 포기하고 정해진 시간을 다 기다려야 한다. 모르는 채로
+     * 일찍 끝내는 것이 이 기능에서 가장 나쁜 결과다.
      */
-    int live() {
+    OptionalInt live() {
         try {
-            Long count = redisTemplate.opsForZSet()
+            Long count = rebuildTemplate.opsForZSet()
                     .count(KEY, (double) System.currentTimeMillis() - STALE_AFTER.toMillis(), Double.MAX_VALUE);
-            return count == null ? 0 : count.intValue();
+            // null 은 커넥션이 파이프라인이나 트랜잭션 안에 있을 때라 센 것이 아니다
+            return count == null ? OptionalInt.empty() : OptionalInt.of(count.intValue());
         } catch (DataAccessException e) {
             log.debug("event=COUPON_SEQ_INSTANCE_COUNT_FAILED", e);
-            return 0;
+            return OptionalInt.empty();
         }
     }
 }

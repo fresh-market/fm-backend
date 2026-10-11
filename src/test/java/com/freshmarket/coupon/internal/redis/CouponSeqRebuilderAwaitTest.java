@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -15,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 import com.freshmarket.coupon.internal.entity.Coupon;
 import com.freshmarket.coupon.internal.issue.CouponIssueFlusher;
@@ -35,6 +38,7 @@ import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.core.ZSetOperations;
 
 /*
@@ -81,7 +85,9 @@ class CouponSeqRebuilderAwaitTest {
     @BeforeEach
     void 준비() {
         registry = new SimpleMeterRegistry();
-        sut = new CouponSeqRebuilder(redisTemplate, couponRepository, seqRepository,
+        CouponSeqRebuildRedis rebuildRedis = mock(CouponSeqRebuildRedis.class);
+        when(rebuildRedis.template()).thenReturn(redisTemplate);
+        sut = new CouponSeqRebuilder(rebuildRedis, couponRepository, seqRepository,
                 seqInitializer, contributor, flusher, instances, 설정(기다림), registry);
 
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
@@ -102,7 +108,7 @@ class CouponSeqRebuilderAwaitTest {
     // 다 모이면 정해진 시간을 다 안 쓴다. 이 변경의 목적이다
     @Test
     void 명부만큼_모이면_일찍_끝낸다() {
-        when(instances.live()).thenReturn(3);
+        when(instances.live()).thenReturn(OptionalInt.of(3));
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
 
         long elapsed = 재_보기();
@@ -117,7 +123,7 @@ class CouponSeqRebuilderAwaitTest {
      */
     @Test
     void 한_대가_안_올렸으면_끝까지_기다린다() {
-        when(instances.live()).thenReturn(3);
+        when(instances.live()).thenReturn(OptionalInt.of(3));
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
 
         long elapsed = 재_보기();
@@ -131,8 +137,60 @@ class CouponSeqRebuilderAwaitTest {
      */
     @Test
     void 명부를_못_읽으면_일찍_안_끝낸다() {
-        when(instances.live()).thenReturn(0);
+        when(instances.live()).thenReturn(OptionalInt.empty());
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(5L);
+
+        long elapsed = 재_보기();
+
+        assertThat(elapsed).isGreaterThanOrEqualTo(기다림.toMillis());
+    }
+
+    /*
+     * 명부가 비어 있으면 올라올 것이 없으므로 기다리지 않는다.
+     *
+     * 못 읽은 것과 같은 0 으로 받던 때는 이 경우에도 정해진 시간을 다 기다렸다. 2026-10-10
+     * J-3 회차에서 재건이 기여자 0명을 3초 기다린 뒤 실패로 끝난 것이 그 때문이다.
+     */
+    @Test
+    void 명부가_비어_있으면_기다리지_않는다() {
+        when(instances.live()).thenReturn(OptionalInt.of(0));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(0L);
+
+        long elapsed = 재_보기();
+
+        assertThat(elapsed).isLessThan(기다림.toMillis());
+    }
+
+    /*
+     * 이 시험이 이 클래스에서 가장 값지다.
+     *
+     * 명부를 갱신하는 것은 플러시가 배치를 집을 때인데 재건은 그 플러시를 멈춘다. 그래서 멈춘
+     * 뒤에 세면 재건이 스스로 비운 명부를 보고 "올라올 것이 없다" 로 읽는다. 2026-10-10 J-4
+     * 회차가 instances=0 에 waitedMillis=25 로 끝났고, 부하 중이었다면 남이 쥔 번호를 되살려
+     * 결번을 만들었을 자리다.
+     */
+    @Test
+    void 명부는_멈추기_전에_읽는다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        sut.rebuild(COUPON_ID);
+
+        InOrder 순서 = inOrder(instances, flusher);
+        순서.verify(instances).live();
+        순서.verify(flusher).pause(any(Duration.class));
+    }
+
+    /*
+     * 기다리는 동안 명부가 비어도 판정이 흔들리지 않아야 한다.
+     * 멈추기 전에 읽은 수를 쓰므로, 그 뒤 명부가 비는 것은 기다림에 영향을 주지 않는다.
+     */
+    @Test
+    void 기다리는_동안_명부가_비어도_일찍_안_끝낸다() {
+        when(instances.live())
+                .thenReturn(OptionalInt.of(3))
+                .thenReturn(OptionalInt.of(0));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
 
         long elapsed = 재_보기();
 
@@ -142,10 +200,40 @@ class CouponSeqRebuilderAwaitTest {
     // 표시가 명부보다 많아도 끝낸다. 명부에서 막 빠진 인스턴스가 남긴 것일 수 있다
     @Test
     void 표시가_명부보다_많아도_끝낸다() {
-        when(instances.live()).thenReturn(2);
+        when(instances.live()).thenReturn(OptionalInt.of(2));
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
 
         assertThat(재_보기()).isLessThan(기다림.toMillis());
+    }
+
+    /*
+     * 문을 열 때 카운터를 덮으면 안 된다. 올리기만 해야 한다.
+     *
+     * 재건은 한 장애에 여러 번 돈다. 2026-10-10 N-2 에서 두 인스턴스가 1.26초 차로 재연결을
+     * 보고 둘 다 주도했다. 그 둘이 각자 DB 를 읽는데 읽는 순서와 쓰는 순서가 보장되지 않으므로,
+     * set 으로 덮으면 먼저 읽은 쪽이 나중에 써서 카운터를 뒤로 밀 수 있다.
+     *
+     * 실측에서 그 일이 난 적은 없다. 보장이 없는 것을 막는 방어다.
+     */
+    @Test
+    void 문을_열_때_카운터를_덮지_않는다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(valueOperations, never()).set(eq("coupon:9001:counter"), anyString());
+    }
+
+    // 비교와 쓰기를 한 번에 해야 한다. 읽고 나서 쓰면 그 사이에 남의 재건이나 발급이 끼어든다
+    @Test
+    void 문을_여는_것은_스크립트_하나다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate).execute(any(RedisScript.class), anyList(), any(Object[].class));
     }
 
     /*
@@ -156,7 +244,7 @@ class CouponSeqRebuilderAwaitTest {
      */
     @Test
     void 재건이_문을_닫아_둔_시간을_잰다() {
-        when(instances.live()).thenReturn(3);
+        when(instances.live()).thenReturn(OptionalInt.of(3));
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
 
         sut.rebuild(COUPON_ID);
@@ -171,7 +259,7 @@ class CouponSeqRebuilderAwaitTest {
      */
     @Test
     void 읽고_쓰기는_전체의_일부다() {
-        when(instances.live()).thenReturn(3);
+        when(instances.live()).thenReturn(OptionalInt.of(3));
         when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
 
         sut.rebuild(COUPON_ID);

@@ -7,6 +7,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -26,7 +28,7 @@ import org.springframework.data.redis.core.ZSetOperations;
  *
  * 이 클래스의 실수는 한쪽으로만 위험하다. 살아 있는 수를 실제보다 적게 보면 주도자가 덜
  * 기다리고, 그러면 빠진 인스턴스가 쥔 번호를 재건이 남에게 다시 내준다. 많게 보는 쪽은
- * 그저 조금 더 기다릴 뿐이다. 그래서 모르면 0 을 주고 부르는 쪽이 안 줄이게 한다.
+ * 그저 조금 더 기다릴 뿐이다. 그래서 모르면 빈 값을 주고 부르는 쪽이 안 줄이게 한다.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -40,20 +42,54 @@ class CouponSeqInstancesTest {
     @Mock
     private ZSetOperations<String, String> zSetOperations;
 
+    /*
+     * live 는 재건 통로로 센다. refresh 가 쓰는 통로와 타임아웃이 달라서 나뉘어 있다.
+     * 이 시험에서는 둘을 같은 ZSet 목으로 받아 어느 쪽을 쳤는지는 보지 않는다.
+     * 경로가 갈린 것 자체는 통로별_호출 시험이 고정한다.
+     */
+    @Mock
+    private StringRedisTemplate rebuildTemplate;
+
     private CouponSeqInstances sut;
 
     @BeforeEach
     void 준비() {
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
-        sut = new CouponSeqInstances(redisTemplate);
+        when(rebuildTemplate.opsForZSet()).thenReturn(zSetOperations);
+        sut = new CouponSeqInstances(redisTemplate, 재건통로(rebuildTemplate));
+    }
+
+    private static CouponSeqRebuildRedis 재건통로(StringRedisTemplate template) {
+        CouponSeqRebuildRedis redis = mock(CouponSeqRebuildRedis.class);
+        when(redis.template()).thenReturn(template);
+        return redis;
     }
 
     // 인스턴스마다 다른 이름이어야 한다. 같으면 명부가 늘 한 대로 보인다
     @Test
     void 식별자가_인스턴스마다_다르다() {
-        CouponSeqInstances other = new CouponSeqInstances(redisTemplate);
+        CouponSeqInstances other = new CouponSeqInstances(redisTemplate, 재건통로(rebuildTemplate));
 
         assertThat(sut.id()).isNotBlank().isNotEqualTo(other.id());
+    }
+
+    /*
+     * 둘이 불리는 경로가 달라 통로도 달라야 한다.
+     *
+     * refresh 는 플러시가 배치를 집을 때 부르므로 발급 예산 안이고, live 는 재건 주도자만
+     * 부르므로 그 예산 밖이다. live 를 발급 통로의 100밀리초로 세면 승격 직후에 실패하고,
+     * 그러면 재건이 조기 종료를 포기해 천장 3초를 태운다 (2026-10-10 J-5).
+     */
+    @Test
+    void 통로별_호출() {
+        when(zSetOperations.count(anyString(), anyDouble(), anyDouble())).thenReturn(2L);
+
+        sut.refresh();
+        sut.live();
+
+        // refresh 가 add 와 removeRangeByScore 로 두 번 집으므로 횟수는 고정하지 않는다
+        verify(redisTemplate, atLeastOnce()).opsForZSet();
+        verify(rebuildTemplate, atLeastOnce()).opsForZSet();
     }
 
     /*
@@ -98,14 +134,25 @@ class CouponSeqInstancesTest {
     /*
      * 이 시험이 이 클래스의 핵심이다.
      * 못 세었을 때 큰 수를 주면 주도자가 영영 안 끝내고, 실제 수를 아는 척하면 덜 기다린다.
-     * 0 을 주어야 부르는 쪽이 "모른다" 로 읽고 조기 종료를 포기한다.
+     * 빈 값을 주어야 부르는 쪽이 "모른다" 로 읽고 조기 종료를 포기한다.
      */
     @Test
-    void 못_세면_0_을_준다() {
+    void 못_세면_빈_값을_준다() {
         when(zSetOperations.count(anyString(), anyDouble(), anyDouble()))
                 .thenThrow(new RedisConnectionFailureException("Redis 가 답하지 않는다"));
 
-        assertThat(sut.live()).isZero();
+        assertThat(sut.live()).isEmpty();
+    }
+
+    /*
+     * 못 센 것과 0명인 것을 가른다. 둘을 같은 0 으로 주면 부르는 쪽이 둘 다 "모른다" 로 다뤄
+     * 명부가 진짜로 빈 경우에도 정해진 시간을 다 기다린다.
+     */
+    @Test
+    void 아무도_없으면_0_명을_준다() {
+        when(zSetOperations.count(anyString(), anyDouble(), anyDouble())).thenReturn(0L);
+
+        assertThat(sut.live()).hasValue(0);
     }
 
     // 갱신이 실패해도 부른 쪽은 방금 배치를 성공으로 끝낸 플러시 스레드다

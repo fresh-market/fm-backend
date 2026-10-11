@@ -42,8 +42,7 @@ class CouponWarmupPropertiesTest {
     }
 
     /*
-     * 값을 문자열로 그대로 적는다. 3,000 은 실측에서 나온 값이라
-     * (200 으로는 최대 응답 1.72초, 3,000 에서 p99 1초 아래) 바뀌면 근거가 사라진다.
+     * 임의의 값이 그대로 묶이는지만 본다. 운영 값은 아래 테스트가 따로 고정한다.
      */
     @Test
     void 쿠폰_프로필의_값이_그대로_묶인다() {
@@ -60,6 +59,25 @@ class CouponWarmupPropertiesTest {
                     assertThat(p.requests()).isEqualTo(3000);
                     assertThat(p.concurrency()).isEqualTo(20);
                     assertThat(p.maxDuration()).isEqualTo(Duration.ofSeconds(60));
+                });
+    }
+
+    /*
+     * 안 적었을 때의 값이 실측에서 나온 운영 값이어야 한다.
+     *
+     * 2026-10-02 회차에서 옮긴 값이다. 3,000 에 동시성 20 으로 데운 직후의 첫 회차가 p99
+     * 460.33ms 였고, 20,000 에 동시성 300 으로 올리니 66.37ms 가 됐다. 바뀌면 그 근거가
+     * 사라지므로 여기서 고정한다 (docs/coupon/rebuild-reconnect-and-fault-2026-10-01.md).
+     */
+    @Test
+    void 안_적으면_실측에서_나온_값으로_뜬다() {
+        runner.withPropertyValues("coupon.warmup.enabled=true")
+                .run(context -> {
+                    CouponWarmupProperties p = context.getBean(CouponWarmupProperties.class);
+                    assertThat(p.requests()).isEqualTo(20000);
+                    assertThat(p.concurrency()).isEqualTo(300);
+                    assertThat(p.maxDuration()).isEqualTo(Duration.ofSeconds(180));
+                    assertThat(p.writeRows()).isEqualTo(10000);
                 });
     }
 

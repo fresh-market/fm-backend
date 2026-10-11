@@ -1,5 +1,8 @@
 package com.freshmarket.coupon.internal.redis;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -8,6 +11,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -22,8 +26,10 @@ import com.freshmarket.coupon.internal.repository.MemberCouponSeqRepository.Issu
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations.TypedTuple;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 
 /**
@@ -62,6 +68,8 @@ public class CouponSeqRebuilder {
 
     private static final String COMMITTED_SUFFIX = ":1";
 
+    private static final String OPEN_GATE_SCRIPT_PATH = "redis/scripts/coupon-open-gate.lua";
+
     // 다 모였는지 보는 주기다. 짧아야 다 모인 순간과 끝내는 순간의 차이가 작다
     private static final long AWAIT_POLL_MILLIS = 20;
 
@@ -79,8 +87,9 @@ public class CouponSeqRebuilder {
     private final Duration lockTtl;
     private final Timer duration;
     private final Timer readWrite;
+    private final RedisScript<Long> openGateScript;
 
-    public CouponSeqRebuilder(StringRedisTemplate redisTemplate,
+    public CouponSeqRebuilder(CouponSeqRebuildRedis rebuildRedis,
                               CouponRepository couponRepository,
                               MemberCouponSeqRepository seqRepository,
                               CouponSeqInitializer seqInitializer,
@@ -89,7 +98,7 @@ public class CouponSeqRebuilder {
                               CouponSeqInstances instances,
                               CouponIssueProperties properties,
                               MeterRegistry registry) {
-        this.redisTemplate = redisTemplate;
+        this.redisTemplate = rebuildRedis.template();
         this.couponRepository = couponRepository;
         this.seqRepository = seqRepository;
         this.seqInitializer = seqInitializer;
@@ -117,6 +126,20 @@ public class CouponSeqRebuilder {
                 .description("DB 를 읽고 네 키를 세운 시간. 항목 수에 비례해 늘어난다")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
+        this.openGateScript = loadScript(OPEN_GATE_SCRIPT_PATH);
+    }
+
+    /*
+     * 기동 때 읽는다. 못 읽으면 기동이 실패한다.
+     * CouponSeqCommitter 와 CouponSeqAllocator 가 같은 이유로 같은 모양을 쓴다.
+     */
+    private static RedisScript<Long> loadScript(String path) {
+        ClassPathResource resource = new ClassPathResource(path);
+        try (InputStream in = resource.getInputStream()) {
+            return RedisScript.of(new String(in.readAllBytes(), StandardCharsets.UTF_8), Long.class);
+        } catch (IOException e) {
+            throw new IllegalStateException(path + " 를 읽지 못했다", e);
+        }
     }
 
     /**
@@ -189,6 +212,23 @@ public class CouponSeqRebuilder {
         long startedAt = System.nanoTime();
 
         /*
+         * 기다릴 인스턴스 수를 멈추기 전에 읽어 둔다.
+         *
+         * 명부를 갱신하는 것은 플러시가 배치를 집을 때인데, 재건은 바로 아래에서 그 플러시를
+         * 멈춘다. 그래서 멈춘 뒤에 세면 아무도 갱신하지 않는 명부를 보게 되고, 그것이 비는
+         * 순간 주도자는 "올라올 것이 없다" 로 읽는다. 재건이 스스로 명부를 비우고 그 빈 명부를
+         * 근거로 기다림을 건너뛰는 꼴이다.
+         *
+         * 2026-10-10 J-4 회차에서 그것이 실제로 났다. instances=0 에 waitedMillis=25 로 끝났다.
+         * 그 25밀리초 안에 남의 큐가 올라올 수 없으므로, 부하 중에 이 경로를 타면 남이 쥔
+         * 티켓의 번호를 free 로 되살려 결번과 중복을 만든다.
+         *
+         * 멈추기 전에는 플러시가 돌고 있어 명부가 최신이다. 그 수를 고정하면 기다리는 동안
+         * 명부가 비어도 판정이 흔들리지 않는다.
+         */
+        OptionalInt expected = instances.live();
+
+        /*
          * 멈춤을 올리는 동안만이 아니라 쓰기가 끝날 때까지 끌고 간다.
          *
          * 락이 발급을 막고 있어 새 티켓이 안 들어온다. 그래서 멈춰 둬도 큐가 자라지 않는다.
@@ -200,17 +240,18 @@ public class CouponSeqRebuilder {
             return;
         }
         try {
-            leadWhilePaused(couponId, coupon, startedAt);
+            leadWhilePaused(couponId, coupon, startedAt, expected);
         } finally {
             flusher.resume();
             clearContributions(couponId);
         }
     }
 
-    private void leadWhilePaused(long couponId, Coupon coupon, long startedAt) throws InterruptedException {
+    private void leadWhilePaused(long couponId, Coupon coupon, long startedAt, OptionalInt expected)
+            throws InterruptedException {
         contributor.uploadWhilePaused(couponId);
         long contributedAt = System.nanoTime();
-        awaitContributions(couponId);
+        awaitContributions(couponId, expected);
         long awaitedAt = System.nanoTime();
 
         /*
@@ -261,24 +302,35 @@ public class CouponSeqRebuilder {
      *
      * <p><b>천장은 없앨 수 없다.</b> 죽었거나 먹통인 인스턴스는 영영 표시를 안 남긴다.
      *
-     * <p><b>명부를 못 읽으면 기다림을 안 줄인다.</b> 살아 있는 수를 0 으로 받았을 때 "다 모였다"
-     * 로 읽으면 아무도 안 기다린 채 키를 세우게 된다. 모르는 채로 일찍 끝내는 것이 이 기능에서
-     * 가장 나쁜 결과다.
+     * <p><b>명부를 못 읽으면 기다림을 안 줄인다.</b> 센 값을 못 받았을 때 "다 모였다" 로 읽으면
+     * 아무도 안 기다린 채 키를 세우게 된다. 모르는 채로 일찍 끝내는 것이 이 기능에서 가장 나쁜
+     * 결과다.
+     *
+     * <p><b>명부가 비어 있으면 기다리지 않는다.</b> 그것은 큐를 쥔 인스턴스가 없다는 뜻이라
+     * 올라올 것이 없다. 못 읽은 것과 같은 0 으로 받던 때는 이 경우에도 3초를 다 기다렸다
+     * ({@code docs/coupon/budget-breakdown-2026-10-10.md}).
+     *
+     * <p><b>세는 것은 여기서 하지 않는다.</b> {@code expected} 는 플러시를 멈추기 전에 읽은
+     * 값이다. 이 안에서 다시 세면 재건이 멈춘 플러시 때문에 비어 가는 명부를 보게 된다.
      */
-    private void awaitContributions(long couponId) throws InterruptedException {
+    private void awaitContributions(long couponId, OptionalInt expected) throws InterruptedException {
         long deadline = System.nanoTime() + contributeWait.toNanos();
         while (System.nanoTime() < deadline) {
-            int live = instances.live();
-            if (live > 0 && doneCount(couponId) >= live) {
+            if (expected.isPresent() && doneCount(couponId) >= expected.getAsInt()) {
                 log.info("event=COUPON_SEQ_CONTRIBUTIONS_COMPLETE couponId={} instances={} waitedMillis={}",
-                        couponId, live,
+                        couponId, expected.getAsInt(),
                         contributeWait.toMillis() - TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
                 return;
             }
             Thread.sleep(AWAIT_POLL_MILLIS);
         }
         log.warn("event=COUPON_SEQ_CONTRIBUTIONS_TIMEOUT couponId={} instances={} done={} waitedMillis={}",
-                couponId, instances.live(), doneCount(couponId), contributeWait.toMillis());
+                couponId, describe(expected), doneCount(couponId), contributeWait.toMillis());
+    }
+
+    // 못 센 것을 0 으로 적으면 로그를 읽는 사람이 "아무도 없었다" 로 잘못 읽는다
+    private static String describe(OptionalInt live) {
+        return live.isPresent() ? String.valueOf(live.getAsInt()) : "unknown";
     }
 
     private int doneCount(long couponId) {
@@ -369,9 +421,27 @@ public class CouponSeqRebuilder {
      *
      * <p>행이 하나도 없고 큐도 비었으면 0 이다. 이벤트를 여는 {@code prepare} 가 세우는 값과
      * 같아진다.
+     *
+     * <p><b>올리기만 한다.</b> 재건은 한 장애에 여러 번 돈다. 재연결 감시가 인스턴스마다
+     * 띄우고 {@code minInterval} 도 각자 세며, 락은 동시 실행만 막으므로 앞 재건이 끝나면
+     * 다음 인스턴스가 또 주도자가 된다. 그 둘이 각자 DB 를 읽는데 읽는 순서와 쓰는 순서가
+     * 보장되지 않으므로, 먼저 읽은 쪽이 나중에 쓰면 {@code measureBehind} 의 불변식 "재건이
+     * 살아 있는 티켓보다 낮게 문을 열면 깨진다" 를 재건이 스스로 깬다.
+     *
+     * <p><b>실측 결함을 고친 것은 아니다.</b> 2026-10-10 N-2 에서 두 재건이 1.26초 차로
+     * 돌았고 5,784 를 먼저 5,859 를 나중에 써서 순서가 맞았다. 그것이 보장이 아니라서 두는
+     * 방어다 ({@code docs/coupon/fault-injection-2026-10-10.md} 4장).
+     *
+     * <p>비교와 쓰기를 스크립트 하나에 담는다. 읽고 나서 쓰면 그 사이에 남의 재건이나 발급이
+     * 끼어든다.
      */
     private void openGate(long couponId, int maxSeq, LocalDateTime issueEndAt) {
-        redisTemplate.opsForValue().set(CouponSeqKeys.counter(couponId), String.valueOf(maxSeq));
+        Long opened = redisTemplate.execute(openGateScript,
+                List.of(CouponSeqKeys.counter(couponId)), String.valueOf(maxSeq));
+        if (opened != null && opened > maxSeq) {
+            log.warn("event=COUPON_SEQ_GATE_KEPT_HIGHER couponId={} mine={} kept={}",
+                    couponId, maxSeq, opened);
+        }
         seqInitializer.applyTtl(couponId, issueEndAt);
         inheritCounterTtl(couponId, CouponSeqKeys.seq(couponId), CouponSeqKeys.free(couponId),
                 CouponSeqKeys.pending(couponId));
