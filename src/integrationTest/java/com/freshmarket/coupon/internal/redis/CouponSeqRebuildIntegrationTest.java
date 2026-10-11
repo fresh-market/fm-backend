@@ -68,7 +68,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
         발급행을_심는다(9102, 2);
         발급행을_심는다(9103, 4);
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         // 카운터는 마지막으로 나간 번호다. 다음 INCR 이 5 를 준다
         assertThat(redisTemplate.opsForValue().get(COUNTER)).isEqualTo("4");
@@ -99,7 +99,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
         // 다른 인스턴스가 5 번을 쥐고 있다. 3 과 4 는 주인이 없다
         다른_인스턴스가_쥔다(9103, 5);
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         // 카운터는 DB 의 최댓값이 아니라 큐까지 본 최댓값이다
         assertThat(redisTemplate.opsForValue().get(COUNTER)).isEqualTo("5");
@@ -123,7 +123,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
     void 재건이_끝나면_올려_둔_큐를_지운다() {
         다른_인스턴스가_쥔다(9103, 1);
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         assertThat(redisTemplate.hasKey(REBUILD_QUEUED)).isFalse();
     }
@@ -138,7 +138,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
         // 플러시가 방금 커밋했는데 그 인스턴스의 스냅숏에는 아직 남아 있던 경우다
         다른_인스턴스가_쥔다(9101, 1);
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         assertThat(redisTemplate.opsForHash().get(SEQ, "9101")).isEqualTo("1:1");
     }
@@ -149,7 +149,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
         발급행을_심는다(9101, 1);
         발급행을_심는다(9102, 3);
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         assertThat(redisTemplate.getExpire(COUNTER)).isPositive();
         assertThat(redisTemplate.getExpire(SEQ)).isPositive();
@@ -159,7 +159,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
     // 발급이 하나도 없었으면 이벤트를 여는 prepare 가 세우는 값과 같아진다
     @Test
     void 발급이_없었으면_카운터가_0_이다() {
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         assertThat(redisTemplate.opsForValue().get(COUNTER)).isEqualTo("0");
         assertThat(redisTemplate.hasKey(FREE)).isFalse();
@@ -173,21 +173,42 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
     void 꺼진_이벤트는_세우지_않는다() {
         jdbcTemplate.update("UPDATE coupon SET is_active = FALSE WHERE coupon_id = ?", COUPON_ID);
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         assertThat(redisTemplate.hasKey(COUNTER)).isFalse();
     }
 
-    // 카운터가 있으면 손실이 아니다. 덮으면 돌고 있는 이벤트의 번호가 뒤로 밀린다
+    /*
+     * 카운터가 있어도 재건이 돈다. 다만 그 값을 내리지 않는다.
+     *
+     * 존재를 관문으로 두면 승격 경로가 영영 안 걸린다. 복제가 밀린 채 승격되면 카운터는 살아
+     * 있고 값만 뒤로 가기 때문이다 (CouponSeqRebuilder 클래스 주석).
+     *
+     * 그래서 막아야 하는 것은 재건이 도는 것이 아니라 재건이 낮은 값을 쓰는 것이다. 여기서는
+     * 카운터가 77 인데 재건이 센 최대 순번이 1 이므로, coupon-open-gate.lua 가 77 을 지켜야 한다.
+     */
     @Test
-    void 카운터가_있으면_건드리지_않는다() {
+    void 카운터를_내리지_않는다() {
         발급행을_심는다(9101, 1);
         redisTemplate.opsForValue().set(COUNTER, "77");
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         assertThat(redisTemplate.opsForValue().get(COUNTER)).isEqualTo("77");
-        assertThat(redisTemplate.hasKey(SEQ)).isFalse();
+
+        // 재건은 돌았다. 네 키를 다시 세우는 것이 이 절차의 일이다
+        assertThat(redisTemplate.hasKey(SEQ)).isTrue();
+    }
+
+    // 카운터가 재건이 센 값보다 낮으면 올린다. 승격으로 뒤로 간 카운터를 되돌리는 경로다
+    @Test
+    void 카운터가_낮으면_올린다() {
+        발급행을_심는다(9101, 50);
+        redisTemplate.opsForValue().set(COUNTER, "7");
+
+        sut.rebuild(COUPON_ID);
+
+        assertThat(redisTemplate.opsForValue().get(COUNTER)).isEqualTo("50");
     }
 
     // 다른 인스턴스가 재건 중이면 비켜선다. 둘이 같이 쓰면 절반씩 채운 상태가 된다
@@ -196,7 +217,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
         발급행을_심는다(9101, 1);
         redisTemplate.opsForValue().set(REBUILD_LOCK, "다른-인스턴스");
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         assertThat(redisTemplate.hasKey(COUNTER)).isFalse();
     }
@@ -206,7 +227,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
     void 재건이_끝나면_락을_푼다() {
         발급행을_심는다(9101, 1);
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         assertThat(redisTemplate.hasKey(REBUILD_LOCK)).isFalse();
     }

@@ -72,7 +72,7 @@ class CouponSeqRebuildLatencyIntegrationTest extends IntegrationTestSupport {
         int 발급행 = 발급행_수();
 
         long start = System.nanoTime();
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
 
         // 잰 값이 뜻을 가지려면 재건이 실제로 끝나 있어야 한다
