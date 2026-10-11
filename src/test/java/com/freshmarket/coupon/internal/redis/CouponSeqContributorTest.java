@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
@@ -75,7 +76,9 @@ class CouponSeqContributorTest {
         registry = new SimpleMeterRegistry();
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
         when(instances.id()).thenReturn("인스턴스-가");
-        sut = new CouponSeqContributor(redisTemplate, queue, flusher, instances, 기본_설정(), registry);
+        CouponSeqRebuildRedis rebuildRedis = mock(CouponSeqRebuildRedis.class);
+        when(rebuildRedis.template()).thenReturn(redisTemplate);
+        sut = new CouponSeqContributor(rebuildRedis, queue, flusher, instances, 기본_설정(), registry);
     }
 
     @Test
@@ -316,6 +319,8 @@ class CouponSeqContributorTest {
                 Integer.MAX_VALUE,
                 Duration.ofSeconds(2),
                 Duration.ofSeconds(3),
+                true,
+                Duration.ofSeconds(10),
                 Duration.ofSeconds(5));
     }
 

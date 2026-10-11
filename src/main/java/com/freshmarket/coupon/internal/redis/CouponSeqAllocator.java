@@ -113,7 +113,8 @@ public class CouponSeqAllocator {
             String raw = circuitBreaker.executeCallable(() -> redisTemplate.execute(
                     allocateScript,
                     List.of(CouponSeqKeys.seq(couponId), CouponSeqKeys.free(couponId),
-                            CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId)),
+                            CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId),
+                            CouponSeqKeys.rebuild(couponId)),
                     String.valueOf(memberId),
                     String.valueOf(issueLimit),
                     String.valueOf(reclaimAfter.toMillis())

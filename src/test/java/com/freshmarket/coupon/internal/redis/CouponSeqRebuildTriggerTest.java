@@ -84,7 +84,7 @@ class CouponSeqRebuildTriggerTest {
 
         sut.suspect(COUPON_ID);
 
-        verify(rebuilder, timeout(5_000)).rebuildIfLost(COUPON_ID);
+        verify(rebuilder, timeout(5_000)).rebuild(COUPON_ID);
     }
 
     /*
@@ -99,7 +99,7 @@ class CouponSeqRebuildTriggerTest {
             재건이_시작됐다.countDown();
             재건을_붙잡는다.await(5, TimeUnit.SECONDS);
             return null;
-        }).when(rebuilder).rebuildIfLost(anyLong());
+        }).when(rebuilder).rebuild(anyLong());
 
         CouponSeqRebuildTrigger sut = 트리거();
 
@@ -112,7 +112,7 @@ class CouponSeqRebuildTriggerTest {
         재건을_붙잡는다.countDown();
 
         // then
-        verify(rebuilder, timeout(5_000).times(1)).rebuildIfLost(COUPON_ID);
+        verify(rebuilder, timeout(5_000).times(1)).rebuild(COUPON_ID);
     }
 
     /*
@@ -122,7 +122,7 @@ class CouponSeqRebuildTriggerTest {
     @Test
     void 재건이_실패하면_다음_요청이_다시_띄운다() throws Exception {
         doThrow(new IllegalStateException("DB 가 답하지 않는다"))
-                .when(rebuilder).rebuildIfLost(anyLong());
+                .when(rebuilder).rebuild(anyLong());
         CouponSeqRebuildTrigger sut = 트리거();
 
         /*
@@ -136,7 +136,44 @@ class CouponSeqRebuildTriggerTest {
         }
 
         // 몇 번인지는 정하지 않는다. 이 시험이 지키려는 것은 "한 번 실패하면 끝" 이 아니라는 것뿐이다
-        verify(rebuilder, timeout(5_000).atLeast(2)).rebuildIfLost(COUPON_ID);
+        verify(rebuilder, timeout(5_000).atLeast(2)).rebuild(COUPON_ID);
+    }
+
+    /*
+     * 한 번 실패하고 끝내면 재연결 경로에서 재건이 영영 안 돈다.
+     *
+     * 요청 경로에는 "다음 요청" 이 있지만 재연결 감시는 재연결마다 한 번만 깨우므로 그 다음이
+     * 없다. 2026-10-10 J-2 회차에서 재건이 Redis 타임아웃 한 번으로 끝나 재고 10,000장 중
+     * 1,030장이 안 나갔다.
+     */
+    @Test
+    void 재건이_실패하면_그_자리에서_다시_해_본다() {
+        doThrow(new IllegalStateException("승격 직후라 느리다"))
+                .doThrow(new IllegalStateException("아직 느리다"))
+                .doNothing()
+                .when(rebuilder).rebuild(anyLong());
+        CouponSeqRebuildTrigger sut = 트리거();
+
+        // when 한 번만 부른다. 다음 요청이 띄워 주기를 기대하지 않는다
+        sut.suspect(COUPON_ID);
+
+        verify(rebuilder, timeout(5_000).times(3)).rebuild(COUPON_ID);
+    }
+
+    /*
+     * 재시도에 상한이 없으면 안 된다. 승격이 아니라 설정이 틀린 경우에는 몇 번을 해도 실패하고,
+     * 그 스레드가 영영 안 끝나면 다음 신호를 받을 일꾼이 없다.
+     */
+    @Test
+    void 계속_실패하면_세_번에서_그만둔다() {
+        doThrow(new IllegalStateException("무엇을 해도 실패한다"))
+                .when(rebuilder).rebuild(anyLong());
+        CouponSeqRebuildTrigger sut = 트리거();
+
+        sut.suspect(COUPON_ID);
+
+        verify(rebuilder, timeout(5_000).times(3)).rebuild(COUPON_ID);
+        verify(rebuilder, never()).rebuild(COUPON_ID + 1);
     }
 
     /*
@@ -164,7 +201,7 @@ class CouponSeqRebuildTriggerTest {
 
         sut.checkAfterFlush(COUPON_ID, 10);
 
-        verify(rebuilder, timeout(5_000)).rebuildIfLost(COUPON_ID);
+        verify(rebuilder, timeout(5_000)).rebuild(COUPON_ID);
     }
 
     // 평상시에는 아무 일도 안 한다. 배치마다 도는 자리라 여기서 새면 재건이 쉬지 않고 돈다
@@ -298,8 +335,8 @@ class CouponSeqRebuildTriggerTest {
         sut.suspect(COUPON_ID);
         sut.suspect(COUPON_ID + 1);
 
-        verify(rebuilder, timeout(5_000)).rebuildIfLost(COUPON_ID);
-        verify(rebuilder, timeout(5_000)).rebuildIfLost(COUPON_ID + 1);
-        verify(rebuilder, times(2)).rebuildIfLost(anyLong());
+        verify(rebuilder, timeout(5_000)).rebuild(COUPON_ID);
+        verify(rebuilder, timeout(5_000)).rebuild(COUPON_ID + 1);
+        verify(rebuilder, times(2)).rebuild(anyLong());
     }
 }

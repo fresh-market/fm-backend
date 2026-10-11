@@ -26,7 +26,7 @@ class OrderPendingCreationCoordinatorServiceTest {
     void 동시_requestId_유니크_충돌이면_기존_주문_응답으로_수렴한다() {
         OrderCreateRequest request = new OrderCreateRequest("request-1", List.of(1L), null, 10L, null);
         PendingOrderResult existing = new PendingOrderResult(
-                new OrderCreateResponse(100L, "100", OrderStatus.PAYMENT_PENDING, 25_800), false);
+                new OrderCreateResponse(100L, "100", "ORD-00000100", OrderStatus.PAYMENT_PENDING, 25_800), false);
         DataIntegrityViolationException conflict = new DataIntegrityViolationException(
                 "Duplicate entry 'request-1' for key 'uk_orders_request_id'");
         when(orderPendingCreationService.createPendingOrder(1L, request)).thenThrow(conflict);

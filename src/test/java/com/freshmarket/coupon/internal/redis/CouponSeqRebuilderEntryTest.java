@@ -5,10 +5,12 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 
+import com.freshmarket.coupon.internal.issue.CouponIssueFlusher;
 import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.repository.CouponRepository;
 import com.freshmarket.coupon.internal.repository.MemberCouponSeqRepository;
@@ -54,25 +56,34 @@ class CouponSeqRebuilderEntryTest {
     private CouponSeqContributor contributor;
 
     @Mock
+    private CouponIssueFlusher flusher;
+
+    @Mock
     private CouponSeqInstances instances;
 
     private CouponSeqRebuilder sut;
 
     @BeforeEach
     void 준비() {
-        sut = new CouponSeqRebuilder(redisTemplate, couponRepository, seqRepository,
-                seqInitializer, contributor, instances, 기본_설정(), new SimpleMeterRegistry());
+        CouponSeqRebuildRedis rebuildRedis = mock(CouponSeqRebuildRedis.class);
+        when(rebuildRedis.template()).thenReturn(redisTemplate);
+        sut = new CouponSeqRebuilder(rebuildRedis, couponRepository, seqRepository,
+                seqInitializer, contributor, flusher, instances, 기본_설정(), new SimpleMeterRegistry());
     }
 
-    // 카운터가 서 있으면 멀쩡한 것이다. DB 까지 갈 이유가 없다
+    /*
+     * 카운터가 서 있어도 진행한다.
+     *
+     * 복제가 밀린 채 승격되면 카운터는 살아 있고 값만 뒤로 간다. 그것을 관문으로 두면 그 경우가
+     * 영영 안 걸린다 (docs/coupon/rebuild-redesign.md 1장).
+     */
     @Test
-    void 카운터가_있으면_DB_를_안_본다() {
+    void 카운터가_있어도_DB_로_판정한다() {
         given카운터가_있다(true);
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
-        verifyNoInteractions(couponRepository);
-        verify(contributor, never()).contribute(anyLong());
+        verify(couponRepository).findById(COUPON_ID);
     }
 
     /*
@@ -85,7 +96,7 @@ class CouponSeqRebuilderEntryTest {
         given카운터가_있다(false);
         given재건_락이_있다(true);
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         verifyNoInteractions(couponRepository);
         verify(contributor).contribute(COUPON_ID);
@@ -102,7 +113,7 @@ class CouponSeqRebuilderEntryTest {
         when(couponRepository.findById(COUPON_ID))
                 .thenThrow(new QueryTimeoutException("DB 가 답하지 않는다"));
 
-        assertThatCode(() -> sut.rebuildIfLost(COUPON_ID)).doesNotThrowAnyException();
+        assertThatCode(() -> sut.rebuild(COUPON_ID)).doesNotThrowAnyException();
 
         verify(contributor).contribute(COUPON_ID);
     }
@@ -117,7 +128,7 @@ class CouponSeqRebuilderEntryTest {
         given재건_락이_있다(false);
         when(couponRepository.findById(COUPON_ID)).thenReturn(java.util.Optional.empty());
 
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
 
         verify(couponRepository).findById(COUPON_ID);
         verify(contributor, never()).contribute(anyLong());
@@ -144,6 +155,8 @@ class CouponSeqRebuilderEntryTest {
                 Integer.MAX_VALUE,
                 Duration.ofSeconds(2),
                 Duration.ofMillis(1),
+                true,
+                Duration.ofSeconds(10),
                 Duration.ofSeconds(5));
     }
 }

@@ -28,18 +28,54 @@ public class PaymentService {
     private final PaymentResultOutboxRepository paymentResultOutboxRepository;
     private final Clock clock;
 
-    // PG 호출 전에 PENDING 행을 별도 트랜잭션으로 확정한다. 외부 호출 동안 DB 트랜잭션을 잡지 않는다.
+    /*
+     * [2026-09-27 KST] 예전에는 여기서 곧바로 PG 승인 요청까지 이어졌지만, 토스는 프론트가 결제창에서
+     * 결제수단 선택·인증까지 마친 뒤에야 서버가 confirm을 부를 수 있는 구조라 이 메서드는 이제 PENDING
+     * 행을 만드는 데서 끝난다. 실제 승인 시도는 별도로 호출되는 beginConfirm()/confirm API가 맡는다.
+     * "PG 호출 전에 PENDING 행을 별도 트랜잭션으로 확정한다"는 원래 의도(외부 호출 동안 DB 트랜잭션을
+     * 잡지 않는다)는 여전히 유효하다 — 다만 그 외부 호출이 이제 이 메서드 밖, 훨씬 나중에 일어난다.
+     *
+     * pgOrderNo는 삽입 전에 미리 계산해 네이티브 upsert에 함께 실어야 한다(Payment.pgOrderNoFor 참고).
+     */
     @Transactional
     public PaymentPreparation preparePayment(PaymentRequest request) {
         validateRequest(request);
-        boolean newlyPrepared = paymentRepository.insertIfAbsent(request.orderId(), request.method().name(),
-                request.amount(), LocalDateTime.now(clock)) == 1;
+        String pgOrderNo = Payment.pgOrderNoFor(request.orderId());
+        boolean newlyPrepared = paymentRepository.insertIfAbsent(request.orderId(), pgOrderNo, request.memberId(),
+                request.method().name(), request.amount(), LocalDateTime.now(clock)) == 1;
         Payment payment = paymentRepository.findByOrderId(request.orderId())
                 .orElseThrow(() -> new PaymentException(PaymentErrorCode.PAYMENT_NOT_FOUND));
         if (!payment.matches(request)) {
             throw new PaymentException(PaymentErrorCode.PAYMENT_REQUEST_MISMATCH);
         }
         return new PaymentPreparation(payment, newlyPrepared);
+    }
+
+    /*
+     * [2026-09-27 KST] confirm API가 실제로 토스 confirm을 부르기 "직전"에 짧은 트랜잭션으로 부른다.
+     * 세 가지를 이 한 트랜잭션 안에서 검증한다 — 본인 주문인지(memberId), 금액이 맞는지(토스에 보낼
+     * 금액을 신뢰할 수 있는지), 같은 결제에 다른 paymentKey로 confirm이 이미 진행 중이지는 않은지.
+     * 검증을 통과하면 recordConfirmAttempt()로 paymentKey를 미리 반영해, 이후 confirm이 성공하든
+     * 실패하든 이 결제가 "confirm이 실제로 시도됐다"는 사실이 남는다 — 복구 배치가 이탈과 구분할 때
+     * 쓴다(Payment.recordConfirmAttempt 클래스 주석 참고).
+     *
+     * findByIdForUpdate 대신 findByOrderIdForUpdate를 쓴다 — 이 시점의 호출자는 order_id만 안다.
+     */
+    @Transactional
+    public Payment beginConfirm(Long orderId, Long memberId, int amount, String paymentKey) {
+        Payment payment = paymentRepository.findByOrderIdForUpdate(orderId)
+                .orElseThrow(() -> new PaymentException(PaymentErrorCode.PAYMENT_NOT_FOUND));
+        if (!payment.getMemberId().equals(memberId)) {
+            throw new PaymentException(PaymentErrorCode.PAYMENT_FORBIDDEN);
+        }
+        if (payment.getAmount() != amount) {
+            throw new PaymentException(PaymentErrorCode.PAYMENT_REQUEST_MISMATCH);
+        }
+        if (payment.hasConflictingConfirmAttempt(paymentKey)) {
+            throw new PaymentException(PaymentErrorCode.PAYMENT_CONFIRM_IN_PROGRESS);
+        }
+        payment.recordConfirmAttempt(paymentKey);
+        return payment;
     }
 
     /*
@@ -53,7 +89,7 @@ public class PaymentService {
     @Transactional
     public PaymentResult approvePayment(Long paymentId, PaymentGatewayApproval approval) {
         if (paymentId == null || paymentId <= 0 || approval == null
-                || approval.pgTid() == null || approval.paidAt() == null) {
+                || approval.pgTid() == null || approval.paidAt() == null || approval.method() == null) {
             throw new PaymentException(PaymentErrorCode.INVALID_PAYMENT_APPROVAL);
         }
         Payment payment = paymentRepository.findByIdForUpdate(paymentId)
@@ -65,7 +101,7 @@ public class PaymentService {
             throw new PaymentException(PaymentErrorCode.PAYMENT_NOT_PENDING);
         }
 
-        payment.approve(approval.pgTid(), approval.paidAt());
+        payment.approve(approval.pgTid(), approval.paidAt(), approval.method());
 
         log.info("event=PAYMENT_PAID paymentId={} orderId={} amount={} method={}",
                 payment.getId(), payment.getOrderId(), payment.getAmount(), payment.getMethod());
@@ -116,12 +152,48 @@ public class PaymentService {
         return PaymentResult.from(payment);
     }
 
+    /*
+     * [2026-09-27 KST] order가 이미 취소된 주문에 뒤늦게 승인이 온 경우의 자동 환불 흐름
+     * (PaymentCancellationService)에서, 실제 PaymentGateway.cancel() 호출 "전"에 짧은 트랜잭션으로
+     * 부른다. PAID가 아니면(이미 CANCELED로 끝났거나 애초에 승인된 적 없는 경우) 빈 Optional을
+     * 돌려줘 호출하는 쪽이 PG를 다시 부르지 않고 건너뛰게 한다 — 이벤트 재전달로 여러 번 들어와도
+     * 매번 PG를 호출하지 않는다.
+     *
+     * findByIdForUpdate로 잠근다 — 같은 결제에 대한 취소 요청이 동시에 두 번 들어와도(이벤트 재전달
+     * 등) 하나만 PG를 부르게 한다.
+     */
+    @Transactional
+    public Optional<Payment> beginCancel(Long paymentId) {
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+                .orElseThrow(() -> new PaymentException(PaymentErrorCode.PAYMENT_NOT_FOUND));
+        if (!payment.isPaid()) {
+            return Optional.empty();
+        }
+        return Optional.of(payment);
+    }
+
+    /*
+     * [2026-09-27 KST] PaymentGateway.cancel() 호출이 성공한 "뒤" 짧은 트랜잭션으로 상태를
+     * 확정한다. Payment.cancel()의 멱등 가드 덕분에 이미 CANCELED여도 안전하게 넘어간다. order는
+     * 이미 이 환불의 계기가 된 시점(주문이 먼저 CANCELED로 확정된 시점)에 알고 있으므로, 승인/실패
+     * 때와 달리 여기서는 별도로 order에 알리는 outbox/이벤트가 필요 없다.
+     */
+    @Transactional
+    public void finishCancel(Long paymentId, String reason) {
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+                .orElseThrow(() -> new PaymentException(PaymentErrorCode.PAYMENT_NOT_FOUND));
+        payment.cancel(reason);
+        log.info("event=PAYMENT_CANCELED paymentId={} orderId={} amount={} reason={}",
+                payment.getId(), payment.getOrderId(), payment.getAmount(), reason);
+    }
+
     public Optional<Payment> findPayment(Long orderId) {
         return paymentRepository.findByOrderId(orderId);
     }
 
     private void validateRequest(PaymentRequest request) {
         if (request == null || request.orderId() == null || request.orderId() <= 0
+                || request.memberId() == null || request.memberId() <= 0
                 || request.amount() <= 0 || request.method() == null) {
             throw new PaymentException(PaymentErrorCode.INVALID_PAYMENT_REQUEST);
         }

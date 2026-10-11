@@ -2,6 +2,7 @@ package com.freshmarket.coupon.internal.issue;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.web.server.context.WebServerGracefulShutdownLifecycle;
 import org.springframework.context.SmartLifecycle;
@@ -54,6 +55,6 @@ class CouponIssueFlusherPhaseTest {
      * mock 을 쓰면 getPhase 가 0 을 돌려줘 실제 구현을 못 본다.
      */
     private CouponIssueFlusher flusher() {
-        return new CouponIssueFlusher(null, null, null, null, null, null);
+        return new CouponIssueFlusher(null, null, null, null, null, null, new SimpleMeterRegistry());
     }
 }

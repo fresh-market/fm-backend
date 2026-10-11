@@ -18,9 +18,16 @@ package com.freshmarket.common.event;
  * 루트(L2)에 있어 order가 이 이벤트 안에서조차 그 타입을 참조하면 같은 규칙에 걸린다. 결제수단
  * 선택은 아직 API 범위 밖(mock 결제만 있는 지금 단계)이라, 그 값은 이 이벤트를 받는 payment 쪽
  * 리스너가 자기 도메인 안에서 정한다.
+ *
+ * [2026-09-27 KST] memberId를 추가했다 — 결제 확정(confirm) 시점에 요청자 본인 주문인지 확인해야
+ * 하는데, order/payment 둘 다 L2라 그때 가서 order에게 다시 물어볼 수 없다. 그래서 준비 단계인
+ * 지금 함께 실어 payment 쪽에 스냅샷해둔다(Payment.memberId 필드 주석 참고). 이 이벤트를 만드는
+ * OrderPaymentRequestOutboxDispatchService는 outbox 자체에는 memberId가 없어 OrderRepository로
+ * Order를 다시 조회해 채운다 — order 도메인 내부이므로 이 조회는 허용된다.
  */
 public record OrderPaymentRequestedEvent(
         Long orderId,
+        Long memberId,
         int amount
 ) {
 }
