@@ -5,7 +5,6 @@ import com.freshmarket.payment.PaymentApi;
 import com.freshmarket.payment.PaymentMethod;
 import com.freshmarket.payment.PaymentRequest;
 import com.freshmarket.payment.PaymentResult;
-import com.freshmarket.payment.PaymentStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
@@ -43,6 +42,13 @@ import org.springframework.stereotype.Component;
  * 경로는 이벤트가 아예 안 나갔다). 여기서는 결과를 로그로만 남긴다.
  *
  * 결제수단은 아직 API로 선택받지 않는다(쿠폰 미연동과 같은 이유로 이번 범위 밖) — 카드로 고정한다.
+ *
+ * [2026-09-27 KST] 실제 토스 confirm 연동을 위해 requestPayment()(동기적으로 PG를 호출하고 결과를
+ * 확정하던 메서드) 대신 preparePayment()(PENDING Payment 행만 만들고 끝나는 메서드)를 부르도록
+ * 바꿨다. 실제 PG 승인은 더 이상 여기서 일어나지 않는다 — 프론트가 토스 결제창에서 결제를 마친 뒤
+ * 별도로 부르는 확정 API(PaymentConfirmController → PaymentConfirmationService)가 담당한다.
+ * 그래서 이 리스너가 받는 결과는 이제 항상 PENDING이고, 승인/거절/UNKNOWN 여부를 로깅하던 분기는
+ * 더 이상 의미가 없어 제거했다.
  */
 @Slf4j
 @Component
@@ -53,13 +59,9 @@ class PaymentRequestedEventListener {
 
     @EventListener
     public void onPaymentRequested(OrderPaymentRequestedEvent event) {
-        PaymentResult result = paymentApi.requestPayment(
-                new PaymentRequest(event.orderId(), event.amount(), PaymentMethod.CARD));
+        PaymentResult result = paymentApi.preparePayment(
+                new PaymentRequest(event.orderId(), event.memberId(), event.amount(), PaymentMethod.CARD));
 
-        if (result.status() == PaymentStatus.UNKNOWN) {
-            log.info("payment result unknown, awaiting reconciliation. orderId={}", event.orderId());
-        } else if (result.status() != PaymentStatus.PAID) {
-            log.info("payment not approved. orderId={}, status={}", event.orderId(), result.status());
-        }
+        log.info("payment prepared, awaiting confirm. orderId={}, status={}", event.orderId(), result.status());
     }
 }
