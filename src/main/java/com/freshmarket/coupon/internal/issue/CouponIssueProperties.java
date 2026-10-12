@@ -23,6 +23,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *                   순번 확보와 응답 직렬화는 이 안에 없다
  * @param couponCacheTtl 마감이 없는 쿠폰의 스냅샷을 이 JVM 이 들고 있는 시간.
  *                       마감이 있으면 이 값을 안 쓰고 Redis 키와 같은 시각에 버린다
+ * @param freeSweepMargin 주인 잃은 번호를 되살릴 때 카운터에서 이만큼 떨어진 것만 본다.
+ *                        시각을 들고 있는 것이 없어 카운터와의 거리로 나이를 잰다
  */
 @ConfigurationProperties("coupon.issue")
 public record CouponIssueProperties(
@@ -32,7 +34,8 @@ public record CouponIssueProperties(
         @DefaultValue("1") int flushThreads,
         @DefaultValue("2147483647") int queueCapacity,
         @DefaultValue("2s") Duration commitWait,
-        @DefaultValue("5s") Duration couponCacheTtl) {
+        @DefaultValue("5s") Duration couponCacheTtl,
+        @DefaultValue("500") int freeSweepMargin) {
 
     public CouponIssueProperties {
         require(batchSize >= 1, "batchSize 는 1 이상이어야 한다");
@@ -40,6 +43,14 @@ public record CouponIssueProperties(
         require(queueCapacity >= 1, "queueCapacity 는 1 이상이어야 한다");
         require(!batchWindow.isNegative(), "batchWindow 는 음수일 수 없다");
         require(!couponCacheTtl.isNegative(), "couponCacheTtl 은 음수일 수 없다");
+
+        /*
+         * 0 이면 방금 나간 번호까지 되살릴 후보로 본다.
+         *
+         * 그 번호는 아직 큐에 떠 있어 곧 행이 되는데, 쓸기가 그것을 남에게 내주면 둘 중 하나가
+         * uk_mc_coupon_seq 에 걸려 그 요청이 실패한다 (docs/coupon/free-sweep-2026-10-12.md 4.2).
+         */
+        require(freeSweepMargin >= 1, "freeSweepMargin 은 1 이상이어야 한다");
 
         /*
          * 회수 기준이 확정 대기보다 짧으면 회수가 아직 살아 있는 요청의 번호를 뺏는다.
