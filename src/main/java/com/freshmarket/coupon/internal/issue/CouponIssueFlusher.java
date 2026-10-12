@@ -230,6 +230,19 @@ public class CouponIssueFlusher implements SmartLifecycle {
         paused = false;
     }
 
+    /*
+     * 큐에 티켓이 남아 있으면 명부에 알린다.
+     *
+     * 명부가 뜻하는 것은 "큐를 쥔 대" 다. 그런데 올리는 자리가 배치를 집을 때와 번호를 받을 때
+     * 둘뿐이라, 큐를 쥐고도 조용한 대가 STALE_AFTER 를 넘겨 빠졌다. 그 빈 명부를 재건이 "기다릴
+     * 대가 없다" 로 읽는다.
+     */
+    private void 알린다_큐를_쥐었으면() {
+        if (queue.size() > 0) {
+            rebuildSignal.getObject().holdingQueue();
+        }
+    }
+
     private void loop() {
         long windowNanos = properties.batchWindow().toNanos();
         int batchSize = properties.batchSize();
@@ -238,12 +251,31 @@ public class CouponIssueFlusher implements SmartLifecycle {
         while (running) {
             try {
                 if (paused) {
-                    // 재건이 큐를 훑는 중이다. 이 창은 밀리초 단위라 짧게 자고 다시 본다
+                    /*
+                     * 재건이 큐를 훑는 중이다. 이 창은 밀리초 단위라 짧게 자고 다시 본다.
+                     *
+                     * 멈춘 동안에도 큐를 쥐고 있으면 알린다. 재건이 명부의 수만큼 기여를 기다리는데
+                     * 여기서 멈추면 그 명부가 비어 간다. 재건이 스스로 비운 명부를 보고 기다림을
+                     * 건너뛰는 것을 막는다.
+                     */
+                    알린다_큐를_쥐었으면();
                     Thread.sleep(PAUSE_POLL_MILLIS);
                     continue;
                 }
                 IssueTicket first = queue.poll(windowNanos);
                 if (first == null) {
+                    /*
+                     * 집을 배치가 없다. 그래도 큐에 티켓이 남아 있으면 알린다.
+                     *
+                     * 배치를 집을 때만 알리던 때는 큐를 비우는 중인 대가 명부에서 빠졌다. 발급이
+                     * 끝난 뒤에는 번호도 안 나가므로 올리는 경로가 둘 다 멈춘다. 2026-10-12 S-3
+                     * 에서 재건이 instances=0 을 보고 8밀리초에 끝냈고, 둘째 대의 기여가 688밀리초
+                     * 뒤에 와서 버려졌다 (docs/coupon/rebuild-redesign-2026-10-12.md).
+                     *
+                     * poll 이 배치 윈도만큼 기다렸다 돌아오므로 이 호출은 창마다 한 번이다.
+                     * 명부 갱신은 그 안에서 주기를 따로 보므로 실제 쓰기는 더 드물다.
+                     */
+                    알린다_큐를_쥐었으면();
                     continue;
                 }
                 batch.add(first);
