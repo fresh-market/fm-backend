@@ -165,14 +165,19 @@ public class CouponSeqAllocator {
     /**
      * 받은 번호를 기억에 넣는다. 그 기억이 다음 호출에서 승격을 되돌리는 기준이 된다.
      *
-     * <p><b>준비되지 않았다는 답에서는 기억을 버린다.</b> 카운터가 사라진 것이라 이벤트가 끝났거나
-     * 전손이고, 복구가 DB 에서 다시 세우므로 지난 값을 들고 있을 이유가 없다.
+     * <p><b>준비되지 않았다는 답에서 기억을 버리면 안 된다.</b> 카운터가 사라진 것이라 복구가
+     * 곧 도는데, 그 복구가 세울 값이 {@code max(DB 최댓값, 이 기억)} 이다. 버리면 아직 큐에
+     * 떠 있는 번호가 빠진 채로 카운터가 서고, 그 구간이 통째로 다시 나간다. 큐가 5,000~5,050 을
+     * 쥐고 DB 최댓값이 4,900 이면 51개가 겹쳐 결번이 된다.
+     *
+     * <p><b>같은 쿠폰을 다시 열 때는 다른 장치가 막는다.</b> 준비 단계가 카운터를 0 으로 세우고,
+     * 스크립트가 {@code n == 1} 에서 건너뛰기를 안 하며, {@link CouponSeqMarks#saw} 가 1 을 보면
+     * 기억을 되돌린다. 복구도 카운터가 0 이면 비켜선다.
      */
     private SeqOutcome remember(long couponId, SeqOutcome outcome) {
         switch (outcome) {
             case SeqOutcome.Allocated allocated -> marks.saw(couponId, allocated.seq());
             case SeqOutcome.AlreadyIssued issued -> marks.saw(couponId, issued.seq());
-            case SeqOutcome.NotPrepared ignored -> marks.forget(couponId);
             default -> {
             }
         }

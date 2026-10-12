@@ -175,6 +175,20 @@ public class CouponSeqRebuilder {
     }
 
     /**
+     * 카운터만 올린다. DB 도 큐도 안 본다.
+     *
+     * <p><b>승격으로 뒤로 간 카운터를 요청 없이 되돌리는 자리다.</b> 보통은 순번 확보가 다음
+     * 요청에서 스스로 고치는데, ALB 가 요청을 안 보내는 인스턴스는 그 기회가 없다. 그 대가 쥔
+     * 번호는 남들이 다시 내주게 되므로 플러시 쪽에서 올린다.
+     *
+     * <p>왕복 하나다. 전손 복구와 달리 DB 를 안 읽으므로 배치마다 불러도 비싸지 않다.
+     */
+    void raiseCounter(long couponId, int bound) {
+        redisTemplate.execute(openGateScript,
+                List.of(CouponSeqKeys.counter(couponId)), String.valueOf(bound));
+    }
+
+    /**
      * 커밋된 회원의 매핑을 다시 쓴다. 값에 확정 표시를 붙인다.
      *
      * <p><b>표시를 안 붙이면 회수가 끝난 번호를 뺏는다.</b> 미확정으로 보이면 기준 시간이 지날 때

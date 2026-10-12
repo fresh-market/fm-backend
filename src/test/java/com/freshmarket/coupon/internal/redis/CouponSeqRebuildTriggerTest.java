@@ -2,6 +2,7 @@ package com.freshmarket.coupon.internal.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
@@ -238,7 +239,7 @@ class CouponSeqRebuildTriggerTest {
         assertThat(뒤처짐_최댓값()).isEqualTo(180);
     }
 
-    // 카운터가 없으면 견줄 대상이 아니다. 재건 중이거나 이벤트가 닫힌 것이다
+    // 카운터가 없으면 견줄 대상이 아니다. 전손이라 재는 대신 복구를 띄운다
     @Test
     void 카운터가_없으면_안_잰다() {
         given카운터가(null);
@@ -249,23 +250,46 @@ class CouponSeqRebuildTriggerTest {
     }
 
     /*
-     * 카운터가 사라진 동안 기준도 버려야 한다.
-     * 안 버리면 이벤트를 발급 이력째 다시 준비했을 때 옛 최댓값이 새 카운터를 뒤처진 것으로 본다.
+     * 이 시험이 2026-10-12 재설계에서 내가 지웠다 되살린 자리를 고정한다.
+     *
+     * 복구를 띄우는 자리를 요청 경로 하나로 줄였더니, ALB 가 요청을 안 보내는 인스턴스는 손실을
+     * 영영 모르게 됐다. 그 대가 자기 큐를 seq 에 못 되살리면 그 회원들의 재시도가 번호를 하나씩
+     * 더 태우고 uk_mc_coupon_member 에 걸린다.
+     *
+     * 티켓을 쥔 인스턴스는 그것을 쓰느라 반드시 이 자리를 지나므로 여기서 알아챌 수 있다.
      */
     @Test
-    void 카운터가_사라지면_기준을_버린다() {
-        CouponSeqRebuildTrigger sut = 트리거();
-        given카운터가("9000");
-        sut.checkAfterFlush(COUPON_ID, 9000);
-
+    void 카운터가_없으면_복구를_띄운다() {
         given카운터가(null);
-        sut.checkAfterFlush(COUPON_ID, 9000);
 
-        // 다시 준비된 이벤트다. 옛 9000 을 들고 있으면 여기서 뒤처짐으로 읽힌다
-        given카운터가("10");
-        sut.checkAfterFlush(COUPON_ID, 10);
+        트리거().checkAfterFlush(COUPON_ID, 5000);
 
-        assertThat(뒤처짐_표본()).isZero();
+        verify(rebuilder, timeout(5_000)).rebuild(COUPON_ID);
+    }
+
+    /*
+     * 뒤처짐을 재기만 하지 않고 올린다.
+     *
+     * 보통은 순번 확보가 다음 요청에서 스스로 고치는데, 요청을 안 받는 인스턴스는 그 기회가 없다.
+     * 그동안 이 대가 쥔 번호를 남들이 다시 내주므로 한쪽이 uk_mc_coupon_seq 에 걸린다.
+     */
+    @Test
+    void 뒤처지면_카운터를_올린다() {
+        given카운터가("4000");
+
+        트리거().checkAfterFlush(COUPON_ID, 5000);
+
+        verify(rebuilder).raiseCounter(COUPON_ID, 5000);
+    }
+
+    // 뒤처지지 않았으면 쓰지 않는다. 배치마다 도는 자리라 여기서 새면 쓰기가 초당 백 번이다
+    @Test
+    void 뒤처지지_않으면_안_올린다() {
+        given카운터가("5000");
+
+        트리거().checkAfterFlush(COUPON_ID, 4800);
+
+        verify(rebuilder, never()).raiseCounter(anyLong(), anyInt());
     }
 
     // 재는 데 실패해도 방금 쓴 배치는 이미 성공한 것이다

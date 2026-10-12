@@ -111,13 +111,23 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
      * 아니다. 다만 이 때문에 이벤트를 발급 이력째 다시 준비하면 그 첫 배치가 한 번 걸릴 수 있다.
      */
     private void measureBehind(long couponId, int maxIssuedSeq) {
-        String raw = redisTemplate.opsForValue().get(CouponSeqKeys.counter(couponId));
-        if (raw == null) {
-            marks.forget(couponId);
-            return;
-        }
         marks.saw(couponId, maxIssuedSeq);
         int mark = marks.of(couponId);
+
+        String raw = redisTemplate.opsForValue().get(CouponSeqKeys.counter(couponId));
+
+        /*
+         * 카운터가 없으면 전손이다. 이 자리에서 복구를 띄운다.
+         *
+         * 요청 경로만 두면 ALB 가 요청을 안 보내는 인스턴스는 손실을 영영 모른다. 그런데 티켓을
+         * 쥔 인스턴스는 그것을 쓰느라 반드시 이 자리를 지나므로 여기서 알아챌 수 있다.
+         * 그 대가 자기 큐를 seq 에 못 되살리면 그 회원들의 재시도가 번호를 하나씩 더 태운다
+         * (coupon.md 9장, docs/coupon/rebuild-rearchitecture-2026-10-12.md 5.3).
+         */
+        if (raw == null) {
+            suspect(couponId);
+            return;
+        }
         long counter;
         try {
             counter = Long.parseLong(raw);
@@ -132,6 +142,17 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
         behind.record(gap);
         log.error("event=COUPON_SEQ_COUNTER_BEHIND couponId={} counter={} seen={} gap={}",
                 couponId, counter, mark, gap);
+
+        /*
+         * 재서 알리는 데 그치지 않고 올린다.
+         *
+         * 보통은 순번 확보가 다음 요청에서 스스로 고치는데, 요청을 안 받는 인스턴스는 그 기회가
+         * 없다. 그동안 이 대가 쥔 번호를 남들이 다시 내주므로 한쪽이 uk_mc_coupon_seq 에 걸린다.
+         *
+         * 올리기만 하는 쓰기라 남이 더 높게 세워 두었으면 아무 일도 안 한다. 그래서 여러 대가
+         * 각자 올려도 결과가 전체 최댓값으로 수렴한다.
+         */
+        rebuilder.raiseCounter(couponId, mark);
     }
 
     /**

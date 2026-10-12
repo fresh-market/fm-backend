@@ -67,7 +67,8 @@ local n = redis.call('INCR', KEYS[3])
 local mark = tonumber(ARGV[4])
 if n > 1 and mark and n <= mark then
   n = mark + 1
-  redis.call('SET', KEYS[3], n)
+  -- KEEPTTL 이 없으면 이 쓰기가 카운터의 만료를 지운다. 카운터가 네 키의 수명을 들고 있다
+  redis.call('SET', KEYS[3], n, 'KEEPTTL')
 end
 
 if n <= tonumber(ARGV[2]) then
@@ -75,7 +76,10 @@ if n <= tonumber(ARGV[2]) then
 end
 
 -- 넘긴 만큼만 되돌린다. 위에서 건너뛰었으면 그 값에서 하나를 내린다
-redis.call('SET', KEYS[3], n - 1)
+--
+-- DECR 이 아니라 SET 인 이유는 건너뛴 경우에 하나만 내려서는 안 되기 때문이다.
+-- KEEPTTL 이 없으면 DECR 과 달리 만료가 지워진다.
+redis.call('SET', KEYS[3], n - 1, 'KEEPTTL')
 
 -- 여기까지 왔으면 소진이다. 번호만 받고 사라진 요청이 있으면 그 번호를 회수해 이 요청에게 준다
 -- 재고가 남아 있는 동안에는 이 스크립트가 여기까지 안 오므로 평상시에 드는 비용이 없다

@@ -229,6 +229,27 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
         assertThat(redisTemplate.hasKey(SEQ)).isFalse();
     }
 
+    /*
+     * 카운터를 올리는 쓰기가 만료를 지우지 않는다.
+     *
+     * 카운터가 네 키의 수명을 들고 있어서, 그것이 사라지면 넷이 이벤트보다 오래 산다. 뒤이어
+     * 도는 수명 물려주기도 물려줄 값을 못 찾아 free 에만 만료가 영영 안 붙는다.
+     *
+     * 전손 복구는 뒤에서 applyTtl 로 다시 거니까 그 경로만 보면 안 드러난다. 뒤처짐에서 카운터만
+     * 올리는 경로가 그 복원을 안 지나므로 거기서 샌다. 그래서 스크립트가 KEEPTTL 로 지킨다.
+     */
+    @Test
+    void 카운터를_올려도_만료가_남는다() {
+        발급행을_심는다(9101, 50);
+        redisTemplate.opsForValue().set(COUNTER, "7");
+        redisTemplate.expire(COUNTER, java.time.Duration.ofMinutes(10));
+
+        sut.rebuild(COUPON_ID);
+
+        assertThat(redisTemplate.opsForValue().get(COUNTER)).isEqualTo("50");
+        assertThat(redisTemplate.getExpire(COUNTER)).isPositive();
+    }
+
     // 락을 안 잡는다. 잡으면 다음 손실을 그 TTL 만큼 못 고친다
     @Test
     void 락_키를_만들지_않는다() {
