@@ -84,7 +84,7 @@ class CouponIssueServiceTest {
     void setUp() {
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofMillis(100), Duration.ofSeconds(3), true, Duration.ofSeconds(10), Duration.ofSeconds(5));
+                Duration.ofMillis(100), Duration.ofSeconds(5));
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
         sut = new CouponIssueService(couponCache, memberApi, allocator, rebuildTrigger, queue, writeCircuit,
                 properties, metrics, fixed);
@@ -285,36 +285,6 @@ class CouponIssueServiceTest {
 
         // then
         verify(rebuildTrigger).suspect(COUPON_ID);
-    }
-
-    /*
-     * 재건이 이미 돌고 있으면 띄우지 않는다.
-     *
-     * 이 갈래와 NotPrepared 를 같은 -2 로 받던 때는 재건 중에도 "재건해라" 가 쏟아졌다. 2만 VU
-     * 가 그 응답을 받으므로, 재건이 끝나 inProgress 가 비는 순간 다음 재건이 바로 떴다.
-     * 2026-10-12 Q-1 에서 한 대가 80밀리초와 56밀리초 뒤에 자기가 다시 주도해 네 번 돌았다.
-     */
-    @Test
-    void 재건_중이면_재건을_안_띄운다() {
-        // given
-        givenAllocated(new SeqOutcome.Rebuilding());
-
-        // when
-        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
-                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
-
-        // then
-        verify(rebuildTrigger, never()).suspect(anyLong());
-        verify(queue, never()).submit(any());
-    }
-
-    // 둘을 가르는 것이 이 변경의 요점이다. 사용자 응답은 같아야 한다
-    @Test
-    void 재건_중도_혼잡으로_답한다() {
-        givenAllocated(new SeqOutcome.Rebuilding());
-
-        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
-                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
     }
 
     // 순번을 받은 요청은 재건을 안 띄운다. 정상 경로에 이 신호가 새면 재건이 쉬지 않고 돈다

@@ -46,7 +46,6 @@ public class CouponSeqAllocator {
     private static final String SOLD_OUT = "-1";
     private static final String NOT_PREPARED = "-2";
     private static final String SOLD_OUT_FINAL = "-3";
-    private static final String REBUILDING = "-4";
 
     private final StringRedisTemplate redisTemplate;
     private final RedisScript<String> allocateScript;
@@ -54,20 +53,21 @@ public class CouponSeqAllocator {
     private final CircuitBreaker circuitBreaker;
 
     /*
-     * 번호를 받은 인스턴스를 명부에 올리려고 식별자만 쓴다.
+     * 이 인스턴스가 받아 본 최대 순번을 스크립트에 넘긴다.
      *
-     * 스크립트가 올리므로 이 클래스는 ID 를 넘기는 일만 한다. 재건이 그 명부의 수만큼 기여를
-     * 기다리는데, 플러시가 배치를 집을 때만 갱신하던 때는 요청을 드물게 받는 대가 빠졌다
-     * (docs/coupon/rebuild-redesign-2026-10-12.md 5장).
+     * 승격으로 카운터가 뒤로 가도 그 번호들은 누군가 쥐고 있다. 내가 쥔 것은 내가 아는 값으로
+     * 지키고 남이 쥔 것은 남이 자기 값으로 지킨다. 카운터가 올리기만 하는 값이라 그렇게 각자
+     * 올려도 결과가 전체 최댓값으로 수렴하고, 그래서 아무도 몇 대인지 셀 필요가 없다
+     * (docs/coupon/rebuild-rearchitecture-2026-10-12.md 4장).
      */
-    private final CouponSeqInstances instances;
+    private final CouponSeqMarks marks;
 
     public CouponSeqAllocator(StringRedisTemplate redisTemplate,
                               CouponIssueProperties properties,
                               CircuitBreakerRegistry circuitBreakers,
-                              CouponSeqInstances instances) {
+                              CouponSeqMarks marks) {
         this.redisTemplate = redisTemplate;
-        this.instances = instances;
+        this.marks = marks;
         this.reclaimAfter = properties.reclaimAfter();
         this.allocateScript = loadAllocateScript();
         /*
@@ -125,14 +125,13 @@ public class CouponSeqAllocator {
             String raw = circuitBreaker.executeCallable(() -> redisTemplate.execute(
                     allocateScript,
                     List.of(CouponSeqKeys.seq(couponId), CouponSeqKeys.free(couponId),
-                            CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId),
-                            CouponSeqKeys.rebuild(couponId), CouponSeqKeys.instances()),
+                            CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId)),
                     String.valueOf(memberId),
                     String.valueOf(issueLimit),
                     String.valueOf(reclaimAfter.toMillis()),
-                    instances.id()
+                    String.valueOf(marks.of(couponId))
             ));
-            return parse(raw);
+            return remember(couponId, parse(raw));
         } catch (CallNotPermittedException e) {
             throw new CouponSeqUnavailableException("순번 확보 회로가 열려 있다", e);
         } catch (DataAccessException e) {
@@ -163,12 +162,26 @@ public class CouponSeqAllocator {
         return raw != null ? Optional.of(Integer.parseInt(raw)) : Optional.empty();
     }
 
+    /**
+     * 받은 번호를 기억에 넣는다. 그 기억이 다음 호출에서 승격을 되돌리는 기준이 된다.
+     *
+     * <p><b>준비되지 않았다는 답에서는 기억을 버린다.</b> 카운터가 사라진 것이라 이벤트가 끝났거나
+     * 전손이고, 복구가 DB 에서 다시 세우므로 지난 값을 들고 있을 이유가 없다.
+     */
+    private SeqOutcome remember(long couponId, SeqOutcome outcome) {
+        switch (outcome) {
+            case SeqOutcome.Allocated allocated -> marks.saw(couponId, allocated.seq());
+            case SeqOutcome.AlreadyIssued issued -> marks.saw(couponId, issued.seq());
+            case SeqOutcome.NotPrepared ignored -> marks.forget(couponId);
+            default -> {
+            }
+        }
+        return outcome;
+    }
+
     private SeqOutcome parse(String raw) {
         if (NOT_PREPARED.equals(raw)) {
             return new SeqOutcome.NotPrepared();
-        }
-        if (REBUILDING.equals(raw)) {
-            return new SeqOutcome.Rebuilding();
         }
         if (SOLD_OUT.equals(raw)) {
             return new SeqOutcome.SoldOut();

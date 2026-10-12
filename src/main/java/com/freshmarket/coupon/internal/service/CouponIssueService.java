@@ -128,7 +128,6 @@ public class CouponIssueService {
              *
              * 사용자에게는 위와 같이 답한다. 재고는 남아 있을 수 있고 재시도할 값이 있다.
              */
-            case SeqOutcome.Rebuilding ignored -> throw congested(IssueResult.NOT_PREPARED);
         };
     }
 

@@ -51,7 +51,7 @@ class CouponSeqAllocatorCircuitTest {
     void setUp() {
         CouponIssueProperties issueProperties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofSeconds(2), Duration.ofSeconds(3), true, Duration.ofSeconds(10), Duration.ofSeconds(5));
+                Duration.ofSeconds(2), Duration.ofSeconds(5));
         /*
          * 운영 값은 application.yml 이 갖는다. 여기서는 시험이 짧게 끝나도록 작게 잡은
          * 설정으로 레지스트리를 만들어 넣는다. 이름이 couponSeq 여야 코드가 그것을 집는다.
@@ -68,23 +68,13 @@ class CouponSeqAllocatorCircuitTest {
                 .automaticTransitionFromOpenToHalfOpenEnabled(true)
                 .slowCallDurationThreshold(Duration.ofMillis(500))
                 .build());
-        sut = new CouponSeqAllocator(redisTemplate, issueProperties, registry, 명부());
+        sut = new CouponSeqAllocator(redisTemplate, issueProperties, registry, new CouponSeqMarks());
         /*
          * 운영에서는 이 회로가 METRICS_ONLY 로 떠서 호출을 안 막는다 (CouponSeqAllocator 참조).
          * 아래 시험들은 회로가 열리는 동작 자체를 보는 것이라 여기서 닫힘으로 되돌린다.
          * 켜기로 결정이 바뀌면 이 줄을 지우고 시험이 그대로 통과해야 한다.
          */
         registry.circuitBreaker("couponSeq").transitionToClosedState();
-    }
-
-    /*
-     * 번호를 내줄 때 명부에 올리는 ID 만 쓴다. 올리는 것은 스크립트가 한다.
-     *
-     * id() 를 스텁하지 않는다. 이 시험들은 Redis 가 터지는 경로를 보므로 그 호출에 닿지 않는
-     * 것도 있고, 엄격 모드가 쓰이지 않은 스텁을 실패로 센다. 목의 기본값(null)으로 족하다.
-     */
-    private static CouponSeqInstances 명부() {
-        return mock(CouponSeqInstances.class);
     }
 
     /*
@@ -98,9 +88,9 @@ class CouponSeqAllocatorCircuitTest {
         CircuitBreakerRegistry registry = CircuitBreakerRegistry.of(CircuitBreakerConfig.ofDefaults());
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofSeconds(2), Duration.ofSeconds(3), true, Duration.ofSeconds(10), Duration.ofSeconds(5));
+                Duration.ofSeconds(2), Duration.ofSeconds(5));
 
-        new CouponSeqAllocator(redisTemplate, properties, registry, 명부());
+        new CouponSeqAllocator(redisTemplate, properties, registry, new CouponSeqMarks());
 
         assertThat(registry.circuitBreaker("couponSeq").getState())
                 .isEqualTo(CircuitBreaker.State.METRICS_ONLY);

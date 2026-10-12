@@ -11,7 +11,6 @@ import java.util.concurrent.ThreadFactory;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import com.freshmarket.coupon.internal.exception.DataAccessFailures;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -45,9 +44,6 @@ public class CouponIssueFlusher implements SmartLifecycle {
 
     private static final long SHUTDOWN_WAIT_SECONDS = 10;
 
-    // 멈춘 동안 루프가 다시 보는 간격이다. 배치 윈도우보다 짧아야 재개가 늦지 않는다
-    private static final long PAUSE_POLL_MILLIS = 5;
-
     private final CouponIssueQueue queue;
     private final MemberCouponBulkRepository bulkRepository;
     private final CouponSeqCommitter committer;
@@ -79,16 +75,6 @@ public class CouponIssueFlusher implements SmartLifecycle {
     private Timer markCommit;
 
     private volatile boolean running;
-
-    /*
-     * 재건이 큐를 훑는 동안 켜진다.
-     * 이것이 없으면 훑는 사이에 플러시가 같은 티켓을 DB 로 내려, 재건이 확정된 매핑을 미확정으로
-     * 덮는다. 그러면 회수가 그 번호를 남에게 넘겨 같은 번호가 두 번 나간다 (coupon.md 9장).
-     */
-    private volatile boolean paused;
-
-    // 지금 배치를 쓰고 있는 스레드 수다. 멈춤은 이 값이 0 이 되어야 완료된다
-    private final AtomicInteger inFlight = new AtomicInteger();
 
     private ExecutorService executor;
 
@@ -196,53 +182,6 @@ public class CouponIssueFlusher implements SmartLifecycle {
         }
     }
 
-    /**
-     * 큐를 얼린다. 돌고 있던 배치가 끝날 때까지 기다리고 돌아온다.
-     *
-     * <p>재건이 큐를 훑기 직전에 부른다. 표시만 켜고 돌아오면 아직 쓰고 있는 배치가 남아 있어,
-     * 훑는 도중에 그 티켓들이 DB 로 내려간다.
-     *
-     * @return 정말로 멈췄으면 true. 시한 안에 배치가 안 끝나면 false 이고, 그때는 부른 쪽이
-     *         훑기를 포기해야 한다
-     */
-    public boolean pause(Duration timeout) {
-        paused = true;
-        long deadline = System.nanoTime() + timeout.toNanos();
-        while (inFlight.get() > 0) {
-            if (System.nanoTime() > deadline) {
-                log.warn("event=COUPON_FLUSHER_PAUSE_TIMEOUT inFlight={}", inFlight.get());
-                paused = false;
-                return false;
-            }
-            try {
-                Thread.sleep(PAUSE_POLL_MILLIS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                paused = false;
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /** 얼린 큐를 다시 흐르게 한다. {@link #pause} 가 true 를 줬으면 반드시 짝을 지어 부른다. */
-    public void resume() {
-        paused = false;
-    }
-
-    /*
-     * 큐에 티켓이 남아 있으면 명부에 알린다.
-     *
-     * 명부가 뜻하는 것은 "큐를 쥔 대" 다. 그런데 올리는 자리가 배치를 집을 때와 번호를 받을 때
-     * 둘뿐이라, 큐를 쥐고도 조용한 대가 STALE_AFTER 를 넘겨 빠졌다. 그 빈 명부를 재건이 "기다릴
-     * 대가 없다" 로 읽는다.
-     */
-    private void 알린다_큐를_쥐었으면() {
-        if (queue.size() > 0) {
-            rebuildSignal.getObject().holdingQueue();
-        }
-    }
-
     private void loop() {
         long windowNanos = properties.batchWindow().toNanos();
         int batchSize = properties.batchSize();
@@ -250,32 +189,8 @@ public class CouponIssueFlusher implements SmartLifecycle {
 
         while (running) {
             try {
-                if (paused) {
-                    /*
-                     * 재건이 큐를 훑는 중이다. 이 창은 밀리초 단위라 짧게 자고 다시 본다.
-                     *
-                     * 멈춘 동안에도 큐를 쥐고 있으면 알린다. 재건이 명부의 수만큼 기여를 기다리는데
-                     * 여기서 멈추면 그 명부가 비어 간다. 재건이 스스로 비운 명부를 보고 기다림을
-                     * 건너뛰는 것을 막는다.
-                     */
-                    알린다_큐를_쥐었으면();
-                    Thread.sleep(PAUSE_POLL_MILLIS);
-                    continue;
-                }
                 IssueTicket first = queue.poll(windowNanos);
                 if (first == null) {
-                    /*
-                     * 집을 배치가 없다. 그래도 큐에 티켓이 남아 있으면 알린다.
-                     *
-                     * 배치를 집을 때만 알리던 때는 큐를 비우는 중인 대가 명부에서 빠졌다. 발급이
-                     * 끝난 뒤에는 번호도 안 나가므로 올리는 경로가 둘 다 멈춘다. 2026-10-12 S-3
-                     * 에서 재건이 instances=0 을 보고 8밀리초에 끝냈고, 둘째 대의 기여가 688밀리초
-                     * 뒤에 와서 버려졌다 (docs/coupon/rebuild-redesign-2026-10-12.md).
-                     *
-                     * poll 이 배치 윈도만큼 기다렸다 돌아오므로 이 호출은 창마다 한 번이다.
-                     * 명부 갱신은 그 안에서 주기를 따로 보므로 실제 쓰기는 더 드물다.
-                     */
-                    알린다_큐를_쥐었으면();
                     continue;
                 }
                 batch.add(first);
@@ -288,25 +203,12 @@ public class CouponIssueFlusher implements SmartLifecycle {
                     queueWait.record(pickedAt - ticket.queuedAtNanos(), TimeUnit.NANOSECONDS);
                 }
 
+                flush(batch);
                 /*
-                 * 큐를 쥐었다는 것을 쓰기보다 먼저 알린다.
-                 * 아래 checkAfterFlush 에 묶으면 DB 가 막힌 인스턴스가 배치를 못 끝내 알림도
-                 * 멈춘다. 하필 그때가 큐가 두꺼워 기여가 가장 중요한 순간이다.
-                 */
-                rebuildSignal.getObject().holdingQueue();
-
-                inFlight.incrementAndGet();
-                try {
-                    flush(batch);
-                } finally {
-                    inFlight.decrementAndGet();
-                }
-                /*
-                 * 재건이 도는지 배치마다 한 번 본다. 요청당이 아니라 배치당이라 값이 싸다.
-                 * 이 확인이 없으면 요청을 못 받는 인스턴스가 자기 큐를 영영 안 올린다 (coupon.md 9장).
+                 * 방금 쓴 최대 순번을 카운터와 견준다. 배치당 한 번이라 값이 싸다.
                  *
-                 * 방금 쓴 최대 순번을 함께 넘긴다. 카운터가 그보다 작으면 깨질 수 없는 식이 깨진
-                 * 것이고, 그 비교를 여기서만 공짜로 할 수 있다. 번호를 쥔 쪽이 이 스레드다.
+                 * 카운터가 그보다 작으면 깨질 수 없는 식이 깨진 것이고, 그 비교를 여기서만 공짜로
+                 * 할 수 있다. 번호를 쥔 쪽이 이 스레드다.
                  */
                 rebuildSignal.getObject().checkAfterFlush(couponId, maxIssuedSeq(batch));
             } catch (InterruptedException e) {

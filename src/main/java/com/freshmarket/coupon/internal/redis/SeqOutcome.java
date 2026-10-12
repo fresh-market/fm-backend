@@ -40,14 +40,4 @@ public sealed interface SeqOutcome {
     record NotPrepared() implements SeqOutcome {
     }
 
-    /**
-     * 재건이 도는 중이다. 재고는 있을 수 있으므로 {@link NotPrepared} 와 같이 503 으로 답한다.
-     *
-     * <p><b>이 갈래를 받은 요청은 재건을 띄우지 않는다.</b> 이미 돌고 있기 때문이다. 한때 둘을
-     * 같은 {@code -2} 로 내려받아 재건 중에도 "재건해라" 신호가 쏟아졌고, 재건이 끝나는 순간
-     * 다음 재건이 예약된 상태가 됐다. 2026-10-12 Q-1 에서 한 대가 네 번 연달아 주도했다
-     * ({@code docs/coupon/rebuild-redesign-2026-10-12.md} 6장).
-     */
-    record Rebuilding() implements SeqOutcome {
-    }
 }
