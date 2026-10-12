@@ -160,7 +160,16 @@ public class CouponSeqFreeSweeper {
         for (int from = 0; from < candidates.size(); from += CHUNK) {
             added += revive(couponId, candidates.subList(from, Math.min(from + CHUNK, candidates.size())));
         }
+        /*
+         * 후보가 있는데 하나도 못 넣은 경우를 따로 남긴다.
+         *
+         * 안 가르면 "되살릴 것이 없었다" 와 "전부 누군가 쥐고 있었다" 가 로그에서 같아진다.
+         * 2026-10-13 V-1 에서 되살림이 0 이었는데 그것이 조건 때문인지 연결이 죽어서인지를
+         * 로그로 가리지 못해 DB 를 따로 뒤져야 했다.
+         */
         if (added == 0) {
+            log.info("event=COUPON_SEQ_FREE_ALL_HELD couponId={} counter={} candidates={}",
+                    couponId, counter, candidates.size());
             return;
         }
         revived.increment(added);
