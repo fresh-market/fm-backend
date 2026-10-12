@@ -56,4 +56,15 @@ final class CouponSeqKeys {
     static String rebuildQueued(long couponId) {
         return PREFIX + couponId + ":rebuild:queued";
     }
+
+    /*
+     * 큐에 티켓을 쥘 수 있는 인스턴스의 명부다. 점수가 갱신 시각이고 쿠폰별이 아니다.
+     *
+     * 순번 확보 스크립트가 번호를 내줄 때 올리고, 플러시도 배치를 집을 때 올린다. 재건이 그 수
+     * 만큼 기여를 기다리므로 번호를 받은 대가 빠지면 주도자가 덜 기다린 채 키를 세운다
+     * (docs/coupon/rebuild-redesign-2026-10-12.md 5장).
+     */
+    static String instances() {
+        return "coupon:instances";
+    }
 }

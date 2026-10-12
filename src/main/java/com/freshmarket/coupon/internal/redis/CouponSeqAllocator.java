@@ -46,16 +46,28 @@ public class CouponSeqAllocator {
     private static final String SOLD_OUT = "-1";
     private static final String NOT_PREPARED = "-2";
     private static final String SOLD_OUT_FINAL = "-3";
+    private static final String REBUILDING = "-4";
 
     private final StringRedisTemplate redisTemplate;
     private final RedisScript<String> allocateScript;
     private final Duration reclaimAfter;
     private final CircuitBreaker circuitBreaker;
 
+    /*
+     * 번호를 받은 인스턴스를 명부에 올리려고 식별자만 쓴다.
+     *
+     * 스크립트가 올리므로 이 클래스는 ID 를 넘기는 일만 한다. 재건이 그 명부의 수만큼 기여를
+     * 기다리는데, 플러시가 배치를 집을 때만 갱신하던 때는 요청을 드물게 받는 대가 빠졌다
+     * (docs/coupon/rebuild-redesign-2026-10-12.md 5장).
+     */
+    private final CouponSeqInstances instances;
+
     public CouponSeqAllocator(StringRedisTemplate redisTemplate,
                               CouponIssueProperties properties,
-                              CircuitBreakerRegistry circuitBreakers) {
+                              CircuitBreakerRegistry circuitBreakers,
+                              CouponSeqInstances instances) {
         this.redisTemplate = redisTemplate;
+        this.instances = instances;
         this.reclaimAfter = properties.reclaimAfter();
         this.allocateScript = loadAllocateScript();
         /*
@@ -114,10 +126,11 @@ public class CouponSeqAllocator {
                     allocateScript,
                     List.of(CouponSeqKeys.seq(couponId), CouponSeqKeys.free(couponId),
                             CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId),
-                            CouponSeqKeys.rebuild(couponId)),
+                            CouponSeqKeys.rebuild(couponId), CouponSeqKeys.instances()),
                     String.valueOf(memberId),
                     String.valueOf(issueLimit),
-                    String.valueOf(reclaimAfter.toMillis())
+                    String.valueOf(reclaimAfter.toMillis()),
+                    instances.id()
             ));
             return parse(raw);
         } catch (CallNotPermittedException e) {
@@ -140,7 +153,7 @@ public class CouponSeqAllocator {
     /**
      * 지금까지 나간 순번 수를 읽는다. 발급 현황 조회가 부른다.
      *
-     * <p>단순 {@code GET} 이라 순번 확보 스크립트와 자원을 다투지 않는다. 회로도 안 씌운다 —
+     * <p>단순 {@code GET} 이라 순번 확보 스크립트와 자원을 다투지 않는다. 회로도 안 씌운다.
      * 이 값을 못 읽어도 발급 자체는 막히지 않으므로, 실패하면 호출부가 DB 값으로 대체하면 된다.
      *
      * @return 카운터 키가 없으면(이벤트가 열린 적 없거나 이미 닫혀 키가 지워졌다) 빈 값
@@ -153,6 +166,9 @@ public class CouponSeqAllocator {
     private SeqOutcome parse(String raw) {
         if (NOT_PREPARED.equals(raw)) {
             return new SeqOutcome.NotPrepared();
+        }
+        if (REBUILDING.equals(raw)) {
+            return new SeqOutcome.Rebuilding();
         }
         if (SOLD_OUT.equals(raw)) {
             return new SeqOutcome.SoldOut();
