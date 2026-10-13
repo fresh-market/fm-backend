@@ -186,11 +186,17 @@ public class CouponSeqRebuilder {
             return;
         }
         try {
-            lead(couponId, coupon);
+            lead(couponId, coupon, lock);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("event=COUPON_SEQ_REBUILD_INTERRUPTED couponId={}", couponId);
         } finally {
+            /*
+             * 카운터를 세운 직후에 이미 풀었으면 이것은 아무 일도 안 한다.
+             *
+             * 그래도 남겨 둔다. 멈추기가 실패하거나 재준비로 그만둔 경로는 카운터를 안 쓰고
+             * 돌아가므로 여기서 풀어야 락이 TTL 까지 남지 않는다.
+             */
             releaseLock(couponId, lock);
         }
     }
@@ -205,7 +211,7 @@ public class CouponSeqRebuilder {
      * 먼저 읽으면 그사이 넘어간 티켓이 양쪽에 다 잡히지만, DB 를 먼저 읽으면 <b>어디에도 안
      * 잡혀 결번이 된다.</b>
      */
-    private void lead(long couponId, Coupon coupon) throws InterruptedException {
+    private void lead(long couponId, Coupon coupon, RebuildLock lock) throws InterruptedException {
         log.warn("event=COUPON_SEQ_REBUILD_STARTED couponId={} contributeWaitMillis={}",
                 couponId, contributeWait.toMillis());
 
@@ -240,15 +246,15 @@ public class CouponSeqRebuilder {
             return;
         }
         try {
-            leadWhilePaused(couponId, coupon, startedAt, expected);
+            leadWhilePaused(couponId, coupon, startedAt, expected, lock);
         } finally {
             flusher.resume();
             clearContributions(couponId);
         }
     }
 
-    private void leadWhilePaused(long couponId, Coupon coupon, long startedAt, OptionalInt expected)
-            throws InterruptedException {
+    private void leadWhilePaused(long couponId, Coupon coupon, long startedAt, OptionalInt expected,
+                                 RebuildLock lock) throws InterruptedException {
         contributor.uploadWhilePaused(couponId);
         long contributedAt = System.nanoTime();
         awaitContributions(couponId, expected);
@@ -274,6 +280,17 @@ public class CouponSeqRebuilder {
         addPending(couponId, queued);
         writeFree(couponId, gaps(issued, queued, maxSeq));
         openGate(couponId, maxSeq, coupon.getIssueEndAt());
+
+        /*
+         * 문이 열렸으니 락을 바로 푼다. 뒷정리를 기다리게 하지 않는다.
+         *
+         * 락이 남아 있는 동안 순번 확보가 -4 를 내므로 그 쿠폰의 발급이 멈춰 있다. 한때 이것을
+         * 뒷정리(resume, clearContributions) 뒤에 풀었고, 그 구간만큼 발급이 더 멈췄다.
+         *
+         * 카운터가 이미 섰으므로 여기서 풀어도 틀린 번호가 안 나간다. 그것이 "카운터를 가장
+         * 마지막에 쓴다" 는 설계의 값이다 (docs/coupon/rebuild-redesign-2026-10-12.md 6.4).
+         */
+        releaseLock(couponId, lock);
 
         /*
          * 문이 열리는 자리가 여기다. 뒷정리는 그 뒤이므로 재는 끝점도 여기다.
