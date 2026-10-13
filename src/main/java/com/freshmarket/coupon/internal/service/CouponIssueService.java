@@ -116,18 +116,6 @@ public class CouponIssueService {
                 rebuildTrigger.suspect(couponId);
                 throw congested(IssueResult.NOT_PREPARED);
             }
-
-            /*
-             * 재건이 이미 돌고 있다. 띄우지 않는다.
-             *
-             * 한때 위 갈래와 같은 -2 를 받아 똑같이 띄웠는데, 재건이 도는 동안 그 응답이 쏟아져
-             * 재건이 끝나는 순간 다음 재건이 예약된 상태가 됐다. 2026-10-12 Q-1 에서 한 대가
-             * 80밀리초와 56밀리초 뒤에 자기가 다시 주도해 네 번 돌았고, 그 정지가 쌓여 p99 가
-             * SLO 경계에 닿고 재고 591장이 안 나갔다
-             * (docs/coupon/rebuild-redesign-2026-10-12.md 6장).
-             *
-             * 사용자에게는 위와 같이 답한다. 재고는 남아 있을 수 있고 재시도할 값이 있다.
-             */
         };
     }
 

@@ -1,0 +1,372 @@
+package com.freshmarket.coupon.internal.redis;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.OptionalInt;
+
+import com.freshmarket.coupon.internal.entity.Coupon;
+import com.freshmarket.coupon.internal.issue.CouponIssueFlusher;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
+import com.freshmarket.coupon.internal.repository.CouponRepository;
+import com.freshmarket.coupon.internal.repository.MemberCouponSeqRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.data.redis.core.HashOperations;
+import org.springframework.data.redis.core.SetOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.data.redis.core.ZSetOperations;
+
+/*
+ * 주도자가 남의 큐를 언제까지 기다리는지를 본다.
+ *
+ * 예전에는 고정으로 잤고 그 시간이 재건 정지의 대부분이었다. 지금은 명부의 수만큼 표시가 차면
+ * 그 자리에서 끝낸다. 이 클래스가 지켜야 하는 것은 둘이다. 다 모이면 일찍 끝내는가, 그리고
+ * 모르겠을 때 일찍 끝내지 않는가. 둘째가 더 중요하다. 덜 기다리면 남의 번호를 다시 내준다.
+ */
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+class CouponSeqRebuilderAwaitTest {
+
+    private static final long COUPON_ID = 9001L;
+    private static final Duration 기다림 = Duration.ofSeconds(2);
+
+    @Mock
+    private StringRedisTemplate redisTemplate;
+    @Mock
+    private CouponRepository couponRepository;
+    @Mock
+    private MemberCouponSeqRepository seqRepository;
+    @Mock
+    private CouponSeqInitializer seqInitializer;
+    @Mock
+    private CouponSeqContributor contributor;
+
+    @Mock
+    private CouponIssueFlusher flusher;
+    @Mock
+    private CouponSeqInstances instances;
+    @Mock
+    private ValueOperations<String, String> valueOperations;
+    @Mock
+    private SetOperations<String, String> setOperations;
+    @Mock
+    private HashOperations<String, Object, Object> hashOperations;
+    @Mock
+    private ZSetOperations<String, String> zSetOperations;
+
+    private CouponSeqRebuilder sut;
+    private SimpleMeterRegistry registry;
+
+    @BeforeEach
+    void 준비() {
+        registry = new SimpleMeterRegistry();
+        CouponSeqRebuildRedis rebuildRedis = mock(CouponSeqRebuildRedis.class);
+        when(rebuildRedis.template()).thenReturn(redisTemplate);
+        sut = new CouponSeqRebuilder(rebuildRedis, couponRepository, seqRepository,
+                seqInitializer, contributor, flusher, instances, 설정(기다림), registry);
+
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(true);
+        // 재건이 쓰기가 끝날 때까지 멈춘 채로 도므로 멈추기가 성공해야 본문에 들어간다
+        when(flusher.pause(any(Duration.class))).thenReturn(true);
+        when(redisTemplate.hasKey(anyString())).thenReturn(false);
+        when(hashOperations.entries(anyString())).thenReturn(java.util.Map.of());
+        when(seqRepository.findIssuedSeqs(anyLong())).thenReturn(List.of());
+        // 목을 먼저 다 만들고 나서 스텁한다. when 인자 안에서 다른 목을 스텁하면 Mockito 가 거부한다
+        Coupon coupon = 선착순_쿠폰();
+        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
+    }
+
+    // 다 모이면 정해진 시간을 다 안 쓴다. 이 변경의 목적이다
+    @Test
+    void 명부만큼_모이면_일찍_끝낸다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        long elapsed = 재_보기();
+
+        assertThat(elapsed).isLessThan(기다림.toMillis());
+    }
+
+    /*
+     * 이 시험이 이 클래스의 핵심이다.
+     * 한 대가 아직 안 올렸으면 끝까지 기다려야 한다. 덜 기다리면 그 인스턴스가 쥔 번호를
+     * 재건이 "아무도 안 쥔 번호" 로 보고 남에게 다시 내준다.
+     */
+    @Test
+    void 한_대가_안_올렸으면_끝까지_기다린다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
+
+        long elapsed = 재_보기();
+
+        assertThat(elapsed).isGreaterThanOrEqualTo(기다림.toMillis());
+    }
+
+    /*
+     * 명부를 못 읽었을 때 "다 모였다" 로 읽으면 아무도 안 기다린 채 키가 선다.
+     * 모르는 채로 일찍 끝내는 것이 이 기능에서 가장 나쁜 결과다.
+     */
+    @Test
+    void 명부를_못_읽으면_일찍_안_끝낸다() {
+        when(instances.live()).thenReturn(OptionalInt.empty());
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(5L);
+
+        long elapsed = 재_보기();
+
+        assertThat(elapsed).isGreaterThanOrEqualTo(기다림.toMillis());
+    }
+
+    /*
+     * 명부가 비어 있으면 올라올 것이 없으므로 기다리지 않는다.
+     *
+     * 못 읽은 것과 같은 0 으로 받던 때는 이 경우에도 정해진 시간을 다 기다렸다. 2026-10-10
+     * J-3 회차에서 재건이 기여자 0명을 3초 기다린 뒤 실패로 끝난 것이 그 때문이다.
+     */
+    @Test
+    void 명부가_비어_있으면_기다리지_않는다() {
+        when(instances.live()).thenReturn(OptionalInt.of(0));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(0L);
+
+        long elapsed = 재_보기();
+
+        assertThat(elapsed).isLessThan(기다림.toMillis());
+    }
+
+    /*
+     * 이 시험이 이 클래스에서 가장 값지다.
+     *
+     * 명부를 갱신하는 것은 플러시가 배치를 집을 때인데 재건은 그 플러시를 멈춘다. 그래서 멈춘
+     * 뒤에 세면 재건이 스스로 비운 명부를 보고 "올라올 것이 없다" 로 읽는다. 2026-10-10 J-4
+     * 회차가 instances=0 에 waitedMillis=25 로 끝났고, 부하 중이었다면 남이 쥔 번호를 되살려
+     * 결번을 만들었을 자리다.
+     */
+    @Test
+    void 명부는_멈추기_전에_읽는다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        sut.rebuild(COUPON_ID);
+
+        InOrder 순서 = inOrder(instances, flusher);
+        순서.verify(instances).live();
+        순서.verify(flusher).pause(any(Duration.class));
+    }
+
+    /*
+     * 기다리는 동안 명부가 비어도 판정이 흔들리지 않아야 한다.
+     * 멈추기 전에 읽은 수를 쓰므로, 그 뒤 명부가 비는 것은 기다림에 영향을 주지 않는다.
+     */
+    @Test
+    void 기다리는_동안_명부가_비어도_일찍_안_끝낸다() {
+        when(instances.live())
+                .thenReturn(OptionalInt.of(3))
+                .thenReturn(OptionalInt.of(0));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
+
+        long elapsed = 재_보기();
+
+        assertThat(elapsed).isGreaterThanOrEqualTo(기다림.toMillis());
+    }
+
+    // 표시가 명부보다 많아도 끝낸다. 명부에서 막 빠진 인스턴스가 남긴 것일 수 있다
+    @Test
+    void 표시가_명부보다_많아도_끝낸다() {
+        when(instances.live()).thenReturn(OptionalInt.of(2));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        assertThat(재_보기()).isLessThan(기다림.toMillis());
+    }
+
+    /*
+     * 문을 열 때 카운터를 덮으면 안 된다. 올리기만 해야 한다.
+     *
+     * 재건은 한 장애에 여러 번 돈다. 2026-10-10 N-2 에서 두 인스턴스가 1.26초 차로 재연결을
+     * 보고 둘 다 주도했다. 그 둘이 각자 DB 를 읽는데 읽는 순서와 쓰는 순서가 보장되지 않으므로,
+     * set 으로 덮으면 먼저 읽은 쪽이 나중에 써서 카운터를 뒤로 밀 수 있다.
+     *
+     * 실측에서 그 일이 난 적은 없다. 보장이 없는 것을 막는 방어다.
+     */
+    @Test
+    void 문을_열_때_카운터를_덮지_않는다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(valueOperations, never()).set(eq("coupon:9001:counter"), anyString());
+    }
+
+    // 비교와 쓰기를 한 번에 해야 한다. 읽고 나서 쓰면 그 사이에 남의 재건이나 발급이 끼어든다
+    @Test
+    void 문을_여는_것은_스크립트_하나다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate).execute(any(RedisScript.class), anyList(), any(Object[].class));
+    }
+
+    /*
+     * 재건이 문을 닫아 둔 시간을 잰다. 이것이 곧 그 이벤트의 발급이 멈춘 시간이다.
+     *
+     * 여태 재는 곳이 없어서 "큐 수집 대기 3초 + 읽고 쓰기 427밀리초" 라는 계산값을 실측인
+     * 것처럼 써 왔고, 조기 종료를 붙인 뒤에도 줄어든 총량을 한 번도 확인하지 못했다.
+     */
+    @Test
+    void 재건이_문을_닫아_둔_시간을_잰다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        sut.rebuild(COUPON_ID);
+
+        assertThat(registry.timer("coupon.seq.rebuild.duration").count()).isEqualTo(1);
+        assertThat(registry.timer("coupon.seq.rebuild.readwrite").count()).isEqualTo(1);
+    }
+
+    /*
+     * 읽고 쓰기는 전체보다 짧아야 한다.
+     * 같으면 기다림이 전체에서 빠졌다는 뜻이고, 그러면 둘을 따로 잴 이유가 없다.
+     */
+    @Test
+    void 읽고_쓰기는_전체의_일부다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(2L);
+
+        sut.rebuild(COUPON_ID);
+
+        double 전체 = registry.timer("coupon.seq.rebuild.duration").totalTime(TimeUnit.MILLISECONDS);
+        double 읽고쓰기 = registry.timer("coupon.seq.rebuild.readwrite").totalTime(TimeUnit.MILLISECONDS);
+        assertThat(읽고쓰기).isLessThan(전체);
+        // 이 회차는 한 대를 못 기다려 천장까지 갔다. 전체가 그만큼은 돼야 한다
+        assertThat(전체).isGreaterThanOrEqualTo(기다림.toMillis());
+    }
+
+    /*
+     * 재건을 안 하면 재지 않는다.
+     *
+     * 관리자가 안 연 이벤트가 그 경우다. 카운터의 존재로는 못 가른다. 승격 경로에서는 카운터가
+     * 원래 살아 있어, 그것으로 막으면 그 경우가 영영 안 걸린다.
+     */
+    @Test
+    void 열린_이벤트가_아니면_안_잰다() {
+        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.empty());
+
+        sut.rebuild(COUPON_ID);
+
+        assertThat(registry.timer("coupon.seq.rebuild.duration").count()).isZero();
+    }
+
+
+    /*
+     * 승격 경로에서는 네 키에 옛 내용이 살아 있다. 덮어쓰기만 하면 어느 쪽에도 안 잡힌 항목이
+     * 그대로 남아, free 의 옛 번호가 주인이 정해진 뒤에도 다시 나간다.
+     */
+    @Test
+    @DisplayName("seq 와 free 는 비우고 쓴다")
+    void 다시_쓸_키를_먼저_비운다() {
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate).unlink("coupon:9001:seq");
+        verify(redisTemplate).unlink("coupon:9001:free");
+    }
+
+    /*
+     * pending 만 통째로 안 지운다. 살아남은 점수가 그 회원이 실제로 번호를 받은 시각이라,
+     * 재건 시각으로 덮으면 회수가 그만큼 뒤로 밀린다. 그리고 올라온 것이 비면 이 키가 텅 비어
+     * 소진 근처에서 스크립트가 최종 소진으로 판정해 재시도를 막는다.
+     */
+    @Test
+    @DisplayName("pending 은 통째로 안 지운다")
+    void pending_은_비우지_않는다() {
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate, never()).unlink("coupon:9001:pending");
+    }
+
+    /*
+     * 멈춤을 올리는 동안만이 아니라 쓰기가 끝날 때까지 끌고 간다. 락이 발급을 막고 있어 멈춰 둬도
+     * 큐가 자라지 않고, DB 를 읽은 뒤 네 키를 쓰기까지의 사이에 커밋된 티켓이 미확정으로 남는
+     * 창이 없어진다.
+     */
+    @Test
+    @DisplayName("멈춤을 쓰기가 끝날 때까지 끌고 간다")
+    void 쓰기까지_멈춘_채로_돈다() {
+        sut.rebuild(COUPON_ID);
+
+        InOrder 순서 = inOrder(flusher, contributor, seqInitializer);
+        순서.verify(flusher).pause(any(Duration.class));
+        순서.verify(contributor).uploadWhilePaused(COUPON_ID);
+        순서.verify(seqInitializer).applyTtl(anyLong(), any());
+        순서.verify(flusher).resume();
+    }
+
+    // 멈추지 못했으면 흔들리는 목록으로 재건하지 않는다
+    @Test
+    @DisplayName("멈추기가 실패하면 재건하지 않는다")
+    void 멈추기가_실패하면_안_쓴다() {
+        when(flusher.pause(any(Duration.class))).thenReturn(false);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(contributor, never()).uploadWhilePaused(anyLong());
+        verify(redisTemplate, never()).unlink(anyString());
+    }
+
+    private long 재_보기() {
+        long startedAt = System.nanoTime();
+        sut.rebuild(COUPON_ID);
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+    }
+
+    private static Coupon 선착순_쿠폰() {
+        Coupon coupon = mock(Coupon.class);
+        when(coupon.isActive()).thenReturn(true);
+        when(coupon.isLimited()).thenReturn(true);
+        when(coupon.getIssueEndAt()).thenReturn(LocalDateTime.now().plusDays(1));
+        return coupon;
+    }
+
+    private static CouponIssueProperties 설정(Duration 기다림) {
+        return new CouponIssueProperties(
+                Duration.ofSeconds(60),
+                Duration.ofMillis(20),
+                500,
+                1,
+                Integer.MAX_VALUE,
+                Duration.ofSeconds(2),
+                기다림,
+                true,
+                Duration.ofSeconds(10),
+                Duration.ofSeconds(5));
+    }
+}

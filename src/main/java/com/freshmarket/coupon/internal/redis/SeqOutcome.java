@@ -31,13 +31,7 @@ public sealed interface SeqOutcome {
     record SoldOutFinal() implements SeqOutcome {
     }
 
-    /**
-     * 이벤트 준비 전이다. 재고는 있을 수 있으므로 503 과 Retry-After 로 답한다.
-     *
-     * <p><b>누군가 재건해야 하는 상태이고 이 응답이 그 신호다.</b> 받은 요청이 재건을 띄우고,
-     * 재건이 카운터를 세우면 이 갈래가 사라진다. 고리가 스스로 닫힌다.
-     */
+    /** 이벤트 준비 전이거나 카운터 재건 중이다. 재고는 있을 수 있으므로 503 과 Retry-After 로 답한다. */
     record NotPrepared() implements SeqOutcome {
     }
-
 }

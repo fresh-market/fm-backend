@@ -53,22 +53,6 @@ public class CouponSeqRebuildRedis {
                 .commandTimeout(TIMEOUT)
                 .build();
         this.factory = new LettuceConnectionFactory(origin.getStandaloneConfiguration(), clientConfig);
-
-        /*
-         * 쓸 때마다 연결이 살아 있는지 확인한다. 기본값은 꺼짐이다.
-         *
-         * 이 팩토리는 공유 연결 하나를 쓰고, 그것을 쓰는 쪽이 드물게 친다. 발급 경로는 트래픽이
-         * 계속 흘러 Lettuce 가 곧 재연결하는데, 10초마다 한 번 치는 배치는 끊긴 채널을 계속
-         * 다시 쓴다.
-         *
-         * 2026-10-13 V-1 에서 그것이 났다. 캐시 페일오버 뒤 쓸기가 36번 연달아
-         * ClosedChannelException 으로 죽어 주인 잃은 번호를 하나도 못 되살렸다. 쓸기가 가장
-         * 필요한 순간에 쓸기가 죽어 있었다 (docs/coupon/free-sweep-2026-10-12.md 10장).
-         *
-         * 대가는 연결을 얻을 때마다 도는 PING 하나다. 이 팩토리를 쓰는 것이 복구와 쓸기뿐이라
-         * 초당 0.1회 수준이고, 발급 경로의 팩토리는 이 설정과 무관하다.
-         */
-        this.factory.setValidateConnection(true);
         this.factory.afterPropertiesSet();
         this.template = new StringRedisTemplate(this.factory);
         log.info("event=COUPON_SEQ_REBUILD_REDIS_READY timeoutMillis={}", TIMEOUT.toMillis());

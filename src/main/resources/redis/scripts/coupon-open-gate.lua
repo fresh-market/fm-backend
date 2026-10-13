@@ -1,16 +1,7 @@
--- 복구가 문을 여는 스크립트다. 카운터를 올리기만 한다.
+-- 재건이 문을 여는 스크립트다. 카운터를 올리기만 한다.
 -- KEYS[1]=counter(문자열)
--- ARGV[1]=복구가 센 최대 순번
--- 반환 쓴 뒤의 카운터
-
--- SET 에 KEEPTTL 을 붙인다. 안 붙이면 이 쓰기가 카운터의 만료를 지운다.
---
--- 카운터가 네 키의 수명을 들고 있어서, 그것이 사라지면 넷이 이벤트보다 오래 산다. 뒤이어 도는
--- inheritCounterTtl 도 물려줄 값을 못 찾아 free 에만 만료가 영영 안 붙는다.
---
--- 전손 복구는 뒤에서 applyTtl 로 다시 거니까 그 경로만 보면 드러나지 않는다. 뒤처짐에서
--- 카운터만 올리는 경로(CouponSeqRebuildTrigger.measureBehind)가 그 복원을 안 지나므로 거기서
--- 샌다. 2026-10-12 통합 시험 반납한_번호를_담는_키가_카운터의_수명을_물려받는다 가 잡았다.
+-- ARGV[1]=재건이 센 최대 순번
+-- 반환 문을 연 뒤의 카운터
 
 -- 낮은 값으로 덮으면 안 된다. 그것이 재건이 고치려는 증상을 재건이 만드는 길이다.
 --
@@ -34,7 +25,7 @@ local cur = redis.call('GET', KEYS[1])
 
 -- 키가 없으면 세운다. 부재 경로의 재건이 이 자리로 온다
 if cur == false then
-  redis.call('SET', KEYS[1], want, 'KEEPTTL')
+  redis.call('SET', KEYS[1], want)
   return want
 end
 
@@ -42,12 +33,12 @@ local now = tonumber(cur)
 
 -- 읽을 수 없는 값이면 재건이 센 값으로 바로잡는다
 if now == nil then
-  redis.call('SET', KEYS[1], want, 'KEEPTTL')
+  redis.call('SET', KEYS[1], want)
   return want
 end
 
 if now < want then
-  redis.call('SET', KEYS[1], want, 'KEEPTTL')
+  redis.call('SET', KEYS[1], want)
   return want
 end
 

@@ -52,22 +52,10 @@ public class CouponSeqAllocator {
     private final Duration reclaimAfter;
     private final CircuitBreaker circuitBreaker;
 
-    /*
-     * 이 인스턴스가 받아 본 최대 순번을 스크립트에 넘긴다.
-     *
-     * 승격으로 카운터가 뒤로 가도 그 번호들은 누군가 쥐고 있다. 내가 쥔 것은 내가 아는 값으로
-     * 지키고 남이 쥔 것은 남이 자기 값으로 지킨다. 카운터가 올리기만 하는 값이라 그렇게 각자
-     * 올려도 결과가 전체 최댓값으로 수렴하고, 그래서 아무도 몇 대인지 셀 필요가 없다
-     * (docs/coupon/rebuild-rearchitecture-2026-10-12.md 4장).
-     */
-    private final CouponSeqMarks marks;
-
     public CouponSeqAllocator(StringRedisTemplate redisTemplate,
                               CouponIssueProperties properties,
-                              CircuitBreakerRegistry circuitBreakers,
-                              CouponSeqMarks marks) {
+                              CircuitBreakerRegistry circuitBreakers) {
         this.redisTemplate = redisTemplate;
-        this.marks = marks;
         this.reclaimAfter = properties.reclaimAfter();
         this.allocateScript = loadAllocateScript();
         /*
@@ -125,13 +113,13 @@ public class CouponSeqAllocator {
             String raw = circuitBreaker.executeCallable(() -> redisTemplate.execute(
                     allocateScript,
                     List.of(CouponSeqKeys.seq(couponId), CouponSeqKeys.free(couponId),
-                            CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId)),
+                            CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId),
+                            CouponSeqKeys.rebuild(couponId)),
                     String.valueOf(memberId),
                     String.valueOf(issueLimit),
-                    String.valueOf(reclaimAfter.toMillis()),
-                    String.valueOf(marks.of(couponId))
+                    String.valueOf(reclaimAfter.toMillis())
             ));
-            return remember(couponId, parse(raw));
+            return parse(raw);
         } catch (CallNotPermittedException e) {
             throw new CouponSeqUnavailableException("순번 확보 회로가 열려 있다", e);
         } catch (DataAccessException e) {
@@ -152,7 +140,7 @@ public class CouponSeqAllocator {
     /**
      * 지금까지 나간 순번 수를 읽는다. 발급 현황 조회가 부른다.
      *
-     * <p>단순 {@code GET} 이라 순번 확보 스크립트와 자원을 다투지 않는다. 회로도 안 씌운다.
+     * <p>단순 {@code GET} 이라 순번 확보 스크립트와 자원을 다투지 않는다. 회로도 안 씌운다 —
      * 이 값을 못 읽어도 발급 자체는 막히지 않으므로, 실패하면 호출부가 DB 값으로 대체하면 된다.
      *
      * @return 카운터 키가 없으면(이벤트가 열린 적 없거나 이미 닫혀 키가 지워졌다) 빈 값
@@ -160,28 +148,6 @@ public class CouponSeqAllocator {
     public Optional<Integer> currentIssuedCount(long couponId) {
         String raw = redisTemplate.opsForValue().get(CouponSeqKeys.counter(couponId));
         return raw != null ? Optional.of(Integer.parseInt(raw)) : Optional.empty();
-    }
-
-    /**
-     * 받은 번호를 기억에 넣는다. 그 기억이 다음 호출에서 승격을 되돌리는 기준이 된다.
-     *
-     * <p><b>준비되지 않았다는 답에서 기억을 버리면 안 된다.</b> 카운터가 사라진 것이라 복구가
-     * 곧 도는데, 그 복구가 세울 값이 {@code max(DB 최댓값, 이 기억)} 이다. 버리면 아직 큐에
-     * 떠 있는 번호가 빠진 채로 카운터가 서고, 그 구간이 통째로 다시 나간다. 큐가 5,000~5,050 을
-     * 쥐고 DB 최댓값이 4,900 이면 51개가 겹쳐 결번이 된다.
-     *
-     * <p><b>같은 쿠폰을 다시 열 때는 다른 장치가 막는다.</b> 준비 단계가 카운터를 0 으로 세우고,
-     * 스크립트가 {@code n == 1} 에서 건너뛰기를 안 하며, {@link CouponSeqMarks#saw} 가 1 을 보면
-     * 기억을 되돌린다. 복구도 카운터가 0 이면 비켜선다.
-     */
-    private SeqOutcome remember(long couponId, SeqOutcome outcome) {
-        switch (outcome) {
-            case SeqOutcome.Allocated allocated -> marks.saw(couponId, allocated.seq());
-            case SeqOutcome.AlreadyIssued issued -> marks.saw(couponId, issued.seq());
-            default -> {
-            }
-        }
-        return outcome;
     }
 
     private SeqOutcome parse(String raw) {

@@ -1,7 +1,6 @@
 package com.freshmarket.coupon.internal.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -51,7 +50,7 @@ class CouponSeqAllocatorCircuitTest {
     void setUp() {
         CouponIssueProperties issueProperties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofSeconds(2), Duration.ofSeconds(5), 500);
+                Duration.ofSeconds(2), Duration.ofSeconds(3), true, Duration.ofSeconds(10), Duration.ofSeconds(5));
         /*
          * 운영 값은 application.yml 이 갖는다. 여기서는 시험이 짧게 끝나도록 작게 잡은
          * 설정으로 레지스트리를 만들어 넣는다. 이름이 couponSeq 여야 코드가 그것을 집는다.
@@ -68,7 +67,7 @@ class CouponSeqAllocatorCircuitTest {
                 .automaticTransitionFromOpenToHalfOpenEnabled(true)
                 .slowCallDurationThreshold(Duration.ofMillis(500))
                 .build());
-        sut = new CouponSeqAllocator(redisTemplate, issueProperties, registry, new CouponSeqMarks());
+        sut = new CouponSeqAllocator(redisTemplate, issueProperties, registry);
         /*
          * 운영에서는 이 회로가 METRICS_ONLY 로 떠서 호출을 안 막는다 (CouponSeqAllocator 참조).
          * 아래 시험들은 회로가 열리는 동작 자체를 보는 것이라 여기서 닫힘으로 되돌린다.
@@ -88,9 +87,9 @@ class CouponSeqAllocatorCircuitTest {
         CircuitBreakerRegistry registry = CircuitBreakerRegistry.of(CircuitBreakerConfig.ofDefaults());
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofSeconds(2), Duration.ofSeconds(5), 500);
+                Duration.ofSeconds(2), Duration.ofSeconds(3), true, Duration.ofSeconds(10), Duration.ofSeconds(5));
 
-        new CouponSeqAllocator(redisTemplate, properties, registry, new CouponSeqMarks());
+        new CouponSeqAllocator(redisTemplate, properties, registry);
 
         assertThat(registry.circuitBreaker("couponSeq").getState())
                 .isEqualTo(CircuitBreaker.State.METRICS_ONLY);
@@ -127,7 +126,7 @@ class CouponSeqAllocatorCircuitTest {
 
         // then 열린 뒤의 셋은 Redis 까지 안 갔다
         verify(redisTemplate, times(MINIMUM_CALLS))
-                .execute(any(RedisScript.class), anyList(), any(), any(), any(), any());
+                .execute(any(RedisScript.class), anyList(), any(), any(), any());
     }
 
     /*
@@ -146,7 +145,7 @@ class CouponSeqAllocatorCircuitTest {
         // when 열림 대기가 지난 뒤 Redis 가 살아난다
         Thread.sleep(WAIT_IN_OPEN.toMillis() * 2);
         reset(redisTemplate);
-        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any(), any(), any()))
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any(), any()))
                 .thenReturn("1");
 
         // then 반열림에서 통과시킨 호출이 성공해 회로가 닫힌다
@@ -156,7 +155,7 @@ class CouponSeqAllocatorCircuitTest {
     }
 
     private void givenRedisFails() {
-        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any(), any(), any()))
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any(), any()))
                 .thenThrow(new QueryTimeoutException("Redis 가 답하지 않는다"));
     }
 }
