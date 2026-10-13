@@ -1,20 +1,26 @@
 package com.freshmarket.coupon.internal.redis;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.freshmarket.coupon.internal.entity.Coupon;
 import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
@@ -53,6 +59,8 @@ class CouponSeqRebuilderTest {
     private static final String LOCK = "coupon:9001:rebuild";
     private static final LocalDateTime END_AT = LocalDateTime.of(2026, 10, 15, 9, 0);
     private static final int MARGIN = 100;
+    private static final List<String> FREE_KEYS =
+            List.of("coupon:9001:seq", "coupon:9001:free", "coupon:9001:counter");
 
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -208,6 +216,132 @@ class CouponSeqRebuilderTest {
         verify(redisTemplate, never()).execute(any(RedisScript.class), anyList(), any(String.class));
     }
 
+    /*
+     * B 단계는 주인 없는 번호를 free 에 되돌린다. 이 되돌리기가 결번을 0 으로 지켰다.
+     *
+     * 빼면 V 회차에서 결번이 42, 20, 3, 1 로 남았고 넣은 회차는 0 이었다
+     * (docs/coupon/rebuild-raise-each-2026-10-14.md 7.5).
+     */
+    @Test
+    void 주인_없는_번호를_free_에_되돌린다() {
+        given카운터가("1000");
+        given발급행들(new IssuedSeq(9101, 1), new IssuedSeq(9102, 5));
+        when(redisTemplate.execute(any(RedisScript.class), eq(FREE_KEYS),
+                eq("2"), eq("3"), eq("4"))).thenReturn(3L);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate).execute(any(RedisScript.class), eq(FREE_KEYS),
+                eq("2"), eq("3"), eq("4"));
+    }
+
+    /*
+     * 카운터에 가까운 번호는 안 되돌린다.
+     *
+     * 방금 나가 아직 큐에 있는 번호를 되돌리면 살아 있는 티켓의 번호를 남에게 내준다.
+     * 카운터는 번호가 나갈 때마다 하나씩 오르므로 그 차이가 "그 뒤로 몇 개가 더 나갔나" 다.
+     */
+    @Test
+    void 카운터에_가까운_번호는_안_되돌린다() {
+        given카운터가("50");
+        given발급행들(new IssuedSeq(9101, 1), new IssuedSeq(9102, 5));
+
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate, never()).execute(any(RedisScript.class), eq(FREE_KEYS), any());
+    }
+
+    /*
+     * 카운터를 못 읽으면 아무것도 되돌리지 않는다.
+     *
+     * 0 으로 보면 나이 조건이 전부 거짓이 되어 후보가 비므로, 못 읽은 것이 과하게 되돌리는
+     * 쪽으로 기울지 않는다.
+     */
+    @Test
+    void 카운터를_못_읽으면_아무것도_되돌리지_않는다() {
+        given카운터가("열");
+        given발급행들(new IssuedSeq(9101, 1), new IssuedSeq(9102, 5));
+
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate, never()).execute(any(RedisScript.class), eq(FREE_KEYS), any());
+    }
+
+    // 발급 행이 없으면 세울 매핑도 되돌릴 번호도 없다. 카운터는 내 기억으로 올린다
+    @Test
+    void 발급행이_없으면_매핑을_안_쓴다() {
+        given카운터가("1000");
+        when(seqRepository.findIssuedSeqs(COUPON_ID)).thenReturn(List.of());
+        marks.saw(COUPON_ID, 10);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(hashOperations, never()).putAll(any(String.class), anyMap());
+        verify(redisTemplate).execute(any(RedisScript.class), anyList(), eq("10"));
+    }
+
+    /*
+     * 매핑도 덩이로 나눠 쓴다.
+     *
+     * 만 건을 한 번에 담으면 그동안 Redis 단일 스레드가 다른 요청을 못 받는다. 발급을 멈추지
+     * 않겠다고 해놓고 여기서 멈추면 멈춤을 없앤 뜻이 없다.
+     */
+    @Test
+    void 매핑을_오백_개씩_나눠_쓴다() {
+        List<IssuedSeq> 많이 = new ArrayList<>();
+        for (int seq = 1; seq <= 501; seq++) {
+            많이.add(new IssuedSeq(10_000 + seq, seq));
+        }
+        when(seqRepository.findIssuedSeqs(COUPON_ID)).thenReturn(많이);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(hashOperations, times(2)).putAll(eq("coupon:9001:seq"), anyMap());
+    }
+
+    /*
+     * 카운터의 남은 시한을 나머지 키에 물려준다.
+     *
+     * 카운터만 수명을 들고 있어서, 각 대가 카운터만 올리는 경로에서 나머지 셋이 시한 없이
+     * 남으면 이벤트가 끝난 뒤에도 Redis 에 쌓인다.
+     */
+    @Test
+    void 카운터의_남은_시한을_나머지_키에_물려준다() {
+        given발급행(10);
+        when(redisTemplate.getExpire(COUNTER, TimeUnit.MILLISECONDS)).thenReturn(60_000L);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate).expire("coupon:9001:seq", Duration.ofMillis(60_000));
+        verify(redisTemplate).expire("coupon:9001:free", Duration.ofMillis(60_000));
+        verify(redisTemplate).expire("coupon:9001:pending", Duration.ofMillis(60_000));
+    }
+
+    // 자기 락만 푼다. 남이 새로 잡은 락을 지우면 둘이 같이 free 를 쓴다
+    @Test
+    void 자기_락은_끝나면_푼다() {
+        given카운터가("1000");
+        given발급행(10);
+        AtomicReference<String> 내_표 = given락의_표를_받아둔다();
+
+        sut.rebuild(COUPON_ID);
+
+        assertThat(내_표.get()).isNotNull();
+        verify(redisTemplate).delete(LOCK);
+    }
+
+    @Test
+    void 남의_락은_안_푼다() {
+        given카운터가("1000");
+        given발급행(10);
+        given락의_표를_받아둔다();
+        when(valueOperations.get(LOCK)).thenReturn("남의-표");
+
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate, never()).delete(LOCK);
+    }
+
     private void given열린_선착순_쿠폰() {
         Coupon coupon = mock(Coupon.class);
         when(coupon.isActive()).thenReturn(true);
@@ -222,6 +356,28 @@ class CouponSeqRebuilderTest {
 
     private void given발급행(int maxSeq) {
         when(seqRepository.findIssuedSeqs(COUPON_ID)).thenReturn(List.of(new IssuedSeq(9101, maxSeq)));
+    }
+
+    private void given카운터가(String raw) {
+        when(valueOperations.get(COUNTER)).thenReturn(raw);
+    }
+
+    private void given발급행들(IssuedSeq... rows) {
+        when(seqRepository.findIssuedSeqs(COUPON_ID)).thenReturn(List.of(rows));
+    }
+
+    /*
+     * 락의 표는 재건이 안에서 만든다. 그 값을 받아 두지 않으면 자기 락을 푸는지 못 본다.
+     */
+    private AtomicReference<String> given락의_표를_받아둔다() {
+        AtomicReference<String> 표 = new AtomicReference<>();
+        when(valueOperations.setIfAbsent(eq(LOCK), any(), any(Duration.class)))
+                .thenAnswer(invocation -> {
+                    표.set(invocation.getArgument(1));
+                    return true;
+                });
+        when(valueOperations.get(LOCK)).thenAnswer(invocation -> 표.get());
+        return 표;
     }
 
     private CouponIssueProperties 설정() {
