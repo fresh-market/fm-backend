@@ -52,10 +52,20 @@ public class CouponSeqAllocator {
     private final Duration reclaimAfter;
     private final CircuitBreaker circuitBreaker;
 
+    /*
+     * 받은 번호를 여기에 적어 둔다. 재건이 그 값을 카운터의 하한으로 쓴다.
+     *
+     * 남의 큐를 모아 세는 대신 각자 자기가 받은 최댓값으로 카운터를 올리는 것이 이 설계의 축이다
+     * (docs/coupon/rebuild-raise-each-2026-10-14.md 3장).
+     */
+    private final CouponSeqMarks marks;
+
     public CouponSeqAllocator(StringRedisTemplate redisTemplate,
                               CouponIssueProperties properties,
-                              CircuitBreakerRegistry circuitBreakers) {
+                              CircuitBreakerRegistry circuitBreakers,
+                              CouponSeqMarks marks) {
         this.redisTemplate = redisTemplate;
+        this.marks = marks;
         this.reclaimAfter = properties.reclaimAfter();
         this.allocateScript = loadAllocateScript();
         /*
@@ -113,13 +123,12 @@ public class CouponSeqAllocator {
             String raw = circuitBreaker.executeCallable(() -> redisTemplate.execute(
                     allocateScript,
                     List.of(CouponSeqKeys.seq(couponId), CouponSeqKeys.free(couponId),
-                            CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId),
-                            CouponSeqKeys.rebuild(couponId)),
+                            CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId)),
                     String.valueOf(memberId),
                     String.valueOf(issueLimit),
                     String.valueOf(reclaimAfter.toMillis())
             ));
-            return parse(raw);
+            return remember(couponId, parse(raw));
         } catch (CallNotPermittedException e) {
             throw new CouponSeqUnavailableException("순번 확보 회로가 열려 있다", e);
         } catch (DataAccessException e) {
@@ -148,6 +157,23 @@ public class CouponSeqAllocator {
     public Optional<Integer> currentIssuedCount(long couponId) {
         String raw = redisTemplate.opsForValue().get(CouponSeqKeys.counter(couponId));
         return raw != null ? Optional.of(Integer.parseInt(raw)) : Optional.empty();
+    }
+
+    /**
+     * 받은 번호를 기억에 넣는다. 그 기억이 재건에서 카운터의 하한이 된다.
+     *
+     * <p><b>준비되지 않았다는 답에서는 기억을 버린다.</b> 카운터가 사라진 것이라 이벤트가 끝났거나
+     * 전손이고, 그 뒤에 같은 쿠폰을 다시 열면 지난 최댓값이 재고를 깎는다.
+     */
+    private SeqOutcome remember(long couponId, SeqOutcome outcome) {
+        switch (outcome) {
+            case SeqOutcome.Allocated allocated -> marks.saw(couponId, allocated.seq());
+            case SeqOutcome.AlreadyIssued issued -> marks.saw(couponId, issued.seq());
+            case SeqOutcome.NotPrepared ignored -> marks.forget(couponId);
+            default -> {
+            }
+        }
+        return outcome;
     }
 
     private SeqOutcome parse(String raw) {
