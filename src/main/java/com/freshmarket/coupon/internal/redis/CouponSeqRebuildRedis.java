@@ -34,10 +34,28 @@ public class CouponSeqRebuildRedis {
     /*
      * 재건의 Redis 명령 하나에 주는 상한이다.
      *
-     * 발급의 100ms 보다 열 배인데, 재건은 요청 예산 밖이라 이 값이 응답 지연으로 새지 않는다.
+     * 발급의 100ms 보다 서른 배인데, 재건은 요청 예산 밖이라 이 값이 응답 지연으로 새지 않는다.
      * 다만 재건이 도는 동안 그 이벤트의 발급은 멈춰 있으므로 무한정 늘릴 수는 없다.
+     *
+     * 1초에서 3초로 올렸다. 2026-10-13 V-4(서버 1대 종료 + 캐시 페일오버)에서 재건이 세 번
+     * 전부 QueryTimeoutException 으로 죽었고, free 를 못 세워 주인 잃은 번호 144개가 재고로
+     * 돌아오지 않았다. 같은 회차의 결번이 144 다.
+     *
+     *   11:46:24.321  REBUILD_RETRY   attempt=1  reason=QueryTimeoutException
+     *   11:46:28.117  REBUILD_RETRY   attempt=2  reason=QueryTimeoutException
+     *   11:46:29.517  REBUILD_FAILED  attempts=3
+     *
+     * 복합 장애라 한 대가 죽고 남은 둘에 부하가 몰린 채, 승격 직후의 새 프라이머리가 1초를
+     * 넘겼다. 2026-10-10 J-2 에서 같은 모양이 100ms 로 났고 그때 1초로 올렸는데 모자랐다.
+     *
+     * 3초인 근거는 rebuild-contribute-wait 와 같은 값이라는 것이다. 재건은 이미 남의 큐를
+     * 기다리느라 그만큼은 멈춰 있기로 한 설계이므로, 명령 하나의 상한을 그보다 크게 둘 이유가
+     * 없고 그보다 작게 두면 기다림을 다 쓰기 전에 명령이 먼저 죽는다.
+     *
+     * 최악은 재시도 셋을 합쳐 약 10초다 (3초 x 3 + 백오프 200ms x 1,2). 재건 락 TTL 30초
+     * 안에 들고, 세 번 다 죽는 것보다 그 10초가 낫다는 판단이다. V-4 가 그 비교를 보여 준다.
      */
-    private static final Duration TIMEOUT = Duration.ofSeconds(1);
+    private static final Duration TIMEOUT = Duration.ofSeconds(3);
 
     private final LettuceConnectionFactory factory;
     private final StringRedisTemplate template;
