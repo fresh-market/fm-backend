@@ -32,7 +32,7 @@ import org.springframework.stereotype.Component;
 @Component
 class CouponSeqInstances {
 
-    private static final String KEY = "coupon:instances";
+    private static final String KEY = CouponSeqKeys.instances();
 
     /*
      * 갱신 주기다. 플러시가 배치마다 부르므로 그대로 두면 초당 오십 번 쓴다.

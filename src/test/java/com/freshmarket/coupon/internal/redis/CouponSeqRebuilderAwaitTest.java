@@ -29,6 +29,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -234,6 +235,34 @@ class CouponSeqRebuilderAwaitTest {
         sut.rebuild(COUPON_ID);
 
         verify(redisTemplate).execute(any(RedisScript.class), anyList(), any(Object[].class));
+    }
+
+    /*
+     * 문이 열리면 락을 바로 푼다. 뒷정리를 기다리게 하지 않는다.
+     *
+     * 락이 남아 있는 동안 순번 확보가 -4 를 내므로 그 쿠폰의 발급이 멈춰 있다. 한때 이것을
+     * resume 과 clearContributions 뒤에 풀었고, 그 구간만큼 발급이 더 멈췄다.
+     */
+    @Test
+    void 문을_열면_락을_먼저_푼다() {
+        when(instances.live()).thenReturn(OptionalInt.of(3));
+        when(setOperations.size("coupon:9001:rebuild:done")).thenReturn(3L);
+
+        /*
+         * 락 값을 돌려줘야 releaseLock 이 자기 락으로 보고 지운다.
+         * setIfAbsent 가 담은 값을 그대로 잡아 둔다. RebuildLock 이 시각을 담아 매번 다르다.
+         */
+        ArgumentCaptor<String> 락값 = ArgumentCaptor.forClass(String.class);
+        when(valueOperations.setIfAbsent(eq("coupon:9001:rebuild"), 락값.capture(), any(Duration.class)))
+                .thenReturn(true);
+        when(valueOperations.get("coupon:9001:rebuild"))
+                .thenAnswer(invocation -> 락값.getValue());
+
+        sut.rebuild(COUPON_ID);
+
+        InOrder 순서 = inOrder(redisTemplate, flusher);
+        순서.verify(redisTemplate).delete("coupon:9001:rebuild");
+        순서.verify(flusher).resume();
     }
 
     /*
