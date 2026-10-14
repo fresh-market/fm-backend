@@ -1,7 +1,6 @@
 package com.freshmarket.coupon.internal.redis;
 
 import java.time.Duration;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -44,11 +43,6 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
 
     private final Set<Long> inProgress = ConcurrentHashMap.newKeySet();
 
-    /*
-     * 이 인스턴스가 이 쿠폰에서 지금까지 본 가장 큰 순번이다.
-     * 카운터가 뒤로 갔는지를 이것과 견줘서 안다. 카운터가 사라진 동안에는 지운다.
-     */
-    private final Map<Long, Integer> highWater = new ConcurrentHashMap<>();
 
     /*
      * 스레드 하나로 족하다. 재건은 이벤트당 많아야 몇 번 도는 일이고, 둘이 붙어 봐야 같은 락을
@@ -62,16 +56,16 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
 
     private final CouponSeqRebuilder rebuilder;
     private final StringRedisTemplate redisTemplate;
-    private final CouponSeqInstances instances;
+    private final CouponSeqMarks marks;
     private final DistributionSummary behind;
 
     public CouponSeqRebuildTrigger(CouponSeqRebuilder rebuilder,
                                    StringRedisTemplate redisTemplate,
-                                   CouponSeqInstances instances,
+                                   CouponSeqMarks marks,
                                    MeterRegistry registry) {
         this.rebuilder = rebuilder;
         this.redisTemplate = redisTemplate;
-        this.instances = instances;
+        this.marks = marks;
         this.behind = DistributionSummary.builder(COUNTER_BEHIND)
                 .description("카운터가 이미 나간 순번보다 얼마나 뒤처졌나. 정상 운영에서는 표본이 0건이다")
                 .register(registry);
@@ -86,9 +80,6 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
     @Override
     public void checkAfterFlush(long couponId, int maxIssuedSeq) {
         try {
-            if (Boolean.TRUE.equals(redisTemplate.hasKey(CouponSeqKeys.rebuild(couponId)))) {
-                suspect(couponId);
-            }
             measureBehind(couponId, maxIssuedSeq);
         } catch (DataAccessException e) {
             /*
@@ -124,10 +115,11 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
     private void measureBehind(long couponId, int maxIssuedSeq) {
         String raw = redisTemplate.opsForValue().get(CouponSeqKeys.counter(couponId));
         if (raw == null) {
-            highWater.remove(couponId);
+            marks.forget(couponId);
             return;
         }
-        int mark = highWater.merge(couponId, maxIssuedSeq, Math::max);
+        marks.saw(couponId, maxIssuedSeq);
+        int mark = marks.of(couponId);
         long counter;
         try {
             counter = Long.parseLong(raw);
@@ -142,17 +134,6 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
         behind.record(gap);
         log.error("event=COUPON_SEQ_COUNTER_BEHIND couponId={} counter={} seen={} gap={}",
                 couponId, counter, mark, gap);
-    }
-
-    /**
-     * 큐를 쥐었다고 명부에 알린다. 플러시가 배치를 집은 직후에 부른다.
-     *
-     * <p><b>쓰기 성공에 묶으면 안 된다.</b> DB 가 막힌 인스턴스가 배치를 못 끝내 알림이 멈추면
-     * 큐를 쥐고 있는데도 명부에서 빠진다. 실제 회차에서 그렇게 됐다.
-     */
-    @Override
-    public void holdingQueue() {
-        instances.refresh();
     }
 
     /**

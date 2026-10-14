@@ -18,6 +18,13 @@
 -- 이 방어가 실측 결함을 고친 것은 아니다. N-2 는 5,784 를 먼저 쓰고 5,859 를 나중에 써서
 -- 순서가 맞았다. 다만 그것이 보장이 아니므로 비교를 Redis 안에 둔다. 왕복은 전과 같이 하나다.
 --
+-- KEEPTTL 을 붙인다. 안 붙이면 이 쓰기가 카운터의 만료를 지운다.
+--
+-- 카운터가 네 키의 수명을 들고 있어서, 그것이 사라지면 넷이 이벤트보다 오래 산다. 전손 복구는
+-- 뒤에서 applyTtl 이 다시 거니까 그 경로만 보면 안 드러나는데, 각 인스턴스가 카운터만 올리는
+-- 경로는 그 복원을 안 지나므로 거기서 샌다
+-- (docs/coupon/rebuild-raise-each-2026-10-14.md 7.5.2).
+--
 -- 재건은 언제나 올리는 방향이다. 승격으로 뒤로 간 카운터를 DB 가 본 최댓값까지 되돌리는
 -- 일이므로 현재 값보다 작은 값을 쓸 이유가 없다.
 local want = tonumber(ARGV[1])
@@ -25,7 +32,7 @@ local cur = redis.call('GET', KEYS[1])
 
 -- 키가 없으면 세운다. 부재 경로의 재건이 이 자리로 온다
 if cur == false then
-  redis.call('SET', KEYS[1], want)
+  redis.call('SET', KEYS[1], want, 'KEEPTTL')
   return want
 end
 
@@ -33,12 +40,12 @@ local now = tonumber(cur)
 
 -- 읽을 수 없는 값이면 재건이 센 값으로 바로잡는다
 if now == nil then
-  redis.call('SET', KEYS[1], want)
+  redis.call('SET', KEYS[1], want, 'KEEPTTL')
   return want
 end
 
 if now < want then
-  redis.call('SET', KEYS[1], want)
+  redis.call('SET', KEYS[1], want, 'KEEPTTL')
   return want
 end
 

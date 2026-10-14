@@ -51,9 +51,6 @@ class CouponSeqRebuildTriggerTest {
     @Mock
     private ValueOperations<String, String> valueOperations;
 
-    @Mock
-    private CouponSeqInstances instances;
-
     private MeterRegistry registry;
 
     @BeforeEach
@@ -63,7 +60,7 @@ class CouponSeqRebuildTriggerTest {
     }
 
     private CouponSeqRebuildTrigger 트리거() {
-        return new CouponSeqRebuildTrigger(rebuilder, redisTemplate, instances, registry);
+        return new CouponSeqRebuildTrigger(rebuilder, redisTemplate, new CouponSeqMarks(), registry);
     }
 
     private void given카운터가(String value) {
@@ -184,33 +181,11 @@ class CouponSeqRebuildTriggerTest {
      */
     @Test
     void 플러시_뒤_확인은_Redis_실패를_삼킨다() {
-        when(redisTemplate.hasKey(anyString()))
+        when(valueOperations.get(COUNTER))
                 .thenThrow(new RedisConnectionFailureException("Redis 가 답하지 않는다"));
         CouponSeqRebuildTrigger sut = 트리거();
 
         assertThatCode(() -> sut.checkAfterFlush(COUPON_ID, 10)).doesNotThrowAnyException();
-
-        verifyNoInteractions(rebuilder);
-    }
-
-    // 재건 중이면 이 인스턴스도 자기 큐를 올려야 한다
-    @Test
-    void 재건_표시가_있으면_후보로_넘긴다() {
-        when(redisTemplate.hasKey("coupon:9001:rebuild")).thenReturn(true);
-        CouponSeqRebuildTrigger sut = 트리거();
-
-        sut.checkAfterFlush(COUPON_ID, 10);
-
-        verify(rebuilder, timeout(5_000)).rebuild(COUPON_ID);
-    }
-
-    // 평상시에는 아무 일도 안 한다. 배치마다 도는 자리라 여기서 새면 재건이 쉬지 않고 돈다
-    @Test
-    void 재건_표시가_없으면_아무것도_안_한다() {
-        when(redisTemplate.hasKey("coupon:9001:rebuild")).thenReturn(false);
-        CouponSeqRebuildTrigger sut = 트리거();
-
-        sut.checkAfterFlush(COUPON_ID, 10);
 
         verifyNoInteractions(rebuilder);
     }
@@ -300,31 +275,6 @@ class CouponSeqRebuildTriggerTest {
 
         assertThatCode(() -> 트리거().checkAfterFlush(COUPON_ID, 10)).doesNotThrowAnyException();
         assertThat(뒤처짐_표본()).isZero();
-    }
-
-    /*
-     * 이 시험이 2026-09-22 회차가 드러낸 자리를 고정한다.
-     *
-     * 명부 갱신을 flush 뒤에 뒀더니, DB 를 10초 막았을 때 세 대가 모두 명부에서 빠졌다.
-     * 배치를 못 끝내 알림도 멈춘 것이다. 셋이 다 올렸는데도 주도자가 그것을 모른 채
-     * 정해진 시간을 끝까지 기다렸다. 큐가 두꺼워 기여가 가장 중요한 순간이 하필 그때다.
-     */
-    @Test
-    void 큐를_쥐었다는_알림은_쓰기와_무관하다() {
-        트리거().holdingQueue();
-
-        verify(instances).refresh();
-    }
-
-    // 플러시 뒤 확인은 명부를 안 건드린다. 쓰기가 실패해도 알림은 이미 갔어야 한다
-    @Test
-    void 플러시_뒤_확인은_명부를_갱신하지_않는다() {
-        when(redisTemplate.hasKey(anyString())).thenReturn(false);
-        given카운터가(null);
-
-        트리거().checkAfterFlush(COUPON_ID, 10);
-
-        verify(instances, never()).refresh();
     }
 
     // 쿠폰이 다르면 서로를 막지 않는다. 집합의 키가 쿠폰이라는 뜻이다
