@@ -1,5 +1,7 @@
 package com.freshmarket.coupon.internal.redis;
 
+import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
+import java.time.Duration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -60,7 +62,19 @@ class CouponSeqRebuildTriggerTest {
     }
 
     private CouponSeqRebuildTrigger 트리거() {
-        return new CouponSeqRebuildTrigger(rebuilder, redisTemplate, new CouponSeqMarks(), registry);
+        return 트리거(Duration.ofSeconds(10));
+    }
+
+    /*
+     * 간격을 0 으로 주면 "막지 않는다" 가 된다. 간격 자체를 안 보는 시험들이 그것을 쓴다.
+     */
+    private CouponSeqRebuildTrigger 트리거(Duration suspectMinInterval) {
+        CouponIssueProperties properties = new CouponIssueProperties(
+                Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
+                Duration.ofSeconds(2), true, suspectMinInterval, Duration.ofSeconds(5), 500,
+                Duration.ofSeconds(1), Duration.ofSeconds(5));
+        return new CouponSeqRebuildTrigger(rebuilder, redisTemplate, new CouponSeqMarks(),
+                properties, registry);
     }
 
     private void given카운터가(String value) {
@@ -91,6 +105,53 @@ class CouponSeqRebuildTriggerTest {
         Thread.sleep(300);
 
         verify(rebuilder, times(1)).rebuild(COUPON_ID);
+    }
+
+    /*
+     * 같은 장애 하나에 재건이 거듭 뜨지 않는다.
+     *
+     * inProgress 만으로는 모자란다. 그것은 도는 동안만 막는데 문은 그보다 오래 서 있어서,
+     * 재건이 끝난 뒤 다음 요청이 -4 를 받아 또 깨우고 그 재건이 문을 다시 닫는다.
+     * 2026-11-01 Z-2 에서 같은 값으로 61번 돌았고 재고 2,699장이 안 나갔다.
+     */
+    @Test
+    void 간격_안에는_다시_안_띄운다() throws Exception {
+        CouponSeqRebuildTrigger sut = 트리거(Duration.ofSeconds(10));
+
+        sut.suspect(COUPON_ID);
+        Thread.sleep(200);
+        for (int i = 0; i < 20; i++) {
+            sut.suspect(COUPON_ID);
+        }
+        Thread.sleep(200);
+
+        verify(rebuilder, times(1)).rebuild(COUPON_ID);
+    }
+
+    // 간격이 지나면 다시 뜬다. 안 그러면 한 번 띄운 쿠폰이 영영 재건을 못 한다
+    @Test
+    void 간격이_지나면_다시_띄운다() throws Exception {
+        CouponSeqRebuildTrigger sut = 트리거(Duration.ofMillis(50));
+
+        sut.suspect(COUPON_ID);
+        Thread.sleep(200);
+        sut.suspect(COUPON_ID);
+        Thread.sleep(200);
+
+        verify(rebuilder, times(2)).rebuild(COUPON_ID);
+    }
+
+    // 쿠폰을 섞지 않는다. 한 쿠폰의 간격이 남의 재건을 막으면 그 이벤트가 통째로 늦는다
+    @Test
+    void 쿠폰마다_따로_센다() throws Exception {
+        CouponSeqRebuildTrigger sut = 트리거(Duration.ofSeconds(10));
+
+        sut.suspect(COUPON_ID);
+        sut.suspect(9002L);
+        Thread.sleep(300);
+
+        verify(rebuilder, times(1)).rebuild(COUPON_ID);
+        verify(rebuilder, times(1)).rebuild(9002L);
     }
 
     @Test
