@@ -89,6 +89,30 @@ class CouponSeqAllocatorMarksTest {
         assertThat(marks.of(COUPON_ID)).isZero();
     }
 
+    /*
+     * 재건 중에는 기억을 안 버린다. 이것이 준비 전(-2)과 가르는 유일한 이유다.
+     *
+     * 버리면 그 대의 재건이 카운터를 세울 하한을 잃어 bound 가 DB 최댓값으로 떨어지고,
+     * 큐에 떠 있던 번호가 다시 나간다.
+     */
+    @Test
+    void 재건_중에는_기억을_안_버린다() {
+        marks.saw(COUPON_ID, 5_887);
+        given스크립트가("-4");
+
+        sut.allocate(COUPON_ID, MEMBER_ID, ISSUE_LIMIT);
+
+        assertThat(marks.of(COUPON_ID)).isEqualTo(5_887);
+    }
+
+    @Test
+    void 재건_중은_준비_전과_다른_갈래다() {
+        given스크립트가("-4");
+
+        assertThat(sut.allocate(COUPON_ID, MEMBER_ID, ISSUE_LIMIT))
+                .isInstanceOf(SeqOutcome.Rebuilding.class);
+    }
+
     // 소진은 키가 살아 있다는 뜻이라 기억을 그대로 둔다
     @Test
     void 소진에서는_기억을_그대로_둔다() {
@@ -108,6 +132,7 @@ class CouponSeqAllocatorMarksTest {
     private CouponIssueProperties 설정() {
         return new CouponIssueProperties(Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1,
                 10_000, Duration.ofSeconds(2), true, Duration.ofSeconds(10),
-                Duration.ofSeconds(5), 500);
+                Duration.ofSeconds(5), 500,
+                Duration.ofSeconds(1), Duration.ofSeconds(5));
     }
 }

@@ -37,7 +37,9 @@ public record CouponIssueProperties(
         @DefaultValue("true") boolean rebuildOnReconnect,
         @DefaultValue("10s") Duration rebuildOnReconnectMinInterval,
         @DefaultValue("5s") Duration couponCacheTtl,
-        @DefaultValue("500") int freeMargin) {
+        @DefaultValue("500") int freeMargin,
+        @DefaultValue("1s") Duration raiseGateTtl,
+        @DefaultValue("5s") Duration rebuildStallBudget) {
 
     public CouponIssueProperties {
         require(batchSize >= 1, "batchSize 는 1 이상이어야 한다");
@@ -53,6 +55,24 @@ public record CouponIssueProperties(
          * (docs/coupon/rebuild-raise-each-2026-10-14.md 5.4).
          */
         require(freeMargin >= 1, "freeMargin 은 1 이상이어야 한다");
+
+        /*
+         * 재건이 도는 동안 발급을 끊어 두는 시한이다. 0 이면 문이 서자마자 열려 뜻이 없어진다.
+         */
+        require(raiseGateTtl.toMillis() >= 1, "raiseGateTtl 은 1ms 이상이어야 한다");
+
+        /*
+         * 재건이 문을 닫아 둘 수 있는 총 벽시계다. 넘으면 재건을 그만두고 문을 시한에 맡긴다.
+         *
+         * 명령 단위 타임아웃만으로는 이 시간이 안 묶인다. 재건 한 번이 Redis 를 서른 번
+         * 안팎 치는데, 명령마다 상한 아래로 느리기만 하면 아무것도 안 터지면서 총합이
+         * 분 단위로 는다 (docs/coupon/rebuild-gate-2026-10-31.md 6장).
+         *
+         * 이 값보다 문 시한이 짧아야 한다. 아니면 예산을 다 쓴 뒤에도 문이 그만큼 더 닫혀 있다.
+         */
+        require(rebuildStallBudget.compareTo(raiseGateTtl) > 0,
+                "rebuildStallBudget(" + rebuildStallBudget + ") 은 raiseGateTtl("
+                        + raiseGateTtl + ") 보다 길어야 한다");
 
         /*
          * 회수 기준이 확정 대기보다 짧으면 회수가 아직 살아 있는 요청의 번호를 뺏는다.

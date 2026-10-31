@@ -41,4 +41,17 @@ final class CouponSeqKeys {
         return PREFIX + couponId + ":rebuild";
     }
 
+    /*
+     * 재건이 도는 동안 서 있는 문이다. 순번 확보가 이것을 보면 번호를 안 내준다.
+     *
+     * 위 rebuild 락과 수명도 뜻도 다르다. 저쪽은 선출이라 30초를 살고 토큰이 맞는 대만 풀지만,
+     * 이쪽은 장벽이라 짧게 살고 아무도 안 푼다. 시간이 연다.
+     *
+     * 한 키로 겸하면 선출이 끝날 때까지 문이 닫혀 있게 되고, 그것이 main 의 모양이다
+     * (docs/coupon/rebuild-gate-2026-10-31.md 5장).
+     */
+    static String raising(long couponId) {
+        return PREFIX + couponId + ":raising";
+    }
+
 }

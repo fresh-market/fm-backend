@@ -57,6 +57,7 @@ class CouponSeqRebuilderTest {
     private static final long COUPON_ID = 9001L;
     private static final String COUNTER = "coupon:9001:counter";
     private static final String LOCK = "coupon:9001:rebuild";
+    private static final String RAISING = "coupon:9001:raising";
     private static final LocalDateTime END_AT = LocalDateTime.of(2026, 10, 15, 9, 0);
     private static final int MARGIN = 100;
     private static final List<String> FREE_KEYS =
@@ -342,6 +343,44 @@ class CouponSeqRebuilderTest {
         verify(redisTemplate, never()).delete(LOCK);
     }
 
+    /*
+     * 문을 DB 읽기보다 먼저 닫는다. 순서가 뒤집히면 그 사이에 들어온 요청이 뒤로 간 카운터로
+     * 번호를 받는다. 그것이 2026-10-14 Y-2 의 결번 404 다.
+     */
+    @Test
+    void 문을_DB_읽기보다_먼저_닫는다() {
+        given발급행(10);
+
+        sut.rebuild(COUPON_ID);
+
+        InOrder 순서 = inOrder(valueOperations, seqRepository);
+        순서.verify(valueOperations).set(eq(RAISING), any(), any(Duration.class));
+        순서.verify(seqRepository).findIssuedSeqs(COUPON_ID);
+    }
+
+    /*
+     * 끝낼 때 한 번 더 닫는다. 시작할 때만 닫으면 재건이 시한보다 길 때 문이 먼저 열린다.
+     * 그리고 이 두 번째 닫기가 "마지막으로 끝낸 대 기준" 을 만든다.
+     */
+    @Test
+    void 끝낼_때_문을_다시_닫는다() {
+        given발급행(10);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(valueOperations, times(2)).set(RAISING, "1", Duration.ofSeconds(1));
+    }
+
+    // 지우지 않는다. 먼저 끝낸 대가 지우면 아직 하는 대의 문까지 열린다
+    @Test
+    void 문을_지우지_않는다() {
+        given발급행(10);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate, never()).delete(RAISING);
+    }
+
     private void given열린_선착순_쿠폰() {
         Coupon coupon = mock(Coupon.class);
         when(coupon.isActive()).thenReturn(true);
@@ -383,6 +422,7 @@ class CouponSeqRebuilderTest {
     private CouponIssueProperties 설정() {
         return new CouponIssueProperties(Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1,
                 10_000, Duration.ofSeconds(2), true, Duration.ofSeconds(10),
-                Duration.ofSeconds(5), MARGIN);
+                Duration.ofSeconds(5), MARGIN,
+                Duration.ofSeconds(1), Duration.ofSeconds(5));
     }
 }
