@@ -1,6 +1,7 @@
 package com.freshmarket.coupon.internal.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -57,6 +58,7 @@ class CouponSeqRebuilderTest {
     private static final long COUPON_ID = 9001L;
     private static final String COUNTER = "coupon:9001:counter";
     private static final String LOCK = "coupon:9001:rebuild";
+    private static final String RAISING = "coupon:9001:raising";
     private static final LocalDateTime END_AT = LocalDateTime.of(2026, 10, 15, 9, 0);
     private static final int MARGIN = 100;
     private static final List<String> FREE_KEYS =
@@ -84,11 +86,12 @@ class CouponSeqRebuilderTest {
     private CouponSeqContributor contributor;
 
     private CouponSeqMarks marks;
+    private CouponSeqRebuildRedis rebuildRedis;
     private CouponSeqRebuilder sut;
 
     @BeforeEach
     void 준비() {
-        CouponSeqRebuildRedis rebuildRedis = mock(CouponSeqRebuildRedis.class);
+        rebuildRedis = mock(CouponSeqRebuildRedis.class);
         when(rebuildRedis.template()).thenReturn(redisTemplate);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
@@ -342,6 +345,69 @@ class CouponSeqRebuilderTest {
         verify(redisTemplate, never()).delete(LOCK);
     }
 
+    /*
+     * 문을 DB 읽기보다 먼저 닫는다. 순서가 뒤집히면 그 사이에 들어온 요청이 뒤로 간 카운터로
+     * 번호를 받는다. 그것이 2026-10-14 Y-2 의 결번 404 다.
+     */
+    @Test
+    void 문을_DB_읽기보다_먼저_닫는다() {
+        given발급행(10);
+
+        sut.rebuild(COUPON_ID);
+
+        InOrder 순서 = inOrder(valueOperations, seqRepository);
+        순서.verify(valueOperations).set(eq(RAISING), any(), any(Duration.class));
+        순서.verify(seqRepository).findIssuedSeqs(COUPON_ID);
+    }
+
+    /*
+     * 끝낼 때 한 번 더 닫는다. 시작할 때만 닫으면 재건이 시한보다 길 때 문이 먼저 열린다.
+     * 그리고 이 두 번째 닫기가 "마지막으로 끝낸 대 기준" 을 만든다.
+     */
+    @Test
+    void 끝낼_때_문을_다시_닫는다() {
+        given발급행(10);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(valueOperations, times(2)).set(RAISING, "1", Duration.ofSeconds(1));
+    }
+
+    // 지우지 않는다. 먼저 끝낸 대가 지우면 아직 하는 대의 문까지 열린다
+    @Test
+    void 문을_지우지_않는다() {
+        given발급행(10);
+
+        sut.rebuild(COUPON_ID);
+
+        verify(redisTemplate, never()).delete(RAISING);
+    }
+
+    /*
+     * 정지 예산을 넘기면 재건을 그만둔다.
+     *
+     * 명령 단위 타임아웃으로는 이 시간이 안 묶인다. 재건이 Redis 를 서른 번 안팎 치는데
+     * 명령마다 상한 아래로 느리기만 하면 아무것도 안 터지면서 총합이 분 단위로 늘고, 그동안
+     * 발급이 멈춰 있다 (docs/coupon/rebuild-gate-2026-10-31.md 6장).
+     */
+    @Test
+    void 정지_예산을_넘기면_그만둔다() {
+        CouponSeqRebuilder 예산이_짧은 = new CouponSeqRebuilder(rebuildRedis, couponRepository,
+                seqRepository, seqInitializer, contributor, marks,
+                설정(Duration.ofMillis(1), Duration.ofMillis(2)), new SimpleMeterRegistry());
+        // DB 읽기가 예산을 다 쓰게 만든다. 그 다음 단계에서 확인에 걸린다
+        when(seqRepository.findIssuedSeqs(COUPON_ID)).thenAnswer(invocation -> {
+            Thread.sleep(30);
+            return List.of(new IssuedSeq(9101, 10));
+        });
+
+        assertThatThrownBy(() -> 예산이_짧은.rebuild(COUPON_ID))
+                .isInstanceOf(CouponSeqStallBudgetException.class);
+
+        // 예산을 넘겼으니 카운터를 안 올린다. 문은 시한이 연다
+        verify(redisTemplate, never()).execute(any(RedisScript.class), anyList(), any(String.class));
+    }
+
     private void given열린_선착순_쿠폰() {
         Coupon coupon = mock(Coupon.class);
         when(coupon.isActive()).thenReturn(true);
@@ -381,8 +447,13 @@ class CouponSeqRebuilderTest {
     }
 
     private CouponIssueProperties 설정() {
+        return 설정(Duration.ofSeconds(1), Duration.ofSeconds(5));
+    }
+
+    private CouponIssueProperties 설정(Duration gateTtl, Duration stallBudget) {
         return new CouponIssueProperties(Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1,
                 10_000, Duration.ofSeconds(2), true, Duration.ofSeconds(10),
-                Duration.ofSeconds(5), MARGIN);
+                Duration.ofSeconds(5), MARGIN,
+                gateTtl, stallBudget);
     }
 }

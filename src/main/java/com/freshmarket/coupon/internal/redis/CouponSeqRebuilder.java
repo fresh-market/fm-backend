@@ -78,6 +78,8 @@ public class CouponSeqRebuilder {
     private final CouponSeqMarks marks;
     private final int freeMargin;
     private final Duration lockTtl;
+    private final Duration raiseGateTtl;
+    private final Duration stallBudget;
     private final Timer raiseDuration;
     private final Timer freeDuration;
     private final RedisScript<Long> openGateScript;
@@ -103,6 +105,8 @@ public class CouponSeqRebuilder {
          * 발급을 막지 않으므로 이 값이 길어도 사용자 응답에 새지 않는다.
          */
         this.lockTtl = Duration.ofSeconds(30);
+        this.raiseGateTtl = properties.raiseGateTtl();
+        this.stallBudget = properties.rebuildStallBudget();
         /*
          * A 단계가 문을 여는 데 걸린 시간이다.
          *
@@ -169,10 +173,15 @@ public class CouponSeqRebuilder {
      */
     private List<IssuedSeq> raise(long couponId, Coupon coupon) {
         long startedAt = System.nanoTime();
+        long deadline = startedAt + stallBudget.toNanos();
+        closeDoor(couponId);
 
         List<IssuedSeq> issued = seqRepository.findIssuedSeqs(couponId);
+        requireBudget(couponId, deadline, "seq-hash");
         writeSeqHash(couponId, issued);
+        requireBudget(couponId, deadline, "restore");
         contributor.restore(couponId);
+        requireBudget(couponId, deadline, "open-gate");
 
         int dbMax = maxSeq(issued);
         int mark = marks.of(couponId);
@@ -184,7 +193,48 @@ public class CouponSeqRebuilder {
                         + " raiseMillis={}",
                 couponId, issued.size(), dbMax, mark, bound, opened,
                 TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
+        closeDoor(couponId);
         return issued;
+    }
+
+    /*
+     * 재건이 도는 동안 그 쿠폰의 발급을 끊는다.
+     *
+     * 끊는 까닭이 느려서가 아니다. 승격 직후에는 카운터가 살아 있는데 값이 뒤로 가 있을 수
+     * 있고, 그 값으로 번호를 내주면 이미 번호를 쥔 회원에게 새 번호가 나간다. 그 회원의
+     * INSERT 둘이 부딪히고 재시도가 먼저 커밋하면 먼저 온 사람이 맨 뒤로 간다.
+     *
+     * 덮어쓴다. NX 가 아니다. 그래야 나중에 깬 대가 문을 연장한다. NX 면 첫 대만 성공해서
+     * 아직 복구 중인 대가 있는데 문이 열린다.
+     *
+     * 지우지 않는다. 시간이 연다. 먼저 끝낸 대가 지우면 아직 하는 대의 문까지 열어 버리고,
+     * 세운 대가 죽으면 아무도 안 푼다.
+     *
+     * SET 은 TTL 을 지우므로 매번 시한을 같이 준다. 이 키는 그것이 맞다. 연장돼야 하는
+     * 값이라 counter 와 반대다 (그쪽은 KEEPTTL 로 수명을 지킨다).
+     */
+    private void closeDoor(long couponId) {
+        redisTemplate.opsForValue().set(CouponSeqKeys.raising(couponId), "1", raiseGateTtl);
+    }
+
+    /*
+     * 문을 닫아 둘 수 있는 총 벽시계를 넘었는지 본다.
+     *
+     * 명령 단위 타임아웃으로는 이 시간이 안 묶인다. 재건 한 번이 Redis 를 서른 번 안팎
+     * 치는데, 명령마다 상한 아래로 느리기만 하면 아무것도 안 터지면서 총합이 분 단위로 는다.
+     * 그동안 발급이 멈춰 있다.
+     *
+     * 넘으면 그만둔다. 문은 시한이 열고, 그 뒤는 재건이 없던 때와 같은 상태다. 결번을
+     * 받아들이고 가용성을 지키는 선택이다.
+     */
+    private void requireBudget(long couponId, long deadline, String step) {
+        if (System.nanoTime() <= deadline) {
+            return;
+        }
+        log.error("event=COUPON_SEQ_STALL_BUDGET_EXCEEDED couponId={} step={} budgetMillis={}",
+                couponId, step, stallBudget.toMillis());
+        throw new CouponSeqStallBudgetException(
+                "재건이 정지 예산 " + stallBudget.toMillis() + "ms 를 넘겼다");
     }
 
     /**

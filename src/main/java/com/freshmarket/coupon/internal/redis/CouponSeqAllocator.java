@@ -46,6 +46,7 @@ public class CouponSeqAllocator {
     private static final String SOLD_OUT = "-1";
     private static final String NOT_PREPARED = "-2";
     private static final String SOLD_OUT_FINAL = "-3";
+    private static final String REBUILDING = "-4";
 
     private final StringRedisTemplate redisTemplate;
     private final RedisScript<String> allocateScript;
@@ -123,7 +124,8 @@ public class CouponSeqAllocator {
             String raw = circuitBreaker.executeCallable(() -> redisTemplate.execute(
                     allocateScript,
                     List.of(CouponSeqKeys.seq(couponId), CouponSeqKeys.free(couponId),
-                            CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId)),
+                            CouponSeqKeys.counter(couponId), CouponSeqKeys.pending(couponId),
+                            CouponSeqKeys.raising(couponId)),
                     String.valueOf(memberId),
                     String.valueOf(issueLimit),
                     String.valueOf(reclaimAfter.toMillis())
@@ -170,6 +172,14 @@ public class CouponSeqAllocator {
             case SeqOutcome.Allocated allocated -> marks.saw(couponId, allocated.seq());
             case SeqOutcome.AlreadyIssued issued -> marks.saw(couponId, issued.seq());
             case SeqOutcome.NotPrepared ignored -> marks.forget(couponId);
+            /*
+             * 재건 중에는 기억을 안 버린다. 이것이 준비 전과 가르는 유일한 이유다.
+             *
+             * 버리면 그 대의 재건이 카운터를 세울 하한을 잃어 bound 가 DB 최댓값으로 떨어진다.
+             * 그러면 큐에 떠 있던 번호가 다시 나간다.
+             */
+            case SeqOutcome.Rebuilding ignored -> {
+            }
             default -> {
             }
         }
@@ -185,6 +195,9 @@ public class CouponSeqAllocator {
         }
         if (SOLD_OUT_FINAL.equals(raw)) {
             return new SeqOutcome.SoldOutFinal();
+        }
+        if (REBUILDING.equals(raw)) {
+            return new SeqOutcome.Rebuilding();
         }
 
         /*

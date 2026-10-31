@@ -164,6 +164,7 @@ class CouponSeqReconnectWatcherTest {
     private static CouponIssueProperties 설정(boolean 켬, Duration 최소간격) {
         return new CouponIssueProperties(Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1,
                 Integer.MAX_VALUE, Duration.ofSeconds(2),
-                켬, 최소간격, Duration.ofSeconds(5), 500);
+                켬, 최소간격, Duration.ofSeconds(5), 500,
+                Duration.ofSeconds(1), Duration.ofSeconds(5));
     }
 }

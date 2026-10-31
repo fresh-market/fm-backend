@@ -866,6 +866,7 @@ api-contract migration  app-config test         archunit        build
 | [coupon/rebuild-reconnect-and-fault-2026-10-01.md](./docs/coupon/rebuild-reconnect-and-fault-2026-10-01.md) | 재연결을 재건의 신호로 붙인 회차. 무장애 p99 가 열다섯 배로 흔들린다 |
 | [coupon/fault-injection-2026-10-02.md](./docs/coupon/fault-injection-2026-10-02.md) | 장애 3종을 워밍업 올린 뒤 다시 잰 회차. 승격 재건이 걸리고 pause-timeout 으로 건너뛴다 |
 | [coupon/rounds-2026-10-14.md](./docs/coupon/rounds-2026-10-14.md) | 메모리 한도를 넣고 옛 재건과 새 재건을 나란히 잰 회차. 힙 덤프가 처음 남았고 판정 지표의 왜곡을 쟀다 |
+| [coupon/rebuild-gate-2026-10-31.md](./docs/coupon/rebuild-gate-2026-10-31.md) | 재건이 끝날 때까지 순번을 안 내주는 설계. 선착순을 지키려고 발급 정지를 되들인다 |
 | [coupon/virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) | 가상 스레드를 어떻게 쟀나 |
 | [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
 | [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |

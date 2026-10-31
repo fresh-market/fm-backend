@@ -179,6 +179,14 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
             try {
                 rebuilder.rebuild(couponId);
                 return;
+            } catch (CouponSeqStallBudgetException e) {
+                /*
+                 * 정지 예산을 넘겼다. 다시 돌면 그 시도가 문을 또 닫아 발급 정지가 예산
+                 * 너머로 늘어난다. 여기서 끝낸다.
+                 */
+                log.error("event=COUPON_SEQ_REBUILD_ABANDONED couponId={} attempt={} reason={}",
+                        couponId, attempt, e.getMessage());
+                return;
             } catch (RuntimeException e) {
                 if (attempt == REBUILD_ATTEMPTS) {
                     // 삼키면 안 되지만 이 스레드를 죽여서도 안 된다
