@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.freshmarket.coupon.internal.exception.DataAccessFailures;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import com.freshmarket.coupon.internal.redis.CouponSeqCommitter;
@@ -359,6 +360,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
              */
             repairs.computeIfAbsent(ticket.couponId(), key -> new ArrayList<>())
                     .add(new CouponSeqCommitter.Repair(ticket.memberId(), ticket.issueSeq(), actual));
+            recordRepair(ticket, actual);
             ticket.complete(new IssueOutcome.AlreadyIssued(actual));
             return;
         }
@@ -447,6 +449,29 @@ public class CouponIssueFlusher implements SmartLifecycle {
         for (IssueTicket ticket : issued) {
             ticket.complete(new IssueOutcome.Issued(ticket.issueSeq()));
         }
+    }
+
+    /*
+     * 이 회원이 번호를 두 번 받았다. 그 사실과 방향을 남긴다.
+     *
+     * 방향이 요점이다. 두 번호 중 어느 쪽이 DB 에 남았느냐가 선착순이 지켜졌는지를 가른다.
+     *
+     *   kept < burned   먼저 받은 번호가 남았다.  순서가 지켜졌다
+     *   kept > burned   나중에 받은 번호가 남았다.  이 회원이 맨 뒤로 갔다
+     *
+     * 뒤쪽이 재건 중 발급을 막는 설계가 0 으로 만들려는 수다
+     * (docs/coupon/rebuild-gate-2026-10-31.md 8장). 세는 자리가 없어서 지금까지 한 번도
+     * 못 쟀고, 그래서 순서가 실제로 얼마나 깨지고 있었는지 아무도 모른다.
+     */
+    private void recordRepair(IssueTicket ticket, int actual) {
+        boolean inverted = actual > ticket.issueSeq();
+        Counter.builder("coupon.issue.seq.repaired")
+                .tag("inverted", Boolean.toString(inverted))
+                .description("한 회원이 번호를 두 번 받아 하나를 반납한 건수. inverted 가 선착순이 깨진 쪽이다")
+                .register(registry)
+                .increment();
+        log.warn("event=COUPON_ISSUE_SEQ_REPAIRED couponId={} memberId={} burned={} kept={} inverted={}",
+                ticket.couponId(), ticket.memberId(), ticket.issueSeq(), actual, inverted);
     }
 
     private static void mark(Map<Long, Map<Long, Integer>> marks, long couponId, long memberId, int seq) {
