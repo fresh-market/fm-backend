@@ -1,5 +1,6 @@
 package com.freshmarket.coupon.internal.issue;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
@@ -40,6 +41,9 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
 
     @Autowired
     private CouponIssueQueue queue;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     @Autowired
     private StringRedisTemplate redisTemplate;
@@ -113,6 +117,8 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
      */
     @Test
     void 이미_가진_회원이면_번호를_반납하고_매핑을_고친다() throws Exception {
+        double 바른_순서_전 = 고친_건수(false);
+        double 역전_전 = 고친_건수(true);
         결과를_기다린다(순번을_받은_요청(9101L, 1));
         redisTemplate.opsForHash().delete(SEQ, "9101");
 
@@ -125,6 +131,39 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
             assertThat(redisTemplate.opsForZSet().score(FREE, "7")).isEqualTo(7.0);
             assertThat(redisTemplate.opsForHash().get(SEQ, "9101")).isEqualTo("1:1");
         });
+        // 먼저 받은 1 이 남았다. 순서가 지켜진 쪽이다
+        assertThat(고친_건수(false) - 바른_순서_전).isEqualTo(1);
+        assertThat(고친_건수(true) - 역전_전).isZero();
+    }
+
+    /*
+     * 선착순이 깨지는 쪽이다. 먼저 받은 번호가 아직 큐에 있는 사이 그 회원이 재시도해 나중
+     * 번호를 받았고, 그쪽이 먼저 커밋됐다. 그러면 먼저 온 사람이 맨 뒤로 간다.
+     *
+     * 이 수를 세는 자리가 없어서 지금까지 한 번도 못 쟀다. 재건 중 발급을 막는 설계가 0 으로
+     * 만들려는 것이 이 수다 (docs/coupon/rebuild-gate-2026-10-31.md 8장).
+     */
+    @Test
+    void 나중_번호가_남으면_역전으로_센다() throws Exception {
+        double 역전_전 = 고친_건수(true);
+        결과를_기다린다(순번을_받은_요청(9101L, 7));
+        redisTemplate.opsForHash().delete(SEQ, "9101");
+
+        IssueTicket earlier = 순번을_받은_요청(9101L, 1);
+        IssueOutcome outcome = 결과를_기다린다(earlier);
+
+        assertThat(outcome).isEqualTo(new IssueOutcome.AlreadyIssued(7));
+        assertThat(발급된_행_수()).isEqualTo(1);
+        assertThat(고친_건수(true) - 역전_전).isEqualTo(1);
+    }
+
+    /*
+     * 지표는 스프링 컨텍스트가 공유하므로 시험끼리 누적된다. 절대값이 아니라 증분으로 본다.
+     */
+    private double 고친_건수(boolean inverted) {
+        return meterRegistry.find("coupon.issue.seq.repaired")
+                .tag("inverted", Boolean.toString(inverted))
+                .counters().stream().mapToDouble(c -> c.count()).sum();
     }
 
     /*
