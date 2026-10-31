@@ -440,6 +440,18 @@ flowchart TB
 
 **p99 가 세 회차 다 SLO 1초 안이다.** 가장 높은 것이 복합 장애의 0.708초다.
 
+**다만 이 p99 는 모집단이 깎인 값이다.** 세 회차의 p99 는 `coupon_settled_duration`, 즉
+**답을 받은 요청만** 담는 지표에서 나왔다. 장애 회차에서 답을 못 받은 요청이 바로 가장 느린
+요청들이라, 그것들이 빠진 분포의 p99 는 실제 사용자 경험보다 좋게 나온다. N-1 은 게이트웨이
+실패가 12,420건, N-2 는 7,723건이었고 그 요청들은 이 p99 에 안 들어가 있다.
+
+**2026-10-14 회차에서 그 왜곡의 크기를 처음 쟀다.** 한 회차는 `settled` p99 가 748ms 인데
+같은 구간의 `http_req_duration` p90 이 59.99초였다. 그래서 팀은 **판정 임계를
+`http_req_duration` 으로 옮겼고**, 그쪽이 그라파나가 보는 것과 같은 계통이다. 근거와 아홉
+회차 대조표는 [rounds-2026-10-14.md](./docs/coupon/rounds-2026-10-14.md) 에 있다.
+
+**위 표의 세 회차는 그 변경 전에 잰 것이라 `http` 기준 값이 없다.** 다시 잴 때 채운다.
+
 **거절의 모양이 장애마다 다르다.** 서버가 죽으면 그 대로 가던 요청이 게이트웨이 실패로 끊기고(12,420건), 캐시가 페일오버하면 전 인스턴스가 함께 느려져 혼잡으로 돌려보낸다(69.91%). 서버가 다 살아 있는 쪽이 오히려 혼잡이 높다.
 
 > 회차별 원본과 주입 시각은 [fault-injection-2026-10-10.md](./docs/coupon/fault-injection-2026-10-10.md), 대시보드는 [rounds-2026-10-10/](./docs/coupon/rounds-2026-10-10/) 에 있다.
@@ -853,6 +865,7 @@ api-contract migration  app-config test         archunit        build
 | [coupon/rebuild-duration-2026-09-23.md](./docs/coupon/rebuild-duration-2026-09-23.md) | 재건 정지를 네 구간으로 쪼개 처음 잰 회차 |
 | [coupon/rebuild-reconnect-and-fault-2026-10-01.md](./docs/coupon/rebuild-reconnect-and-fault-2026-10-01.md) | 재연결을 재건의 신호로 붙인 회차. 무장애 p99 가 열다섯 배로 흔들린다 |
 | [coupon/fault-injection-2026-10-02.md](./docs/coupon/fault-injection-2026-10-02.md) | 장애 3종을 워밍업 올린 뒤 다시 잰 회차. 승격 재건이 걸리고 pause-timeout 으로 건너뛴다 |
+| [coupon/rounds-2026-10-14.md](./docs/coupon/rounds-2026-10-14.md) | 메모리 한도를 넣고 옛 재건과 새 재건을 나란히 잰 회차. 힙 덤프가 처음 남았고 판정 지표의 왜곡을 쟀다 |
 | [coupon/virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) | 가상 스레드를 어떻게 쟀나 |
 | [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
 | [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |
