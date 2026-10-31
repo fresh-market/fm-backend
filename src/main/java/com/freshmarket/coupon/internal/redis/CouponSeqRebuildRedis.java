@@ -34,10 +34,29 @@ public class CouponSeqRebuildRedis {
     /*
      * 재건의 Redis 명령 하나에 주는 상한이다.
      *
-     * 발급의 100ms 보다 열 배인데, 재건은 요청 예산 밖이라 이 값이 응답 지연으로 새지 않는다.
-     * 다만 재건이 도는 동안 그 이벤트의 발급은 멈춰 있으므로 무한정 늘릴 수는 없다.
+     * 발급의 100ms 보다 서른 배인데, 재건은 요청 예산 밖이라 이 값이 응답 지연으로 새지 않는다.
+     *
+     * 1초로는 승격 직후를 못 넘긴다. 두 회차가 같은 모양으로 죽었다.
+     *
+     *   2026-10-13 V-4   복합 장애.  재시도 셋이 전부 QueryTimeoutException.  결번 144
+     *   2026-10-14 Y-3   복합 장애.  같은 모양.  재건이 한 번도 완주하지 못했다
+     *
+     *   11:46:24.321  REBUILD_RETRY   attempt=1  reason=QueryTimeoutException
+     *   11:46:28.117  REBUILD_RETRY   attempt=2  reason=QueryTimeoutException
+     *   11:46:29.517  REBUILD_FAILED  attempts=3
+     *
+     * 복합 장애라 한 대가 죽고 남은 둘에 부하가 몰린 채, 승격 직후의 새 프라이머리가 1초를
+     * 넘겼다. 2026-10-10 J-2 에서 같은 모양이 100ms 로 났고 그때 1초로 올렸는데 모자랐다.
+     *
+     * 올리는 비용이 전보다 싸졌다. 전에는 재건이 도는 동안 그 이벤트의 발급이 멈춰 있어서
+     * 이 값이 곧 발급 정지 시간이었다. #242 가 그 멈춤을 걷어냈으므로 이제 이 값은 재건
+     * 자신이 끝나는 시점만 늦추고 발급은 그동안 계속 돈다.
+     *
+     * 그래서 상한을 정하는 것은 발급이 아니라 재건 락의 수명이다. 최악이 재시도 셋을 합쳐
+     * 약 10초이고(3초 x 3 + 백오프 200ms x 1,2) 락 TTL 30초 안에 든다. 세 번 다 죽어
+     * free 를 한 번도 못 세우는 것보다 그 10초가 낫다.
      */
-    private static final Duration TIMEOUT = Duration.ofSeconds(1);
+    private static final Duration TIMEOUT = Duration.ofSeconds(3);
 
     private final LettuceConnectionFactory factory;
     private final StringRedisTemplate template;
