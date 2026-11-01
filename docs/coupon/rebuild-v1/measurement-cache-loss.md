@@ -1,6 +1,6 @@
-# 캐시 유실을 직접 주입해 본 회차 (2026-09-21)
+# 캐시 유실을 직접 주입해 본 회차
 
-**앞 회차([rebuild-measurement-2026-09-21.md](rebuild-measurement-2026-09-21.md))가 만든 것은 전손이었다.** 키가 통째로 사라지는 모양인데, Multi-AZ 복제에서 가장 안 일어난다. 실제 페일오버에서 확률이 높은 것은 복제가 밀린 채 승격돼 `counter` 가 뒤로 가는 쪽이다. 팀은 그 모양을 `fm-infra` 의 `loadtest-fault.sh lost-tail` 로 만들어 돌렸다.
+**앞 회차([rebuild-v1/measurement.md](measurement.md))가 만든 것은 전손이었다.** 키가 통째로 사라지는 모양인데, Multi-AZ 복제에서 가장 안 일어난다. 실제 페일오버에서 확률이 높은 것은 복제가 밀린 채 승격돼 `counter` 가 뒤로 가는 쪽이다. 팀은 그 모양을 `fm-infra` 의 `loadtest-fault.sh lost-tail` 로 만들어 돌렸다.
 
 ```
 AWS 실측     20,000 VU / ramp 60초 / 재고 10,000장 / 전용 인스턴스 3대
@@ -28,7 +28,7 @@ COUPON_SEQ_TAKEN_REPAIRED 돎                     뒷정리가 주인을 되살�
 congested-seq-taken       200                    지표가 로그와 맞는다
 ```
 
-**재건 로그가 한 줄도 없다.** `coupon-issue-seq.lua` 는 `counter` 가 없을 때만 `-2` 를 내고 값이 작아진 것은 못 본다([재건 문서](redis-promotion-rebuild.md) 7장). 그래서 이미 DB 에 행이 있는 번호가 다시 나갔고, 그것을 `uk_mc_coupon_seq` 가 막았다.
+**재건 로그가 한 줄도 없다.** `coupon-issue-seq.lua` 는 `counter` 가 없을 때만 `-2` 를 내고 값이 작아진 것은 못 본다([재건 문서](../redis-promotion-rebuild.md) 7장). 그래서 이미 DB 에 행이 있는 번호가 다시 나갔고, 그것을 `uk_mc_coupon_seq` 가 막았다.
 
 **스키마가 막았는데도 팀은 아무것도 안 잃었다.** 재고 10,000장이 정확히 다 나갔고 결번이 0 이다. 번호를 빼앗긴 200명은 `SEQ_TAKEN` 응답을 받고 재시도해 다시 받았다.
 
@@ -97,7 +97,7 @@ Out of memory: Killed process 2839 (k6) total-vm:8803444kB, anon-rss:7464780kB
 
 **팀이 2026-09-30 에 같은 시나리오를 끝까지 돌렸다.** 부하 스크립트를 고쳐 놀고 있는 반복이
 안 쌓이게 한 뒤다. 결번이 697에서 1,043 이고 k6 가 세 회차 다 완주했다
-([회차 기록](rebuild-and-fault-2026-09-30.md) 2장).
+([회차 기록](fault.md) 2장).
 
 **번호를 올리는 것도 그때 다시 봤다.** 5장 1번의 고침 덕에 597번 올라갔는데 매번 0개를
 올렸다. 막힌 인스턴스의 큐를 플러셔가 실패 경로에서 먼저 비우기 때문이다(같은 기록 3장).
@@ -106,7 +106,7 @@ Out of memory: Killed process 2839 (k6) total-vm:8803444kB, anon-rss:7464780kB
 
 1. **팀이 번호를 올리는 것을 DB 읽기 앞으로 옮긴다. 팀이 끝냈다.** `rebuildIfLost` 가 재건 락을 먼저 본다. 락이 있다는 것은 재건 담당이 DB 로 이미 판정을 끝냈다는 뜻이라, 올리는 쪽이 그 판정을 다시 할 이유가 없다. 재건을 맡으려는 쪽만 `findById` 를 읽는다
 2. **팀이 `counter >= 나간 순번` 불변식을 잰다. 팀이 끝냈다.** 플러시가 배치마다 카운터를 읽어 견준다. 깨지면 `COUPON_SEQ_COUNTER_BEHIND` 와 `coupon.seq.counter.behind` 에 남는다. **플러시가 재기만 하고 재건은 안 띄운다**
-3. **팀이 회차를 돌려 정상 운영에서 위 표본이 0건인지 본다. 팀이 끝냈다.** 정상 회차 둘에서 0건이었다([검증 회차](rebuild-fix-verification-2026-09-21.md) 2장)
+3. **팀이 회차를 돌려 정상 운영에서 위 표본이 0건인지 본다. 팀이 끝냈다.** 정상 회차 둘에서 0건이었다([검증 회차](fix-verification.md) 2장)
 4. 팀이 주기로 도는 정합성 검증에도 같은 식을 넣는다. 그것은 플러시가 안 도는 구간을 덮는 안전망이고, 거기서는 팀이 `MAX(issue_seq)` 를 DB 에 직접 물어 전역으로 견줄 수 있다
 5. 팀이 부하 상자를 메모리가 큰 타입으로 올리거나 VU 를 나눠 돌린다
-6. **팀이 `lagMillis` 를 얻었다.** 표본 334건, 평균 1.62초, 최대 3.202초다. `rebuild-contribute-wait` 3초를 넘겼다([검증 회차](rebuild-fix-verification-2026-09-21.md) 5장)
+6. **팀이 `lagMillis` 를 얻었다.** 표본 334건, 평균 1.62초, 최대 3.202초다. `rebuild-contribute-wait` 3초를 넘겼다([검증 회차](fix-verification.md) 5장)

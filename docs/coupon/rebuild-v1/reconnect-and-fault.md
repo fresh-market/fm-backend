@@ -1,4 +1,4 @@
-# 재연결 재건을 붙이고 장애 3종을 다시 잰 회차 (2026-10-01)
+# 재연결 재건을 붙이고 장애 3종을 다시 잰 회차
 
 **병합 전 브랜치를 올려 시험했다.** `feat/rebuild-on-reconnect` 의 `ec2d6ae5` 를 ECR 에 직접
 올리고 `current-sha` 를 그 값으로 세웠다. `main` 은 건드리지 않았다.
@@ -428,7 +428,7 @@ receiving    0.000초
 게이지라 기동 때의 값을 그대로 들고 있어 구간에 귀속되지 않는다. 2026-10-10 회차에서 팀이
 `increase(_sum)` 을 `increase(_count)` 로 나눠 다시 재니 커넥션 획득 평균이 0.01ms 에서
 0.03ms 사이였다. 판정은 그대로 "아니다" 이고 근거만 바뀌었다. 자세한 것은
-`budget-breakdown-2026-10-10.md` 에 있다.
+`rebuild-v1/budget-breakdown.md` 에 있다.
 
 ### 남은 원인
 
@@ -573,10 +573,10 @@ gap 이 갑자기 벌어진다. 이번 111건은 전부 줄어드는 쪽이었�
 
 | 회차 | 부하 | JVM |
 |---|---|---|
-| B-1 | [B-1-fm-loadtest.png](rounds-2026-10-01/B-1-fm-loadtest.png) | [B-1-fm-app-jvm.png](rounds-2026-10-01/B-1-fm-app-jvm.png) |
-| F-1 | [F-1-fm-loadtest.png](rounds-2026-10-01/F-1-fm-loadtest.png) | [F-1-fm-app-jvm.png](rounds-2026-10-01/F-1-fm-app-jvm.png) |
-| F-2 | [F-2-fm-loadtest.png](rounds-2026-10-01/F-2-fm-loadtest.png) | [F-2-fm-app-jvm.png](rounds-2026-10-01/F-2-fm-app-jvm.png) |
-| F-3 | [F-3-fm-loadtest.png](rounds-2026-10-01/F-3-fm-loadtest.png) | [F-3-fm-app-jvm.png](rounds-2026-10-01/F-3-fm-app-jvm.png) |
+| B-1 | [B-1-fm-loadtest.png](rounds-reconnect/B-1-fm-loadtest.png) | [B-1-fm-app-jvm.png](rounds-reconnect/B-1-fm-app-jvm.png) |
+| F-1 | [F-1-fm-loadtest.png](rounds-reconnect/F-1-fm-loadtest.png) | [F-1-fm-app-jvm.png](rounds-reconnect/F-1-fm-app-jvm.png) |
+| F-2 | [F-2-fm-loadtest.png](rounds-reconnect/F-2-fm-loadtest.png) | [F-2-fm-app-jvm.png](rounds-reconnect/F-2-fm-app-jvm.png) |
+| F-3 | [F-3-fm-loadtest.png](rounds-reconnect/F-3-fm-loadtest.png) | [F-3-fm-app-jvm.png](rounds-reconnect/F-3-fm-app-jvm.png) |
 
 **09-30 회차는 그림을 한 장도 못 남겼다.** 인프라를 내린 뒤에는 Prometheus 볼륨이 사라져
 되살릴 수 없다. 그래서 이번에는 회차 직후에 뽑는 단계를 절차에 넣었다.
@@ -585,6 +585,6 @@ gap 이 갑자기 벌어진다. 이번 111건은 전부 줄어드는 쪽이었�
 
 ## 관련 문서
 
-* 설계: [부재와 승격을 한 경로로 합친 재건](rebuild-redesign.md)
-* 재건 전반: [승격 뒤 Redis 키 재건](redis-promotion-rebuild.md)
-* 앞 회차: [2026-09-30 장애 3종](rebuild-and-fault-2026-09-30.md), [2026-09-23 재건 소요](rebuild-duration-2026-09-23.md)
+* 설계: [부재와 승격을 한 경로로 합친 재건](../rebuild-redesign.md)
+* 재건 전반: [승격 뒤 Redis 키 재건](../redis-promotion-rebuild.md)
+* 앞 회차: [2026-09-30 장애 3종](fault.md), [2026-09-23 재건 소요](duration.md)

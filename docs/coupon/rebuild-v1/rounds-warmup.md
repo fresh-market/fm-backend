@@ -1,4 +1,4 @@
-# 장애 3종을 워밍업을 올린 뒤 다시 잰 회차 (2026-10-02)
+# 장애 3종을 워밍업을 올린 뒤 다시 잰 회차
 
 **이 회차가 처음으로 승격 뒤 재연결 재건이 걸리는 것을 봤다.** 그리고 그것이 재건을 못 하고
 건너뛰는 것도 함께 봤다.
@@ -148,7 +148,7 @@ if (!flusher.pause(PAUSE_TIMEOUT)) {
 **완주하지 않은 원인은 뒤에 밝혀졌다.** 재건이 발급과 같은 `redis.timeout 100ms` 를 쓰고
 있었고 승격 직후의 새 프라이머리가 그 상한을 넘겼다. 재시도도 없었다. 전용 통로와 재시도를
 넣은 뒤 2026-10-10 J-5 에서 승격 경로의 재건이 처음 완주했다
-(`budget-breakdown-2026-10-10.md` 4장과 10장).
+(`rebuild-v1/budget-breakdown.md` 4장과 10장).
 
 지금까지 재건 소요 시간의 실측은 둘뿐이고 둘 다 다른 경로에서 나왔다.
 
@@ -191,7 +191,7 @@ if (!flusher.pause(PAUSE_TIMEOUT)) {
 
 **2번이 닫혔고 그 자리에 새 질문이 생겼다.** 재건 정지의 거의 전부가 기여 대기이고, 그것이
 곧 발급 요청의 큐 대기 꼬리다. `contributeWait` 3초를 줄일 수 있는지가 1번보다 큰 질문이다
-(`budget-breakdown-2026-10-10.md` 10.1).
+(`rebuild-v1/budget-breakdown.md` 10.1).
 
 **1번이 설계로 돌아가는 질문이다.** 선택지가 셋으로 보인다.
 
@@ -211,9 +211,9 @@ if (!flusher.pause(PAUSE_TIMEOUT)) {
 
 | 회차 | 부하 | JVM |
 |---|---|---|
-| G-1 | [G-1-fm-loadtest.png](rounds-2026-10-02/G-1-fm-loadtest.png) | [G-1-fm-app-jvm.png](rounds-2026-10-02/G-1-fm-app-jvm.png) |
-| G-2 | [G-2-fm-loadtest.png](rounds-2026-10-02/G-2-fm-loadtest.png) | [G-2-fm-app-jvm.png](rounds-2026-10-02/G-2-fm-app-jvm.png) |
-| G-3 | [G-3-fm-loadtest.png](rounds-2026-10-02/G-3-fm-loadtest.png) | [G-3-fm-app-jvm.png](rounds-2026-10-02/G-3-fm-app-jvm.png) |
+| G-1 | [G-1-fm-loadtest.png](rounds-warmup/G-1-fm-loadtest.png) | [G-1-fm-app-jvm.png](rounds-warmup/G-1-fm-app-jvm.png) |
+| G-2 | [G-2-fm-loadtest.png](rounds-warmup/G-2-fm-loadtest.png) | [G-2-fm-app-jvm.png](rounds-warmup/G-2-fm-app-jvm.png) |
+| G-3 | [G-3-fm-loadtest.png](rounds-warmup/G-3-fm-loadtest.png) | [G-3-fm-app-jvm.png](rounds-warmup/G-3-fm-app-jvm.png) |
 
 나머지 셋(개요, 호스트, 데이터 저장소)과 원자료는 `fm-infra/loadtest-runs/` 아래에 있고
 그 폴더는 gitignore 대상이라 이 기계에만 있다.
@@ -228,7 +228,7 @@ if (!flusher.pause(PAUSE_TIMEOUT)) {
 
 ## 관련 문서
 
-* 앞 회차: [2026-10-01 재연결 재건과 장애 3종](rebuild-reconnect-and-fault-2026-10-01.md)
-* 재건 설계: [부재와 승격을 한 경로로 합친 재건](rebuild-redesign.md)
-* 재건 전반: [승격 뒤 Redis 키 재건](redis-promotion-rebuild.md)
-* 워밍업: [기동 워밍업](warmup.md)
+* 앞 회차: [2026-10-01 재연결 재건과 장애 3종](reconnect-and-fault.md)
+* 재건 설계: [부재와 승격을 한 경로로 합친 재건](../rebuild-redesign.md)
+* 재건 전반: [승격 뒤 Redis 키 재건](../redis-promotion-rebuild.md)
+* 워밍업: [기동 워밍업](../warmup.md)

@@ -1,7 +1,7 @@
 # 부재와 승격을 한 경로로 합친 재건 (설계)
 
 **짰고 한 번 돌려 봤다.** PR #238 이 이 설계를 구현했고 2026-10-01 회차가 AWS 에서 돌렸다
-([회차 기록](rebuild-reconnect-and-fault-2026-10-01.md)). 그 회차가 얻은 것과 못 얻은 것이
+([회차 기록](rebuild-v1/reconnect-and-fault.md)). 그 회차가 얻은 것과 못 얻은 것이
 갈리므로 아래 표로 먼저 적는다.
 
 | | 결과 |
@@ -17,7 +17,7 @@
 
 **승격 경로를 보기까지 결함이 둘 더 있었다.** 재건이 발급과 같은 `redis.timeout 100ms` 를
 써서 승격 직후에 죽었고 재시도도 없었다. 전용 통로와 재시도를 넣은 뒤에 비로소 완주했다
-([회차](budget-breakdown-2026-10-10.md) 4장).
+([회차](rebuild-v1/budget-breakdown.md) 4장).
 
 **지금 재건은 카운터 키가 없을 때만 돈다**([재건 문서](redis-promotion-rebuild.md) 7장).
 승격은 키를 지우지 않고 값의 꼬리만 자르므로 재건이 그 승격을 못 본다. **이 설계는 두 경우를 한
@@ -182,7 +182,7 @@ Lua 가 번호를 돌려준다  ->  (여기서 락이 잡힌다)  ->  티켓이 
 
 **그리고 올라온 것이 빌 때의 문제는 이 설계가 안 다룬다.** 플러셔가 실패한 배치를 대기열에서
 빼고 되돌리지 않으므로 DB 장애가 겹치면 13번이 카운터를 뒤로 돌린다
-([회차 기록](rebuild-and-fault-2026-09-30.md) 3장). **팀이 그 부분은 고려하지 않기로 정했다.**
+([회차 기록](rebuild-v1/fault.md) 3장). **팀이 그 부분은 고려하지 않기로 정했다.**
 
 ---
 
@@ -191,6 +191,6 @@ Lua 가 번호를 돌려준다  ->  (여기서 락이 잡힌다)  ->  티켓이 
 | 문서 | 무엇이 있나 |
 |---|---|
 | [redis-promotion-rebuild.md](redis-promotion-rebuild.md) | 지금 도는 재건. 부품마다 붙은 이유는 1장 |
-| [rebuild-and-fault-2026-09-30.md](rebuild-and-fault-2026-09-30.md) | 올라온 것이 비어 카운터가 내려간 회차 |
+| [rebuild-v1/fault.md](rebuild-v1/fault.md) | 올라온 것이 비어 카운터가 내려간 회차 |
 | [coupon-redis-keys.md](coupon-redis-keys.md) | 키 여섯의 정의와 수명 |
 | [coupon-redis-scripts.md](coupon-redis-scripts.md) | 순번 확보 스크립트가 무엇을 하나 |

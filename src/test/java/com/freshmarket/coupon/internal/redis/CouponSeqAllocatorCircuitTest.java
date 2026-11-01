@@ -50,7 +50,8 @@ class CouponSeqAllocatorCircuitTest {
     void setUp() {
         CouponIssueProperties issueProperties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofSeconds(2), Duration.ofSeconds(3), true, Duration.ofSeconds(10), Duration.ofSeconds(5));
+                Duration.ofSeconds(2), true, Duration.ofSeconds(10), Duration.ofSeconds(5), 500,
+                Duration.ofSeconds(1), Duration.ofSeconds(5));
         /*
          * 운영 값은 application.yml 이 갖는다. 여기서는 시험이 짧게 끝나도록 작게 잡은
          * 설정으로 레지스트리를 만들어 넣는다. 이름이 couponSeq 여야 코드가 그것을 집는다.
@@ -67,7 +68,7 @@ class CouponSeqAllocatorCircuitTest {
                 .automaticTransitionFromOpenToHalfOpenEnabled(true)
                 .slowCallDurationThreshold(Duration.ofMillis(500))
                 .build());
-        sut = new CouponSeqAllocator(redisTemplate, issueProperties, registry);
+        sut = new CouponSeqAllocator(redisTemplate, issueProperties, registry, new CouponSeqMarks());
         /*
          * 운영에서는 이 회로가 METRICS_ONLY 로 떠서 호출을 안 막는다 (CouponSeqAllocator 참조).
          * 아래 시험들은 회로가 열리는 동작 자체를 보는 것이라 여기서 닫힘으로 되돌린다.
@@ -87,9 +88,10 @@ class CouponSeqAllocatorCircuitTest {
         CircuitBreakerRegistry registry = CircuitBreakerRegistry.of(CircuitBreakerConfig.ofDefaults());
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofSeconds(2), Duration.ofSeconds(3), true, Duration.ofSeconds(10), Duration.ofSeconds(5));
+                Duration.ofSeconds(2), true, Duration.ofSeconds(10), Duration.ofSeconds(5), 500,
+                Duration.ofSeconds(1), Duration.ofSeconds(5));
 
-        new CouponSeqAllocator(redisTemplate, properties, registry);
+        new CouponSeqAllocator(redisTemplate, properties, registry, new CouponSeqMarks());
 
         assertThat(registry.circuitBreaker("couponSeq").getState())
                 .isEqualTo(CircuitBreaker.State.METRICS_ONLY);

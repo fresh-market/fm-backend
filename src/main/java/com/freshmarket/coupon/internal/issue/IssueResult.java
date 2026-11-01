@@ -34,8 +34,15 @@ public enum IssueResult {
     QUEUE_FULL("congested-queue-full"),
     /** Redis 가 답하지 않거나 순번 회로가 열렸다. */
     SEQ_UNAVAILABLE("congested-seq-unavailable"),
-    /** 카운터가 없다. 이벤트 준비 전이거나 재건 중이다. */
+    /** 카운터가 없다. 이벤트 준비 전이거나 키가 통째로 사라졌다. */
     NOT_PREPARED("congested-not-prepared"),
+    /*
+     * 재건이 도는 동안 끊었다.
+     *
+     * 준비 전과 나눠 세는 까닭은 둘의 뜻이 달라서다. 이쪽이 쏟아지는 것은 정상이고 짧아야
+     * 한다. 길게 이어지면 재건이 못 끝내고 있다는 뜻이고, 그때는 정지 예산을 다시 본다.
+     */
+    REBUILDING("congested-rebuilding"),
     /** 그 번호를 남이 쓰고 있다. 8장이 말하는 "충돌" 이다. */
     SEQ_TAKEN("congested-seq-taken"),
     /** DB 쓰기가 실패했다. 8장이 말하는 "DB 타임아웃" 이 여기 든다. */

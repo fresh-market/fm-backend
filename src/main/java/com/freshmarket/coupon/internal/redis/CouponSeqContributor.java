@@ -1,204 +1,133 @@
 package com.freshmarket.coupon.internal.redis;
 
-import java.time.Duration;
-import java.util.HashMap;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.OptionalLong;
 import java.util.concurrent.TimeUnit;
 
-import com.freshmarket.coupon.internal.issue.CouponIssueFlusher;
-import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import com.freshmarket.coupon.internal.issue.CouponIssueQueue;
 import com.freshmarket.coupon.internal.issue.IssueTicket;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.connection.RedisZSetCommands;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * 재건이 도는 동안 이 인스턴스가 쥔 순번을 올린다. 주도하든 안 하든 모든 인스턴스가 부른다
- * ({@code docs/coupon/coupon.md} 10장).
+ * 재건 때 이 인스턴스가 쥔 티켓을 {@code seq} 와 {@code pending} 에 되살린다.
  *
  * <p><b>큐는 Redis 가 죽어도 살아 있는 유일한 미확정 기록이다.</b> DB 에는 커밋된 것만 있고,
- * 큐에는 번호를 받았지만 아직 행이 안 된 것이 있다. 이것을 안 올리면 재건이 그 번호들을 아무도
- * 안 쥔 것으로 보고 <b>남에게 다시 내준다.</b>
+ * 큐에는 번호를 받았지만 아직 행이 안 된 것이 있다. 되살리지 않으면 두 가지가 깨진다. 그 회원이
+ * 재시도할 때 자기 번호를 못 찾아 번호를 하나 더 태우고, {@code free} 를 쓰는 쪽이 그 번호를
+ * "아무도 안 쥔 것" 으로 보고 남에게 내준다.
  *
- * <p><b>남의 큐를 알 필요가 없다.</b> 각자 자기 것만 같은 해시에 올린다. 회원 하나의 티켓은 한
- * 인스턴스에만 있으므로 겹치지 않고, 순서도 상관없다.
+ * <p><b>아무에게도 보고하지 않는다.</b> 예전에는 자기 큐를 {@code rebuild:queued} 에 올리고
+ * {@code rebuild:done} 에 이름을 남겼고, 주도자가 그 수를 명부의 수와 견줘 기다림을 끝냈다.
+ * 그 세기가 실패하는 경우가 회차마다 새로 나왔다
+ * ({@code docs/coupon/rebuild-v2/design.md} 7.1). <b>이제 쥔 번호의 기록은
+ * {@code seq} 해시 하나이고, {@code free} 를 쓰는 스크립트가 그것을 직접 본다.</b>
+ *
+ * <p><b>플러시를 멈추지 않는다.</b> 멈춤이 필요했던 까닭은 훑는 사이에 티켓이 DB 로 내려가면
+ * 확정 표시({@code "N:1"})를 미확정({@code "N"})으로 덮기 때문이었다. 쓰기를 "없을 때만" 으로
+ * 바꾸면 그 덮어쓰기가 구조적으로 안 생기므로 멈출 이유가 사라진다 (같은 문서 5.2).
  */
 @Slf4j
 @Component
 public class CouponSeqContributor {
 
     /*
-     * 큐를 얼리기를 기다리는 시한이다.
-     * 배치 하나가 끝나기를 기다리는 것뿐이라 짧다. 이 시간을 넘기면 그 배치가 막힌 것이므로
-     * 훑기를 포기한다. 흔들리는 목록으로 순번의 주인을 정하느니 안 올리는 편이 낫다.
+     * 한 번에 보내는 항목 수다.
+     * 만 건을 한 파이프라인에 담으면 그동안 Redis 단일 스레드가 다른 요청을 못 받는다.
      */
-    private static final Duration PAUSE_TIMEOUT = Duration.ofSeconds(2);
-
-    private static final String CONTRIBUTE_LAG = "coupon.seq.rebuild.contribute.lag";
-    private static final String CONTRIBUTE_PAUSE = "coupon.seq.rebuild.contribute.pause";
-    private static final String CONTRIBUTE_WRITE = "coupon.seq.rebuild.contribute.write";
+    private static final int CHUNK = 500;
 
     private final StringRedisTemplate redisTemplate;
     private final CouponIssueQueue queue;
-    private final CouponIssueFlusher flusher;
-    private final CouponSeqInstances instances;
-    private final Duration queuedTtl;
-    private final Timer lag;
-    private final Timer pauseWait;
     private final Timer write;
 
     public CouponSeqContributor(CouponSeqRebuildRedis rebuildRedis,
                                 CouponIssueQueue queue,
-                                CouponIssueFlusher flusher,
-                                CouponSeqInstances instances,
-                                CouponIssueProperties properties,
                                 MeterRegistry registry) {
         this.redisTemplate = rebuildRedis.template();
         this.queue = queue;
-        this.flusher = flusher;
-        this.instances = instances;
-        // 재건 락과 같은 수명이다. 재건이 끝나기 전에 사라지면 주도자가 이 인스턴스의 큐를 못 읽는다
-        this.queuedTtl = properties.rebuildContributeWait().multipliedBy(10);
-        this.lag = Timer.builder(CONTRIBUTE_LAG)
-                .description("재건이 시작된 뒤 이 인스턴스가 자기 큐를 다 올리기까지 걸린 시간")
+        this.write = Timer.builder("coupon.seq.rebuild.restore")
+                .description("이 인스턴스가 자기 큐를 훑어 seq 와 pending 에 되살린 시간")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
-        /*
-         * lag 을 셋으로 가르려고 둘을 더 둔다.
-         *
-         * lag 은 "락이 선 때부터 다 올린 때까지" 라 그 안에 세 가지가 섞여 있다. 이 메서드에
-         * 들어오기까지 기다린 시간, pause 가 돌던 배치를 기다린 시간, 훑고 쓴 시간이다.
-         * 셋의 처방이 서로 다르므로 총합만 보고 rebuild-contribute-wait 를 건드리면 안 된다.
-         *
-         * 들어오기까지 기다린 시간은 따로 안 잰다. lag 에서 아래 둘을 빼면 그것이다.
-         */
-        this.pauseWait = Timer.builder(CONTRIBUTE_PAUSE)
-                .description("기여가 돌던 배치가 끝나기를 기다린 시간")
-                .register(registry);
-        this.write = Timer.builder(CONTRIBUTE_WRITE)
-                .description("기여가 자기 큐를 훑어 Redis 에 쓴 시간")
-                .register(registry);
     }
 
     /**
-     * 이 인스턴스의 큐에서 이 쿠폰의 티켓을 골라 올린다.
+     * 이 쿠폰의 내 티켓을 {@code seq} 와 {@code pending} 에 되살린다.
      *
-     * <p>플러시를 먼저 멈춘다. 안 멈추면 훑는 사이에 티켓이 DB 로 내려가고, 재건이 그것을
-     * 미확정으로 덮어 회수가 확정된 번호를 남에게 넘긴다.
-     */
-    public void contribute(long couponId) {
-        long enteredAt = System.nanoTime();
-        if (!flusher.pause(PAUSE_TIMEOUT)) {
-            log.warn("event=COUPON_SEQ_CONTRIBUTE_SKIPPED couponId={} reason=pause-timeout", couponId);
-            return;
-        }
-        long pausedAt = System.nanoTime();
-        pauseWait.record(pausedAt - enteredAt, TimeUnit.NANOSECONDS);
-        try {
-            upload(couponId, enteredAt, pausedAt);
-        } finally {
-            flusher.resume();
-        }
-    }
-
-    /**
-     * 이미 멈춘 상태에서 올린다. 멈춤과 재개는 부르는 쪽이 맡는다.
+     * <p><b>둘 다 "없을 때만" 쓴다.</b> 그것이 멈춤을 없앤 근거다.
      *
-     * <p><b>주도하는 인스턴스가 쓴다.</b> 그쪽은 올린 뒤에도 읽고 쓸 것이 남아 있어, 그 구간까지
-     * 멈춘 채로 둬야 한다. 재건이 락으로 발급을 막고 있어 멈춰 둬도 큐가 자라지 않는다.
+     * <pre>
+     * seq      HSETNX   있는 값을 안 건드린다. 확정 표시를 미확정으로 덮으면 회수가 끝난 번호를 뺏는다
+     * pending  ZADD NX  있는 점수를 안 건드린다. 재건 시각으로 덮으면 회수가 그만큼 뒤로 밀린다
+     * </pre>
+     *
+     * <p><b>겹쳐 들어와도 안전하다.</b> 훑는 사이에 그 티켓이 커밋되면 확정 쪽이 {@code "N:1"} 을
+     * 쓰는데, 내 쓰기가 먼저면 그쪽이 덮고 내 쓰기가 나중이면 {@code NX} 가 아무 일도 안 한다.
+     * {@code pending} 에 뒤늦게 들어간 항목도 해롭지 않다. 회수 스크립트가 확정 표시가 붙은
+     * 번호는 {@code pending} 에서만 빼고 되살리지 않는다.
      */
-    void uploadWhilePaused(long couponId) {
-        long now = System.nanoTime();
-        upload(couponId, now, now);
-    }
-
-    private void upload(long couponId, long enteredAt, long pausedAt) {
-        Map<String, String> mine = mineFor(couponId);
+    public void restore(long couponId) {
+        long startedAt = System.nanoTime();
+        List<IssueTicket> mine = mineFor(couponId);
         if (mine.isEmpty()) {
-            /*
-             * 올릴 것이 없어도 늦은 정도는 잰다.
-             * 안 재면 "올리기가 안 늦었다" 와 "올릴 것이 없었다" 가 지표에서 같아진다.
-             * 2026-09-21 회차가 전부 후자였는데 표본이 0건이라 그 사실을 지표로는 못 봤다.
-             */
-            markDone(couponId);
-            recordLag(couponId, 0, enteredAt, pausedAt);
+            log.info("event=COUPON_SEQ_RESTORED couponId={} held=0", couponId);
             return;
         }
-        String key = CouponSeqKeys.rebuildQueued(couponId);
-        redisTemplate.opsForHash().putAll(key, mine);
-        /*
-         * 이 키는 다른 넷과 달리 counter 의 만료를 물려받을 자리가 없다.
-         * 지우는 것이 주도하는 인스턴스의 정리 한 번뿐이라, 그 정리와 락 해제 사이에 올린 것은
-         * 아무도 안 지운다. 그래서 여기서 직접 시한을 건다.
-         */
-        redisTemplate.expire(key, queuedTtl);
-        markDone(couponId);
-        recordLag(couponId, mine.size(), enteredAt, pausedAt);
+
+        for (int from = 0; from < mine.size(); from += CHUNK) {
+            writeChunk(couponId, mine.subList(from, Math.min(from + CHUNK, mine.size())));
+        }
+        write.record(System.nanoTime() - startedAt, TimeUnit.NANOSECONDS);
+
+        log.warn("event=COUPON_SEQ_RESTORED couponId={} held={} writeMillis={}",
+                couponId, mine.size(),
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
+    }
+
+    /*
+     * 한 덩이를 왕복 하나로 보낸다.
+     *
+     * 티켓마다 치면 만 건이 만 번의 왕복이다. 그 시간 동안 free 를 쓰는 쪽이 이 인스턴스의
+     * 번호를 아직 못 보므로, 왕복 수가 곧 그 창의 길이다.
+     */
+    private void writeChunk(long couponId, List<IssueTicket> chunk) {
+        byte[] seqKey = CouponSeqKeys.seq(couponId).getBytes(StandardCharsets.UTF_8);
+        byte[] pendingKey = CouponSeqKeys.pending(couponId).getBytes(StandardCharsets.UTF_8);
+        double now = System.currentTimeMillis();
+        redisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+            for (IssueTicket ticket : chunk) {
+                byte[] member = String.valueOf(ticket.memberId()).getBytes(StandardCharsets.UTF_8);
+                connection.hashCommands().hSetNX(seqKey, member,
+                        String.valueOf(ticket.issueSeq()).getBytes(StandardCharsets.UTF_8));
+                /*
+                 * 점수를 복원할 수 없어 지금으로 넣는다. 그만큼 회수 기준이 뒤로 밀린다.
+                 * 그 회원의 원래 시각은 사라진 Redis 에만 있었다.
+                 */
+                connection.zSetCommands().zAdd(pendingKey, now, member,
+                        RedisZSetCommands.ZAddArgs.ifNotExists());
+            }
+            return null;
+        });
     }
 
     /**
-     * 주도자가 락을 세운 뒤 이 인스턴스가 다 올리기까지 걸린 시간을 남긴다.
+     * 이 쿠폰에 걸린 내 티켓을 모은다.
      *
-     * <p><b>이 값이 {@code rebuild-contribute-wait} 를 좁히는 근거다.</b> 지금 3초는 GC 정지와
-     * 배치 하나를 덮을 만큼으로 고른 값이지 실측으로 좁힌 값이 아니다. 회차마다 가장 늦은 기여가
-     * 몇 밀리초였는지 쌓이면 그 분포를 보고 줄일 수 있다.
-     *
-     * <p>재는 데 실패해도 기여는 이미 끝났다. 그래서 여기서 예외를 밖으로 안 보낸다.
+     * <p>큐를 얼리지 않고 훑는다. 훑는 사이에 빠진 티켓은 DB 로 내려간 것이고, 그쪽이 쓰는
+     * 확정 표시가 이 메서드의 결과보다 정확하다.
      */
-    private void recordLag(long couponId, int size, long enteredAt, long pausedAt) {
-        long writeMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pausedAt);
-        long pauseMillis = TimeUnit.NANOSECONDS.toMillis(pausedAt - enteredAt);
-        write.record(System.nanoTime() - pausedAt, TimeUnit.NANOSECONDS);
-
-        OptionalLong startedAt = OptionalLong.empty();
-        try {
-            startedAt = RebuildLock.startedAtOf(
-                    redisTemplate.opsForValue().get(CouponSeqKeys.rebuild(couponId)));
-        } catch (RuntimeException e) {
-            log.debug("event=COUPON_SEQ_CONTRIBUTE_LAG_UNKNOWN couponId={}", couponId, e);
-        }
-        if (startedAt.isEmpty()) {
-            log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={} pauseMillis={} writeMillis={}",
-                    couponId, size, pauseMillis, writeMillis);
-            return;
-        }
-        long lagMillis = Math.max(0, System.currentTimeMillis() - startedAt.getAsLong());
-        lag.record(lagMillis, TimeUnit.MILLISECONDS);
-        /*
-         * 셋을 한 줄에 같이 낸다.
-         * lag 에서 pause 와 write 를 빼면 이 메서드에 들어오기까지 기다린 시간이고, 그 값이
-         * 크면 고칠 자리가 기여가 아니라 그 앞이다. 지표를 못 보는 자리에서도 읽히게 한다.
-         */
-        log.warn("event=COUPON_SEQ_CONTRIBUTED couponId={} size={} lagMillis={} pauseMillis={} writeMillis={} waitMillis={}",
-                couponId, size, lagMillis, pauseMillis, writeMillis,
-                Math.max(0, lagMillis - pauseMillis - writeMillis));
-    }
-
-    /**
-     * 다 올렸다고 이름을 남긴다. 주도자는 이 수가 명부의 수에 닿으면 기다림을 끝낸다.
-     *
-     * <p><b>올릴 것이 없었을 때도 남긴다.</b> "아직 안 올렸다" 와 "올릴 것이 없었다" 를 주도자가
-     * 구분하지 못하면, 올릴 것이 없는 인스턴스 하나 때문에 정해진 시간을 끝까지 기다린다.
-     *
-     * <p>이 표시를 올리기보다 먼저 하면 안 된다. 주도자가 아직 안 들어온 큐를 다 온 것으로 보고
-     * 진행한다. <b>반드시 쓰기가 끝난 뒤다.</b>
-     */
-    private void markDone(long couponId) {
-        redisTemplate.opsForSet().add(CouponSeqKeys.rebuildDone(couponId), instances.id());
-        redisTemplate.expire(CouponSeqKeys.rebuildDone(couponId), queuedTtl);
-    }
-
-    private Map<String, String> mineFor(long couponId) {
-        List<IssueTicket> snapshot = queue.snapshot();
-        Map<String, String> mine = new HashMap<>();
-        for (IssueTicket ticket : snapshot) {
+    private List<IssueTicket> mineFor(long couponId) {
+        List<IssueTicket> mine = new ArrayList<>();
+        for (IssueTicket ticket : queue.snapshot()) {
             if (ticket.couponId() == couponId) {
-                mine.put(String.valueOf(ticket.memberId()), String.valueOf(ticket.issueSeq()));
+                mine.add(ticket);
             }
         }
         return mine;

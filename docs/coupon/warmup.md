@@ -308,6 +308,6 @@ COUPON_WRITE_WARMUP_SKIPPED     기본 등급이나 워밍업 쿠폰이 없다. 
   `docs/verification/선착순쿠폰_워밍업_설계와측정.md` 에 있다. A 부터 F 까지의 회차가 거기 있고,
   **이 문서는 그 결과로 지금 도는 값과 그 근거만 적는다.**
 - 2026-10-02 회차의 전체 맥락은
-  [rebuild-reconnect-and-fault-2026-10-01.md](rebuild-reconnect-and-fault-2026-10-01.md) 3.5절에 있다.
+  [rebuild-v1/reconnect-and-fault.md](rebuild-v1/reconnect-and-fault.md) 3.5절에 있다.
 - Redis 가 키를 잃었을 때의 복구는 [redis-promotion-rebuild.md](redis-promotion-rebuild.md) 에 있다.
 - 가상 스레드를 켜고 끈 비교는 [virtual-thread-measurement.md](virtual-thread-measurement.md) 에 있다.

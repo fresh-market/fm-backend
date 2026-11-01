@@ -33,27 +33,25 @@ final class CouponSeqKeys {
 
     /*
      * 재건이 잡는 락이다. 넷과 함께 죽지 않으므로 위와 성격이 다르다.
-     * 재건은 넷이 없을 때 도는 일이라 그 수명을 물려받을 대상이 없고, 자기 TTL 로 산다.
+     *
+     * 이 락은 선출에만 쓴다. 여러 대가 같은 DB 읽기와 같은 계산을 중복하지 않게 하는 값이고
+     * 발급을 막지 않는다 (docs/coupon/rebuild-v2/design.md 4.2).
      */
     static String rebuild(long couponId) {
         return PREFIX + couponId + ":rebuild";
     }
 
     /*
-     * 자기 큐를 다 올린 인스턴스가 이름을 남기는 자리다.
-     * 주도자는 이 수가 명부의 수에 닿으면 기다림을 끝낸다. 그래서 평상시에는 정해진 시간을
-     * 다 안 쓴다. 재건이 끝나면 rebuild:queued 와 함께 지운다.
+     * 재건이 도는 동안 서 있는 발급 차단 표시다. 순번 확보가 이것을 보면 번호를 안 내준다.
+     *
+     * 위 rebuild 락과 수명도 뜻도 다르다. 저쪽은 선출이라 30초를 살고 토큰이 맞는 대만 풀지만,
+     * 이쪽은 차단이라 짧게 살고 아무도 안 푼다. 시간이 푼다.
+     *
+     * 한 키로 겸하면 선출이 끝날 때까지 발급이 막혀 있게 되고, 그것이 main 의 모양이다
+     * (docs/coupon/rebuild-v3/design.md 5장).
      */
-    static String rebuildDone(long couponId) {
-        return PREFIX + couponId + ":rebuild:done";
+    static String raising(long couponId) {
+        return PREFIX + couponId + ":raising";
     }
 
-    /*
-     * 재건이 도는 동안 각 인스턴스가 자기 큐를 올려 두는 자리다. 회원 -> 순번이다.
-     * 회원 하나의 티켓은 한 인스턴스에만 있으므로 여럿이 같은 해시에 써도 겹치지 않는다.
-     * 재건이 끝나면 지운다.
-     */
-    static String rebuildQueued(long couponId) {
-        return PREFIX + couponId + ":rebuild:queued";
-    }
 }

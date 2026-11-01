@@ -194,7 +194,7 @@ k6_http_reqs_total
 **VU 2만이 `anon-rss` 7,268 MiB 를 쓴다.** `m7i-flex.large` 의 `MemTotal` 이 7,776 MiB 이고
 k6 실행 전 `used` 가 544 MiB 라, 합이 7,812 MiB 로 36 MiB 초과였다.
 
-**원인은 [rebuild-measurement-2026-09-21b.md](rebuild-measurement-2026-09-21b.md) 4장에 있다.**
+**원인은 [rebuild-v1/measurement-cache-loss.md](rebuild-v1/measurement-cache-loss.md) 4장에 있다.**
 
 > 회차 1의 k6 는 살아남았다. **k6 는 오류 경로가 늘면 못 버틴다.** 팀이 회차 2와 3에서
 > DB 를 막아 실패 응답이 많았다.
@@ -270,7 +270,7 @@ Prometheus 에서도 뽑아야 한다.
 
 ## 11. 결과
 
-**결과는 [coupon-load-versions.md](coupon-load-versions.md) 에 있다.** 2026-09-28 회차다.
+**결과는 [coupon-load-versions.md](coupon-load-versions.md) 에 있다.** v4 를 채택한 회차다.
 
 | 버전 | p99 | 발급 | 회차 간 몇 배 | 판정 |
 |---|---:|---:|---:|---|

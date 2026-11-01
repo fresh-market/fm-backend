@@ -1,8 +1,8 @@
-# 재건과 장애를 부하 생성기가 죽지 않는 조건에서 다시 잰 회차 (2026-09-30)
+# 재건과 장애를 부하 생성기가 죽지 않는 조건에서 다시 잰 회차
 
 **팀이 부하 스크립트를 고친 뒤 처음으로 장애 회차를 끝까지 돌렸다.** 앞선 재건 회차는 k6 가
 87% 에서 OOM 으로 죽어 HOLD 30초가 통째로 날아갔고, 그래서 결번을 그대로 못 읽었다
-([rebuild-measurement-2026-09-21b.md](rebuild-measurement-2026-09-21b.md) 4장).
+([rebuild-v1/measurement-cache-loss.md](measurement-cache-loss.md) 4장).
 
 ```
 AWS 실측     20,000 VU / ramp 60초 / HOLD 30초 / 재고 10,000장 / 전용 인스턴스 3대
