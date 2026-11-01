@@ -46,8 +46,8 @@ import org.springframework.stereotype.Component;
  * B  락을 잡은 한 대가 free 를 세운다. 락은 선출에만 쓰고 발급을 안 막는다
  * </pre>
  *
- * <p><b>A 가 끝나면 문이 열려 있다.</b> 카운터를 세우는 것이 곧 문을 여는 동작이고, {@code free}
- * 는 문을 여는 데 필요하지 않다.
+ * <p><b>A 가 끝나면 발급이 다시 돈다.</b> 카운터를 세우는 것이 곧 발급을 재개하는 동작이고,
+ * {@code free} 는 재개에 필요하지 않다.
  *
  * <p><b>안전은 이 클래스가 지키는 것이 아니다.</b> 초과 발급과 1인 2매는
  * {@code uk_mc_coupon_seq} 와 {@code uk_mc_coupon_member} 가 막는다. 카운터가 낮게 서도 그
@@ -108,7 +108,7 @@ public class CouponSeqRebuilder {
         this.raiseGateTtl = properties.raiseGateTtl();
         this.stallBudget = properties.rebuildStallBudget();
         /*
-         * A 단계가 문을 여는 데 걸린 시간이다.
+         * A 단계가 발급을 재개하는 데 걸린 시간이다.
          *
          * 이것은 정지 시간이 아니다. 예전에는 재건이 락으로 발급을 막았으므로 그 값이 곧 정지였고
          * 0.244 ~ 1.287초였다. 지금은 막는 것이 없어 이름을 정지가 아니라 소요로 읽어야 한다.
@@ -162,7 +162,7 @@ public class CouponSeqRebuilder {
     /**
      * A 단계다. 카운터를 올리고 커밋된 매핑과 자기 큐를 되살린다.
      *
-     * <p><b>순서가 곧 안전장치다.</b> 카운터를 세우는 것이 문을 여는 동작이라 가장 마지막이다.
+     * <p><b>순서가 곧 안전장치다.</b> 카운터를 세우는 것이 발급을 재개하는 동작이라 가장 마지막이다.
      * 먼저 열면 이미 번호를 쥔 회원이 {@code seq} 에 없는 틈에 재시도해 번호를 하나 더 태운다.
      *
      * <p><b>커밋된 회원은 DB 에서 세운다.</b> 발급 경로에 DB 중복 검사가 없어서 "이미 발급됐다" 를
@@ -174,7 +174,7 @@ public class CouponSeqRebuilder {
     private List<IssuedSeq> raise(long couponId, Coupon coupon) {
         long startedAt = System.nanoTime();
         long deadline = startedAt + stallBudget.toNanos();
-        closeDoor(couponId);
+        blockIssue(couponId);
 
         List<IssuedSeq> issued = seqRepository.findIssuedSeqs(couponId);
         requireBudget(couponId, deadline, "seq-hash");
@@ -193,7 +193,7 @@ public class CouponSeqRebuilder {
                         + " raiseMillis={}",
                 couponId, issued.size(), dbMax, mark, bound, opened,
                 TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
-        closeDoor(couponId);
+        blockIssue(couponId);
         return issued;
     }
 
@@ -204,8 +204,8 @@ public class CouponSeqRebuilder {
      * 있고, 그 값으로 번호를 내주면 이미 번호를 쥔 회원에게 새 번호가 나간다. 그 회원의
      * INSERT 둘이 부딪히고 재시도가 먼저 커밋하면 먼저 온 사람이 맨 뒤로 간다.
      *
-     * 덮어쓴다. NX 가 아니다. 그래야 나중에 깬 대가 문을 연장한다. NX 면 첫 대만 성공해서
-     * 아직 복구 중인 대가 있는데 문이 열린다.
+     * 덮어쓴다. NX 가 아니다. 그래야 나중에 깬 대가 차단을 연장한다. NX 면 첫 대만 성공해서
+     * 아직 복구 중인 대가 있는데 차단이 풀린다.
      *
      * 지우지 않는다. 시간이 연다. 먼저 끝낸 대가 지우면 아직 하는 대의 문까지 열어 버리고,
      * 세운 대가 죽으면 아무도 안 푼다.
@@ -213,12 +213,12 @@ public class CouponSeqRebuilder {
      * SET 은 TTL 을 지우므로 매번 시한을 같이 준다. 이 키는 그것이 맞다. 연장돼야 하는
      * 값이라 counter 와 반대다 (그쪽은 KEEPTTL 로 수명을 지킨다).
      */
-    private void closeDoor(long couponId) {
+    private void blockIssue(long couponId) {
         redisTemplate.opsForValue().set(CouponSeqKeys.raising(couponId), "1", raiseGateTtl);
     }
 
     /*
-     * 문을 닫아 둘 수 있는 총 벽시계를 넘었는지 본다.
+     * 발급을 차단해 둘 수 있는 총 벽시계를 넘었는지 본다.
      *
      * 명령 단위 타임아웃으로는 이 시간이 안 묶인다. 재건 한 번이 Redis 를 서른 번 안팎
      * 치는데, 명령마다 상한 아래로 느리기만 하면 아무것도 안 터지면서 총합이 분 단위로 는다.
@@ -348,7 +348,11 @@ public class CouponSeqRebuilder {
     }
 
     /**
-     * 카운터를 세워 문을 연다. 이 메서드가 도는 순간부터 요청이 번호를 받기 시작한다.
+     * 카운터를 세워 발급을 재개한다. 이 메서드가 도는 순간부터 요청이 번호를 받기 시작한다.
+     *
+     * <p><b>이름의 gate 는 발급 차단과 다른 것이다.</b> 여기서 세우는 것은 카운터이고, 차단은
+     * {@code raising} 키가 따로 든다. 이 메서드가 도는 동안에도 차단은 걸려 있다. 이름이
+     * {@code coupon-open-gate.lua} 와 짝이라 그대로 둔다.
      *
      * <p><b>올리기만 한다.</b> 그 성질이 "각자 올려도 된다" 의 근거 전부다. 여러 인스턴스가 각자
      * 읽고 각자 쓰는데 읽는 순서와 쓰는 순서가 보장되지 않으므로, 낮은 값이 높은 값을 덮을 수
