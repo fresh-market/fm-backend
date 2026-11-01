@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -27,11 +28,12 @@ import org.springframework.stereotype.Component;
 
 /**
  * Redis 가 이벤트의 키를 잃었거나 승격으로 값이 뒤로 갔을 때 다시 세운다. 설계 근거는
- * {@code docs/coupon/rebuild-v2/design.md} 에 있다.
+ * {@code docs/coupon/rebuild-v4/design.md} 에 있다.
  *
- * <p><b>발급을 멈추지 않는다.</b> 예전에는 재건 락이 있는 동안 순번 확보가 {@code -2} 를 내
- * 그 쿠폰의 발급이 통째로 멈췄고, 그 정지가 N-2 에서 0.960초, P-1 에서 1.287초였다. 지금은
- * 멈출 이유가 셋 다 사라졌다 (같은 문서 5장).
+ * <p><b>순번 발급은 멈춘다. 다만 멈추는 주체가 락이 아니다.</b> {@code rebuild-v1} 에서는 재건
+ * 락이 있는 동안 순번 확보가 {@code -2} 를 냈고, 락을 잡은 서버가 죽으면 그 TTL 30초 동안 멈췄다.
+ * 지금은 {@code raising} 키가 시한 1초로 막고 아무도 안 푼다. 세운 서버가 죽어도 시간이 푼다
+ * (docs/coupon/rebuild-v4/design.md 6장).
  *
  * <p><b>플러시도 멈추지 않는다.</b> 멈춤이 필요했던 까닭은 기여자가 확정 표시를 덮기 때문이었고,
  * 쓰기를 "없을 때만" 으로 바꾸어 그 덮어쓰기를 구조적으로 없앴다.
@@ -42,12 +44,13 @@ import org.springframework.stereotype.Component;
  * <p>두 단계로 나뉜다.
  *
  * <pre>
- * A  재연결을 본 각 인스턴스가 카운터를 올리고 자기 큐를 되살린다. 락도 기다림도 없다
- * B  락을 잡은 한 대가 free 를 세운다. 락은 선출에만 쓰고 발급을 안 막는다
+ * A  깨어난 각 서버가 자기 큐를 되살리고 카운터를 올린다. 락도 기다림도 없다
+ * B  락을 잡은 서버가 free 를 세운다. 락은 동시 중복만 막고 발급을 안 막는다
  * </pre>
  *
- * <p><b>A 가 끝나면 발급이 다시 돈다.</b> 카운터를 세우는 것이 곧 발급을 재개하는 동작이고,
- * {@code free} 는 재개에 필요하지 않다.
+ * <p><b>A 가 끝나도 바로 안 돈다.</b> 카운터를 세우는 것이 발급을 재개하는 동작이지만, 그 뒤에
+ * 차단 시한을 다시 세므로 <b>마지막으로 끝낸 서버로부터 1초</b> 뒤에 풀린다. {@code free} 는 재개에
+ * 필요하지 않다.
  *
  * <p><b>안전은 이 클래스가 지키는 것이 아니다.</b> 초과 발급과 1인 2매는
  * {@code uk_mc_coupon_seq} 와 {@code uk_mc_coupon_member} 가 막는다. 카운터가 낮게 서도 그
@@ -73,7 +76,6 @@ public class CouponSeqRebuilder {
     private final StringRedisTemplate redisTemplate;
     private final CouponRepository couponRepository;
     private final MemberCouponSeqRepository seqRepository;
-    private final CouponSeqInitializer seqInitializer;
     private final CouponSeqContributor contributor;
     private final CouponSeqMarks marks;
     private final int freeMargin;
@@ -82,13 +84,15 @@ public class CouponSeqRebuilder {
     private final Duration stallBudget;
     private final Timer raiseDuration;
     private final Timer freeDuration;
+    private final Timer dbDuration;
+    private final Timer seqHashDuration;
+    private final Timer gateDuration;
     private final RedisScript<Long> openGateScript;
     private final RedisScript<Long> writeFreeScript;
 
     public CouponSeqRebuilder(CouponSeqRebuildRedis rebuildRedis,
                               CouponRepository couponRepository,
                               MemberCouponSeqRepository seqRepository,
-                              CouponSeqInitializer seqInitializer,
                               CouponSeqContributor contributor,
                               CouponSeqMarks marks,
                               CouponIssueProperties properties,
@@ -96,7 +100,6 @@ public class CouponSeqRebuilder {
         this.redisTemplate = rebuildRedis.template();
         this.couponRepository = couponRepository;
         this.seqRepository = seqRepository;
-        this.seqInitializer = seqInitializer;
         this.contributor = contributor;
         this.marks = marks;
         this.freeMargin = properties.freeMargin();
@@ -119,6 +122,24 @@ public class CouponSeqRebuilder {
                 .register(registry);
         this.freeDuration = Timer.builder("coupon.seq.rebuild.free")
                 .description("주인 잃은 번호를 골라 free 에 넣은 시간. 발급을 막지 않는다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+        /*
+         * raise 안의 세 구간이다. 바깥의 raise 와 restore 만으로는 그 시간이 어디서 났는지
+         * 못 가른다. V2-1 에서 서버 하나가 411ms 를 썼는데 DB 조회인지 seq 해시 쓰기인지
+         * 페일오버 중 Redis 지연인지 지금 자료로는 안 나온다
+         * (docs/coupon/rebuild-v5/design.md 9.1).
+         */
+        this.dbDuration = Timer.builder("coupon.seq.rebuild.db")
+                .description("발급 행을 DB 에서 전수로 읽은 시간")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+        this.seqHashDuration = Timer.builder("coupon.seq.rebuild.seqhash")
+                .description("읽은 행을 seq 해시에 쓴 시간")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+        this.gateDuration = Timer.builder("coupon.seq.rebuild.gate")
+                .description("카운터를 세우고 네 키의 수명을 건 시간")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
         this.openGateScript = loadScript(OPEN_GATE_SCRIPT_PATH);
@@ -176,9 +197,17 @@ public class CouponSeqRebuilder {
         long deadline = startedAt + stallBudget.toNanos();
         blockIssue(couponId);
 
+        long dbStartedAt = System.nanoTime();
         List<IssuedSeq> issued = seqRepository.findIssuedSeqs(couponId);
+        long dbNanos = System.nanoTime() - dbStartedAt;
+        dbDuration.record(dbNanos, TimeUnit.NANOSECONDS);
+
         requireBudget(couponId, deadline, "seq-hash");
+        long seqHashStartedAt = System.nanoTime();
         writeSeqHash(couponId, issued);
+        long seqHashNanos = System.nanoTime() - seqHashStartedAt;
+        seqHashDuration.record(seqHashNanos, TimeUnit.NANOSECONDS);
+
         requireBudget(couponId, deadline, "restore");
         contributor.restore(couponId);
         requireBudget(couponId, deadline, "open-gate");
@@ -186,13 +215,23 @@ public class CouponSeqRebuilder {
         int dbMax = maxSeq(issued);
         int mark = marks.of(couponId);
         int bound = Math.max(dbMax, mark);
+        long gateStartedAt = System.nanoTime();
         long opened = openGate(couponId, bound, coupon.getIssueEndAt());
+        long gateNanos = System.nanoTime() - gateStartedAt;
+        gateDuration.record(gateNanos, TimeUnit.NANOSECONDS);
 
         raiseDuration.record(System.nanoTime() - startedAt, TimeUnit.NANOSECONDS);
+        /*
+         * 구간을 로그에도 싣는다. 회차 기록이 지표가 아니라 로그를 모으기 때문이다.
+         * 셋을 더해도 raiseMillis 가 안 되는 차이가 restore 와 차단 쓰기다.
+         */
         log.warn("event=COUPON_SEQ_RAISED couponId={} issued={} dbMax={} mark={} bound={} counter={}"
-                        + " raiseMillis={}",
+                        + " raiseMillis={} dbMillis={} seqHashMillis={} gateMillis={}",
                 couponId, issued.size(), dbMax, mark, bound, opened,
-                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt),
+                TimeUnit.NANOSECONDS.toMillis(dbNanos),
+                TimeUnit.NANOSECONDS.toMillis(seqHashNanos),
+                TimeUnit.NANOSECONDS.toMillis(gateNanos));
         blockIssue(couponId);
         return issued;
     }
@@ -362,11 +401,24 @@ public class CouponSeqRebuilder {
      */
     private long openGate(long couponId, int bound, LocalDateTime issueEndAt) {
         Long opened = redisTemplate.execute(openGateScript,
-                List.of(CouponSeqKeys.counter(couponId)), String.valueOf(bound));
-        seqInitializer.applyTtl(couponId, issueEndAt);
-        inheritCounterTtl(couponId, CouponSeqKeys.seq(couponId), CouponSeqKeys.free(couponId),
-                CouponSeqKeys.pending(couponId));
+                List.of(CouponSeqKeys.counter(couponId), CouponSeqKeys.seq(couponId),
+                        CouponSeqKeys.free(couponId), CouponSeqKeys.pending(couponId)),
+                String.valueOf(bound), String.valueOf(keysExpireAtMillis(issueEndAt)));
         return opened == null ? bound : opened;
+    }
+
+    /*
+     * 네 키가 사라질 시각이다. 0 이면 마감이 없는 이벤트라 걸 기준이 없다.
+     *
+     * 식을 여기서 다시 쓰지 않고 CouponSeqInitializer 에서 가져온다. 준비 경로와 재건 경로가
+     * 같은 시각을 써야 하는데 양쪽에 따로 적으면 한쪽만 고쳤을 때 둘이 어긋난다.
+     */
+    private static long keysExpireAtMillis(LocalDateTime issueEndAt) {
+        if (issueEndAt == null) {
+            return 0;
+        }
+        return CouponSeqInitializer.keysExpireAt(issueEndAt)
+                .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
     }
 
     /** 나간 번호 중 가장 큰 것이다. 개수로 더하면 결번만큼 모자라게 센다. */
@@ -391,20 +443,6 @@ public class CouponSeqRebuilder {
         }
     }
 
-    /*
-     * 넷의 수명은 counter 가 들고 나머지가 따라간다.
-     * 평상시에는 순번 확보가 키를 만들면서 물려받는데, 재건은 카운터보다 먼저 만들어 그 경로를
-     * 안 지난다. 그래서 여기서 직접 건다.
-     */
-    private void inheritCounterTtl(long couponId, String... keys) {
-        Long remaining = redisTemplate.getExpire(CouponSeqKeys.counter(couponId), TimeUnit.MILLISECONDS);
-        if (remaining == null || remaining <= 0) {
-            return;
-        }
-        for (String key : keys) {
-            redisTemplate.expire(key, Duration.ofMillis(remaining));
-        }
-    }
 
     /**
      * 관리자가 이벤트를 방금 다시 준비했는지 본다.

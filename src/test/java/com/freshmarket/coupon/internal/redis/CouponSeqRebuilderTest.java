@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -16,6 +17,7 @@ import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -79,8 +81,6 @@ class CouponSeqRebuilderTest {
     @Mock
     private MemberCouponSeqRepository seqRepository;
 
-    @Mock
-    private CouponSeqInitializer seqInitializer;
 
     @Mock
     private CouponSeqContributor contributor;
@@ -97,7 +97,7 @@ class CouponSeqRebuilderTest {
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         marks = new CouponSeqMarks();
         sut = new CouponSeqRebuilder(rebuildRedis, couponRepository, seqRepository,
-                seqInitializer, contributor, marks, 설정(), new SimpleMeterRegistry());
+                contributor, marks, 설정(), new SimpleMeterRegistry());
         given열린_선착순_쿠폰();
         given락을_잡는다(true);
     }
@@ -115,7 +115,7 @@ class CouponSeqRebuilderTest {
 
         sut.rebuild(COUPON_ID);
 
-        verify(redisTemplate).execute(any(RedisScript.class), anyList(), eq("6050"));
+        verify(redisTemplate).execute(any(RedisScript.class), anyList(), eq("6050"), anyString());
     }
 
     @Test
@@ -125,17 +125,17 @@ class CouponSeqRebuilderTest {
 
         sut.rebuild(COUPON_ID);
 
-        verify(redisTemplate).execute(any(RedisScript.class), anyList(), eq("7395"));
+        verify(redisTemplate).execute(any(RedisScript.class), anyList(), eq("7395"), anyString());
     }
 
     /*
      * 커밋된 회원을 먼저 세우고 카운터를 나중에 올린다. 순서가 곧 안전장치다.
      *
-     * 카운터를 세우는 것이 곧 문을 여는 것이라, 뒤집히면 이미 번호를 쥔 회원이 seq 에 없는 틈에
-     * 재시도해 번호를 하나 더 태운다. 그 행이 uk_mc_coupon_member 에 걸려 결번이 된다.
+     * 카운터를 세우는 것이 곧 순번 발급을 재개하는 동작이라, 뒤집히면 이미 번호를 쥔 회원이 seq 에
+     * 없는 틈에 재시도해 번호를 하나 더 태운다. 그 행이 uk_mc_coupon_member 에 걸려 결번이 된다.
      */
     @Test
-    void 매핑과_큐를_문보다_먼저_세운다() {
+    void 매핑과_큐를_카운터보다_먼저_세운다() {
         given발급행(10);
 
         sut.rebuild(COUPON_ID);
@@ -143,7 +143,7 @@ class CouponSeqRebuilderTest {
         InOrder 순서 = inOrder(hashOperations, contributor, redisTemplate);
         순서.verify(hashOperations).putAll(eq("coupon:9001:seq"), any());
         순서.verify(contributor).restore(COUPON_ID);
-        순서.verify(redisTemplate).execute(any(RedisScript.class), anyList(), any(String.class));
+        순서.verify(redisTemplate).execute(any(RedisScript.class), anyList(), anyString(), anyString());
     }
 
     /*
@@ -188,7 +188,7 @@ class CouponSeqRebuilderTest {
 
         sut.rebuild(COUPON_ID);
 
-        verify(redisTemplate).execute(any(RedisScript.class), anyList(), any(String.class));
+        verify(redisTemplate).execute(any(RedisScript.class), anyList(), anyString(), anyString());
         verify(contributor).restore(COUPON_ID);
     }
 
@@ -200,7 +200,7 @@ class CouponSeqRebuilderTest {
         sut.rebuild(COUPON_ID);
 
         verify(contributor, never()).restore(anyLong());
-        verify(redisTemplate, never()).execute(any(RedisScript.class), anyList(), any(String.class));
+        verify(redisTemplate, never()).execute(any(RedisScript.class), anyList(), anyString(), anyString());
     }
 
     /*
@@ -216,7 +216,7 @@ class CouponSeqRebuilderTest {
         sut.rebuild(COUPON_ID);
 
         verify(contributor, never()).restore(anyLong());
-        verify(redisTemplate, never()).execute(any(RedisScript.class), anyList(), any(String.class));
+        verify(redisTemplate, never()).execute(any(RedisScript.class), anyList(), anyString(), anyString());
     }
 
     /*
@@ -280,7 +280,7 @@ class CouponSeqRebuilderTest {
         sut.rebuild(COUPON_ID);
 
         verify(hashOperations, never()).putAll(any(String.class), anyMap());
-        verify(redisTemplate).execute(any(RedisScript.class), anyList(), eq("10"));
+        verify(redisTemplate).execute(any(RedisScript.class), anyList(), eq("10"), anyString());
     }
 
     /*
@@ -303,21 +303,26 @@ class CouponSeqRebuilderTest {
     }
 
     /*
-     * 카운터의 남은 시한을 나머지 키에 물려준다.
+     * 네 키의 수명을 카운터와 같은 스크립트에서 건다.
      *
-     * 카운터만 수명을 들고 있어서, 각 대가 카운터만 올리는 경로에서 나머지 셋이 시한 없이
-     * 남으면 이벤트가 끝난 뒤에도 Redis 에 쌓인다.
+     * 예전에는 자바가 카운터에 EXPIREAT 을 걸고 그 값을 PTTL 로 되읽어 나머지 셋에 걸었다.
+     * 왕복이 다섯이었고 그 사이에 재건이 죽으면 셋이 수명 없이 남았다. 그 둘을 없애려고
+     * 스크립트로 접었으므로, 자바가 넷을 다 넘기고 만료 시각을 인자로 주는 것을 고정한다
+     * (docs/coupon/rebuild-v5/design.md 9.1).
      */
     @Test
-    void 카운터의_남은_시한을_나머지_키에_물려준다() {
+    void 카운터를_세울_때_네_키의_수명을_같이_건다() {
         given발급행(10);
-        when(redisTemplate.getExpire(COUNTER, TimeUnit.MILLISECONDS)).thenReturn(60_000L);
+        long 만료 = CouponSeqInitializer.keysExpireAt(END_AT)
+                .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
 
         sut.rebuild(COUPON_ID);
 
-        verify(redisTemplate).expire("coupon:9001:seq", Duration.ofMillis(60_000));
-        verify(redisTemplate).expire("coupon:9001:free", Duration.ofMillis(60_000));
-        verify(redisTemplate).expire("coupon:9001:pending", Duration.ofMillis(60_000));
+        verify(redisTemplate).execute(any(RedisScript.class),
+                eq(List.of("coupon:9001:counter", "coupon:9001:seq",
+                        "coupon:9001:free", "coupon:9001:pending")),
+                eq("10"), eq(String.valueOf(만료)));
+        verify(redisTemplate, never()).expire(anyString(), any(Duration.class));
     }
 
     // 자기 락만 푼다. 남이 새로 잡은 락을 지우면 둘이 같이 free 를 쓴다
@@ -346,11 +351,11 @@ class CouponSeqRebuilderTest {
     }
 
     /*
-     * 문을 DB 읽기보다 먼저 닫는다. 순서가 뒤집히면 그 사이에 들어온 요청이 뒤로 간 카운터로
+     * 순번 발급을 DB 읽기보다 먼저 차단한다. 순서가 뒤집히면 그 사이에 들어온 요청이 뒤로 간 카운터로
      * 번호를 받는다. 그것이 2026-10-14 Y-2 의 결번 404 다.
      */
     @Test
-    void 문을_DB_읽기보다_먼저_닫는다() {
+    void 순번_발급을_DB_읽기보다_먼저_차단한다() {
         given발급행(10);
 
         sut.rebuild(COUPON_ID);
@@ -361,11 +366,11 @@ class CouponSeqRebuilderTest {
     }
 
     /*
-     * 끝낼 때 한 번 더 닫는다. 시작할 때만 닫으면 재건이 시한보다 길 때 문이 먼저 열린다.
-     * 그리고 이 두 번째 닫기가 "마지막으로 끝낸 대 기준" 을 만든다.
+     * 끝낼 때 시한을 한 번 더 센다. 시작할 때만 걸면 재건이 시한보다 길 때 차단이 먼저 풀린다.
+     * 그리고 이 두 번째 쓰기가 "마지막으로 끝낸 서버 기준" 을 만든다.
      */
     @Test
-    void 끝낼_때_문을_다시_닫는다() {
+    void 끝낼_때_차단_시한을_다시_센다() {
         given발급행(10);
 
         sut.rebuild(COUPON_ID);
@@ -393,7 +398,7 @@ class CouponSeqRebuilderTest {
     @Test
     void 정지_예산을_넘기면_그만둔다() {
         CouponSeqRebuilder 예산이_짧은 = new CouponSeqRebuilder(rebuildRedis, couponRepository,
-                seqRepository, seqInitializer, contributor, marks,
+                seqRepository, contributor, marks,
                 설정(Duration.ofMillis(1), Duration.ofMillis(2)), new SimpleMeterRegistry());
         // DB 읽기가 예산을 다 쓰게 만든다. 그 다음 단계에서 확인에 걸린다
         when(seqRepository.findIssuedSeqs(COUPON_ID)).thenAnswer(invocation -> {
@@ -405,7 +410,7 @@ class CouponSeqRebuilderTest {
                 .isInstanceOf(CouponSeqStallBudgetException.class);
 
         // 예산을 넘겼으니 카운터를 안 올린다. 문은 시한이 연다
-        verify(redisTemplate, never()).execute(any(RedisScript.class), anyList(), any(String.class));
+        verify(redisTemplate, never()).execute(any(RedisScript.class), anyList(), anyString(), anyString());
     }
 
     private void given열린_선착순_쿠폰() {
