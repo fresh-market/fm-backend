@@ -270,7 +270,7 @@ Prometheus 에서도 뽑아야 한다.
 
 ## 11. 결과
 
-**결과는 [coupon-load-versions.md](coupon-load-versions.md) 에 있다.** 2026-09-28 회차다.
+**결과는 [coupon-load-versions.md](coupon-load-versions.md) 에 있다.** v4 를 채택한 회차다.
 
 | 버전 | p99 | 발급 | 회차 간 몇 배 | 판정 |
 |---|---:|---:|---:|---|
