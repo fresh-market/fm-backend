@@ -10,6 +10,8 @@ AWS 실측     20,000 VU / ramp 60초 / hold 30초 / 재고 10,000장 / 전용 3
 대시보드     docs/coupon/rebuild-v4/rounds/
 ```
 
+**이 회차가 잰 로직은 [`design.md`](design.md) 에 있다.**
+
 ---
 
 ## 1. 결론
