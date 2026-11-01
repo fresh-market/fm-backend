@@ -52,7 +52,7 @@ Redis 가 이 쿠폰의 키 네 개를 잃거나 뒤로 돌린다.
         |
         v
    A 단계  (4장)   서버 세 대가 각자 한다. 락을 안 건다
-   차단 -> seq -> 내 큐 -> 카운터 -> 차단
+   차단 -> seq -> 내 큐 -> 카운터 -> 차단 시한을 다시 센다 (4.4)
         |
         v
    B 단계  (5장)   락을 잡은 서버 한 대만 한다
@@ -200,13 +200,16 @@ if (reprepared(couponId)) return;
 **서버 세 대가 전부 한다. 락을 안 건다.**
 
 ```
-1  발급을 차단한다         SET coupon:{id}:raising "1" PX 1000
+1  발급을 차단한다             SET coupon:{id}:raising "1" PX 1000
 2  DB 에서 발급 행을 읽는다    member_id, issue_seq
 3  seq 해시를 다시 쓴다        값에 확정 표시 :1 을 붙인다
 4  자기 큐를 되살린다          contributor.restore()
 5  카운터를 세운다             openGate(max(DB 최댓값, 이 서버의 기억))
-6  차단을 다시 건다         SET coupon:{id}:raising "1" PX 1000
+6  차단 시한을 다시 센다       SET coupon:{id}:raising "1" PX 1000
 ```
+
+**6번은 1번의 되풀이가 아니다.** 같은 키에 같은 값을 쓰지만 `SET` 이 TTL 을 지우고 다시 걸므로,
+**차단이 풀리는 시각만 뒤로 민다.** 왜 그래야 하는지는 4.4 에 있다.
 
 ### 4.1 왜 락을 안 거나
 
