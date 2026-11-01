@@ -1,4 +1,4 @@
-# 캐시 유실을 직접 주입해 본 회차 (2026-09-21)
+# 캐시 유실을 직접 주입해 본 회차
 
 **앞 회차([rebuild-v1/measurement.md](measurement.md))가 만든 것은 전손이었다.** 키가 통째로 사라지는 모양인데, Multi-AZ 복제에서 가장 안 일어난다. 실제 페일오버에서 확률이 높은 것은 복제가 밀린 채 승격돼 `counter` 가 뒤로 가는 쪽이다. 팀은 그 모양을 `fm-infra` 의 `loadtest-fault.sh lost-tail` 로 만들어 돌렸다.
 

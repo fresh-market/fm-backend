@@ -1,4 +1,4 @@
-# 선착순 쿠폰: 성능과 장애 회차 기록 (2026-09-14)
+# 선착순 쿠폰: 성능과 장애 회차 기록
 
 계획은 [coupon-load-scenarios.md](coupon-load-scenarios.md) 에 있다. 이 문서는 그 계획을
 실제로 돌린 결과다.
