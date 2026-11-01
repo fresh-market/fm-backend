@@ -10,6 +10,9 @@
 회차        docs/coupon/rebuild-v4/rounds.md
 ```
 
+> **다음 설계 제안은 [`rebuild-v5/design.md`](../rebuild-v5/design.md) 에 있다.**
+> 같은 일을 서버마다 되풀이하지 않게 하는 안이고, 아직 코드로 안 옮겼다.
+
 **`rebuild-v4` 가 `rebuild-v3` 에서 바꾼 것은 3.2 하나다.** 나머지 장은 v2 와 v3 에서 그대로
 이어받은 것이고, 여기 다시 적는 까닭은 한 자리에 모으기 위해서다.
 
