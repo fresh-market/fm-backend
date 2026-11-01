@@ -26,7 +26,7 @@ import org.springframework.stereotype.Component;
  * <p><b>아무에게도 보고하지 않는다.</b> 예전에는 자기 큐를 {@code rebuild:queued} 에 올리고
  * {@code rebuild:done} 에 이름을 남겼고, 주도자가 그 수를 명부의 수와 견줘 기다림을 끝냈다.
  * 그 세기가 실패하는 경우가 회차마다 새로 나왔다
- * ({@code docs/coupon/rebuild-raise-each-2026-10-14.md} 7.1). <b>이제 쥔 번호의 기록은
+ * ({@code docs/coupon/rebuild-v2/design.md} 7.1). <b>이제 쥔 번호의 기록은
  * {@code seq} 해시 하나이고, {@code free} 를 쓰는 스크립트가 그것을 직접 본다.</b>
  *
  * <p><b>플러시를 멈추지 않는다.</b> 멈춤이 필요했던 까닭은 훑는 사이에 티켓이 DB 로 내려가면

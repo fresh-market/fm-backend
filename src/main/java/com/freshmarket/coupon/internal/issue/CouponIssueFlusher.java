@@ -460,7 +460,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
      *   kept > burned   나중에 받은 번호가 남았다.  이 회원이 맨 뒤로 갔다
      *
      * 뒤쪽이 재건 중 발급을 막는 설계가 0 으로 만들려는 수다
-     * (docs/coupon/rebuild-gate-2026-10-31.md 8장). 세는 자리가 없어서 지금까지 한 번도
+     * (docs/coupon/rebuild-v3/design.md 8장). 세는 자리가 없어서 지금까지 한 번도
      * 못 쟀고, 그래서 순서가 실제로 얼마나 깨지고 있었는지 아무도 모른다.
      */
     private void recordRepair(IssueTicket ticket, int actual) {

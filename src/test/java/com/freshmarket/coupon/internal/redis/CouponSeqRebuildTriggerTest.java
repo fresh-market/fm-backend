@@ -93,7 +93,7 @@ class CouponSeqRebuildTriggerTest {
      * 정지 예산을 넘긴 재건은 다시 돌리지 않는다.
      *
      * 다시 돌면 그 시도가 문을 또 닫아 발급 정지가 예산 너머로 늘어난다. 예산을 둔 뜻이
-     * 바로 그것을 막는 것이다 (docs/coupon/rebuild-gate-2026-10-31.md 6장).
+     * 바로 그것을 막는 것이다 (docs/coupon/rebuild-v3/design.md 6장).
      */
     @Test
     void 정지_예산을_넘기면_다시_안_돌린다() throws Exception {

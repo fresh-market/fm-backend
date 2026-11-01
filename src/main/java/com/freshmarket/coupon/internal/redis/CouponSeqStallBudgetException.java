@@ -8,7 +8,7 @@ package com.freshmarket.coupon.internal.redis;
  *
  * <p>그만두면 그 쿠폰은 재건이 없던 때와 같은 상태로 남는다. 문은 시한이 열고, 뒤로 간 카운터가
  * 그대로 있으면 결번이 난다. <b>결번을 받아들이고 가용성을 지키는 선택이다</b>
- * ({@code docs/coupon/rebuild-gate-2026-10-31.md} 6장).
+ * ({@code docs/coupon/rebuild-v3/design.md} 6장).
  */
 class CouponSeqStallBudgetException extends RuntimeException {
 

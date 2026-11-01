@@ -11,7 +11,7 @@
 --   seq       각자 자기 큐만 HSETNX 로 되살려 확정 표시를 덮지 않는다
 --   free      쓰는 스크립트가 seq 를 보고 쥔 번호를 건너뛴다. 통째로 지우지 않는다
 --
--- 근거는 docs/coupon/rebuild-raise-each-2026-10-14.md 5장이다.
+-- 근거는 docs/coupon/rebuild-v2/design.md 5장이다.
 -- ARGV[1]=memberId  ARGV[2]=issueLimit  ARGV[3]=회수 기준(ms)
 -- 만드는 키에는 counter 의 만료 시각을 그대로 물려준다. 넷의 수명이 같아야 한다
 -- 반환 "6" 번호를 받았다 / "6:1" 이미 발급됐다 / "-1" 소진(회수 여지 있음) / "-2" 준비되지 않았다
@@ -24,7 +24,7 @@
 -- 값이 뒤로 가 있을 수 있고, 그 값으로 INCR 하면 이미 번호를 쥔 회원에게 새 번호가 나간다.
 -- 그 회원의 INSERT 둘이 uk_mc_coupon_member 에서 부딪히고, 재시도가 먼저 커밋하면 먼저 온
 -- 사람이 맨 뒤로 간다. 순번은 도착 순서의 기록이라 그것을 잃을 이유가 사용자 쪽에 없다
--- (README 5.6, docs/coupon/rebuild-gate-2026-10-31.md 1장).
+-- (README 5.6, docs/coupon/rebuild-v3/design.md 1장).
 --
 -- 이 문은 시간으로 열린다. 세운 대가 죽어도 저절로 열리고 아무도 안 풀어도 된다.
 if redis.call('EXISTS', KEYS[5]) == 1 then

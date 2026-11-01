@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
  * 각 인스턴스가 아는 최댓값들의 최댓값이다. 그러면 각자 자기 것만 올려도 결과가 수렴하므로,
  * <b>주도자가 몇 대를 기다릴지 셀 필요가 없다.</b> 세는 데 실패하는 경우를 고칠 때마다 구멍이
  * 자리를 옮긴 것이 이 설계를 갈아 치운 이유다
- * ({@code docs/coupon/rebuild-raise-each-2026-10-14.md} 3장).
+ * ({@code docs/coupon/rebuild-v2/design.md} 3장).
  *
  * <p><b>JVM 안에만 둔다.</b> Redis 에 두면 재건을 일으킨 그 장애가 이 값도 함께 지운다. 명부를
  * Redis 에 두었던 때가 그랬다. DB 에 두면 발급마다 쓰기가 늘고 이 값은 그만큼의 값어치가 없다.

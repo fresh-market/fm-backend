@@ -7,7 +7,7 @@ AWS 실측     20,000 VU / ramp 60초 / hold 30초 / 재고 10,000장 / 전용 3
 스프링 서버  rebuild-v4 (93c78d30)
 워밍업       기동 때 ApplicationRunner 가 돈다. healthy 가 곧 warm 이다
 주입         k6 를 먼저 띄우고 24~25초 뒤에 걸었다
-대시보드     docs/coupon/rounds-rebuild-v4/
+대시보드     docs/coupon/rebuild-v4/rounds/
 ```
 
 ---
@@ -104,7 +104,7 @@ event=COUPON_SEQ_RAISED issued=7203 dbMax=7208 mark=7234 bound=7234 counter=7234
 
 **`coupon_settled_duration` 은 임계에서 뺐다.** 그 지표는 답을 받은 요청만 담는데, 장애 회차에서
 답을 못 받은 요청이 바로 가장 느린 요청들이라 **모집단이 좋은 쪽으로 치우친다**
-(`rounds-2026-10-14.md` 3장).
+(`rebuild-v2/rounds.md` 3장).
 
 **분모가 온전한 것은 캐시 페일오버뿐이다.** 실패율 0% 이고 **451.03ms 가 이 판에서 가로로
 비교할 수 있는 유일한 수다.**

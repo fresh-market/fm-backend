@@ -27,7 +27,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * Redis 가 이벤트의 키를 잃었거나 승격으로 값이 뒤로 갔을 때 다시 세운다. 설계 근거는
- * {@code docs/coupon/rebuild-raise-each-2026-10-14.md} 에 있다.
+ * {@code docs/coupon/rebuild-v2/design.md} 에 있다.
  *
  * <p><b>발급을 멈추지 않는다.</b> 예전에는 재건 락이 있는 동안 순번 확보가 {@code -2} 를 내
  * 그 쿠폰의 발급이 통째로 멈췄고, 그 정지가 N-2 에서 0.960초, P-1 에서 1.287초였다. 지금은

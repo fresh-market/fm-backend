@@ -276,7 +276,7 @@ COUPON_SEQ_REBUILD_ABANDONED       그만뒀다
 ## 8. 재야 할 것
 
 지난 회차가 판정 지표에 한 번 속았으므로 재는 것을 먼저 적는다
-(`rounds-2026-10-14.md` 3장).
+(`rebuild-v2/rounds.md` 3장).
 
 | 재는 것 | 왜 |
 |---|---|

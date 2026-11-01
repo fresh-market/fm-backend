@@ -141,7 +141,7 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
      * 번호를 받았고, 그쪽이 먼저 커밋됐다. 그러면 먼저 온 사람이 맨 뒤로 간다.
      *
      * 이 수를 세는 자리가 없어서 지금까지 한 번도 못 쟀다. 재건 중 발급을 막는 설계가 0 으로
-     * 만들려는 것이 이 수다 (docs/coupon/rebuild-gate-2026-10-31.md 8장).
+     * 만들려는 것이 이 수다 (docs/coupon/rebuild-v3/design.md 8장).
      */
     @Test
     void 나중_번호가_남으면_역전으로_센다() throws Exception {

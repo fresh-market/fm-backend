@@ -35,7 +35,7 @@ final class CouponSeqKeys {
      * 재건이 잡는 락이다. 넷과 함께 죽지 않으므로 위와 성격이 다르다.
      *
      * 이 락은 선출에만 쓴다. 여러 대가 같은 DB 읽기와 같은 계산을 중복하지 않게 하는 값이고
-     * 발급을 막지 않는다 (docs/coupon/rebuild-raise-each-2026-10-14.md 4.2).
+     * 발급을 막지 않는다 (docs/coupon/rebuild-v2/design.md 4.2).
      */
     static String rebuild(long couponId) {
         return PREFIX + couponId + ":rebuild";
@@ -48,7 +48,7 @@ final class CouponSeqKeys {
      * 이쪽은 장벽이라 짧게 살고 아무도 안 푼다. 시간이 연다.
      *
      * 한 키로 겸하면 선출이 끝날 때까지 문이 닫혀 있게 되고, 그것이 main 의 모양이다
-     * (docs/coupon/rebuild-gate-2026-10-31.md 5장).
+     * (docs/coupon/rebuild-v3/design.md 5장).
      */
     static String raising(long couponId) {
         return PREFIX + couponId + ":raising";

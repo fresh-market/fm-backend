@@ -63,7 +63,7 @@ spring:
       # 둘째를 만드는 대가는 실측에서 이벤트 안에 나타나지 않는다. 쓰기 워밍업이 플러시 경로를
       # 돌려 커넥션을 미리 세우고 minimum-idle 회복도 그 안에서 끝나기 때문이다. 2026-10-10
       # 회차에서 발급이 도는 동안 커넥션 획득 평균은 0.01ms 에서 0.03ms 사이였고 무장애와 캐시
-      # 페일오버가 같았다. 근거는 docs/coupon/budget-breakdown-2026-10-10.md 다.
+      # 페일오버가 같았다. 근거는 docs/coupon/rebuild-v1/budget-breakdown.md 다.
       #
       # 이 값을 HikariCP 의 _max 게이지로 읽으면 안 된다. 그것은 기동 때의 값을 그대로 들고
       # 있어서 구간에 귀속되지 않는다. increase(_sum) 을 increase(_count) 로 나눠 읽는다.
@@ -341,7 +341,7 @@ coupon:
     # 결번이 안 돌아온다. 재고 만 장에서 500이면 마지막 500번대는 이 경로로 못 되살린다.
     #
     # 이 값이 "아직 자기 큐를 되살리지 못한 인스턴스" 도 덮는다. 근거는
-    # docs/coupon/rebuild-raise-each-2026-10-14.md 5.4 다.
+    # docs/coupon/rebuild-v2/design.md 5.4 다.
     free-margin: 500
 
     # Redis 연결이 끊겼다 다시 붙으면 열려 있는 이벤트의 키를 다시 세운다.

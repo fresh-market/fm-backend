@@ -448,13 +448,13 @@ flowchart TB
 **2026-10-14 회차에서 그 왜곡의 크기를 처음 쟀다.** 한 회차는 `settled` p99 가 748ms 인데
 같은 구간의 `http_req_duration` p90 이 59.99초였다. 그래서 팀은 **판정 임계를
 `http_req_duration` 으로 옮겼고**, 그쪽이 그라파나가 보는 것과 같은 계통이다. 근거와 아홉
-회차 대조표는 [rounds-2026-10-14.md](./docs/coupon/rounds-2026-10-14.md) 에 있다.
+회차 대조표는 [rebuild-v2/rounds.md](./docs/coupon/rebuild-v2/rounds.md) 에 있다.
 
 **위 표의 세 회차는 그 변경 전에 잰 것이라 `http` 기준 값이 없다.** 다시 잴 때 채운다.
 
 **거절의 모양이 장애마다 다르다.** 서버가 죽으면 그 대로 가던 요청이 게이트웨이 실패로 끊기고(12,420건), 캐시가 페일오버하면 전 인스턴스가 함께 느려져 혼잡으로 돌려보낸다(69.91%). 서버가 다 살아 있는 쪽이 오히려 혼잡이 높다.
 
-> 회차별 원본과 주입 시각은 [fault-injection-2026-10-10.md](./docs/coupon/fault-injection-2026-10-10.md), 대시보드는 [rounds-2026-10-10/](./docs/coupon/rounds-2026-10-10/) 에 있다.
+> 회차별 원본과 주입 시각은 [rebuild-v1/rounds.md](./docs/coupon/rebuild-v1/rounds.md), 대시보드는 [rebuild-v1/rounds/](./docs/coupon/rebuild-v1/rounds/) 에 있다.
 
 > 대체 경로를 새로 만들지 않는다는 원칙은 [failure-response.md](./docs/incident/failure-response.md), 구성 요소별 상세는 [coupon.md 8장](./docs/coupon/coupon.md), 재건 절차는 [redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md), 회로를 어디에 거는지는 [coupon-failure.md](./docs/coupon/coupon-failure.md) 에 있다.
 
@@ -857,16 +857,18 @@ api-contract migration  app-config test         archunit        build
 | [coupon/coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) | 회차별 설정과 실측값 |
 | [coupon/coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) | 회수 기준 시간을 60초로 둔 근거 |
 | [coupon/warmup.md](./docs/coupon/warmup.md) | 워밍업이 무엇을 데우고 무엇을 못 데우나 |
-| [coupon/rebuild-measurement-2026-09-21.md](./docs/coupon/rebuild-measurement-2026-09-21.md) | 재건을 실제로 일으켜 본 회차와 거기서 찾은 것 |
-| [coupon/rebuild-measurement-2026-09-21b.md](./docs/coupon/rebuild-measurement-2026-09-21b.md) | 캐시 유실을 직접 주입해 본 회차. 기여가 DB 읽기 뒤에 있다 |
-| [coupon/rebuild-fix-verification-2026-09-21.md](./docs/coupon/rebuild-fix-verification-2026-09-21.md) | 두 고침이 실제로 도는지 본 회차. 3초가 여유 있는 값이 아니다 |
-| [coupon/rebuild-early-exit-2026-09-22.md](./docs/coupon/rebuild-early-exit-2026-09-22.md) | 조기 종료를 붙이고 돌려 본 회차. DB 장애가 길면 명부가 빈다 |
-| [coupon/rebuild-queue-contribution-2026-09-22.md](./docs/coupon/rebuild-queue-contribution-2026-09-22.md) | 큐가 실제로 재건에 쓰인 회차. 조기 종료가 2ms 에 끝났다 |
-| [coupon/rebuild-duration-2026-09-23.md](./docs/coupon/rebuild-duration-2026-09-23.md) | 재건 정지를 네 구간으로 쪼개 처음 잰 회차 |
-| [coupon/rebuild-reconnect-and-fault-2026-10-01.md](./docs/coupon/rebuild-reconnect-and-fault-2026-10-01.md) | 재연결을 재건의 신호로 붙인 회차. 무장애 p99 가 열다섯 배로 흔들린다 |
-| [coupon/fault-injection-2026-10-02.md](./docs/coupon/fault-injection-2026-10-02.md) | 장애 3종을 워밍업 올린 뒤 다시 잰 회차. 승격 재건이 걸리고 pause-timeout 으로 건너뛴다 |
-| [coupon/rounds-2026-10-14.md](./docs/coupon/rounds-2026-10-14.md) | 메모리 한도를 넣고 옛 재건과 새 재건을 나란히 잰 회차. 힙 덤프가 처음 남았고 판정 지표의 왜곡을 쟀다 |
-| [coupon/rebuild-gate-2026-10-31.md](./docs/coupon/rebuild-gate-2026-10-31.md) | 재건이 끝날 때까지 순번을 안 내주는 설계. 선착순을 지키려고 발급 정지를 되들인다 |
+| [coupon/rebuild-v1/measurement.md](./docs/coupon/rebuild-v1/measurement.md) | 재건을 실제로 일으켜 본 회차와 거기서 찾은 것 |
+| [coupon/rebuild-v1/measurement-cache-loss.md](./docs/coupon/rebuild-v1/measurement-cache-loss.md) | 캐시 유실을 직접 주입해 본 회차. 기여가 DB 읽기 뒤에 있다 |
+| [coupon/rebuild-v1/fix-verification.md](./docs/coupon/rebuild-v1/fix-verification.md) | 두 고침이 실제로 도는지 본 회차. 3초가 여유 있는 값이 아니다 |
+| [coupon/rebuild-v1/early-exit.md](./docs/coupon/rebuild-v1/early-exit.md) | 조기 종료를 붙이고 돌려 본 회차. DB 장애가 길면 명부가 빈다 |
+| [coupon/rebuild-v1/queue-contribution.md](./docs/coupon/rebuild-v1/queue-contribution.md) | 큐가 실제로 재건에 쓰인 회차. 조기 종료가 2ms 에 끝났다 |
+| [coupon/rebuild-v1/duration.md](./docs/coupon/rebuild-v1/duration.md) | 재건 정지를 네 구간으로 쪼개 처음 잰 회차 |
+| [coupon/rebuild-v1/reconnect-and-fault.md](./docs/coupon/rebuild-v1/reconnect-and-fault.md) | 재연결을 재건의 신호로 붙인 회차. 무장애 p99 가 열다섯 배로 흔들린다 |
+| [coupon/rebuild-v1/rounds-warmup.md](./docs/coupon/rebuild-v1/rounds-warmup.md) | 장애 3종을 워밍업 올린 뒤 다시 잰 회차. 승격 재건이 걸리고 pause-timeout 으로 건너뛴다 |
+| [coupon/rebuild-v2/rounds.md](./docs/coupon/rebuild-v2/rounds.md) | 메모리 한도를 넣고 옛 재건과 새 재건을 나란히 잰 회차. 힙 덤프가 처음 남았고 판정 지표의 왜곡을 쟀다 |
+| [coupon/rebuild-v3/design.md](./docs/coupon/rebuild-v3/design.md) | 재건이 끝날 때까지 순번을 안 내주는 설계. 선착순을 지키려고 발급 정지를 되들인다 |
+| [coupon/rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) | rebuild-v4 의 장애 3종. 재건이 설계대로 돌았고 판정을 http 로 옮긴 뒤의 첫 측정이다 |
+| [coupon/rebuild-v4/revert-rejected.md](./docs/coupon/rebuild-v4/revert-rejected.md) | 주도자 재건으로 되돌리는 안과 반려 사유. 근거가 된 측정이 결함 하나 때문이었다 |
 | [coupon/virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) | 가상 스레드를 어떻게 쟀나 |
 | [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
 | [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |

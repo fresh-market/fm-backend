@@ -57,7 +57,7 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
      * 10,000장 중 2,699장이 안 나갔다.
      *
      * 간격을 두면 전파는 살고 고리는 끊긴다. 남의 대가 문을 세운 것을 보고 자기 재건을 한
-     * 번 도는 것이 전파이고(docs/coupon/rebuild-gate-2026-10-31.md 3.3), 그 한 번 뒤로는
+     * 번 도는 것이 전파이고(docs/coupon/rebuild-v3/design.md 3.3), 그 한 번 뒤로는
      * 간격이 막으므로 문이 시한에 열린다.
      */
     private final Map<Long, Long> lastSuspectNanos = new ConcurrentHashMap<>();
@@ -129,7 +129,7 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
      *
      * <p><b>재기만 하고 재건은 안 띄운다.</b> 재건은 그 이벤트의 플러시를 3초 넘게 멈추므로
      * 오탐이 곧 장애다. 정상 운영에서 이 표본이 0건이라는 것을 회차로 확인한 뒤에 붙인다
-     * ({@code docs/coupon/rebuild-measurement-2026-09-21b.md} 5장).
+     * ({@code docs/coupon/rebuild-v1/measurement-cache-loss.md} 5장).
      *
      * <p><b>카운터가 없으면 기준을 버린다.</b> 재건 중이거나 이벤트가 닫힌 것이라 견줄 대상이
      * 아니다. 다만 이 때문에 이벤트를 발급 이력째 다시 준비하면 그 첫 배치가 한 번 걸릴 수 있다.

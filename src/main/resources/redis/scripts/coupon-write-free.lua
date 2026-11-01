@@ -1,4 +1,4 @@
--- 주인을 잃은 번호를 재고로 되돌린다. docs/coupon/rebuild-raise-each-2026-10-14.md 가 근거다.
+-- 주인을 잃은 번호를 재고로 되돌린다. docs/coupon/rebuild-v2/design.md 가 근거다.
 -- KEYS[1]=seq(해시)  KEYS[2]=free(정렬집합)  KEYS[3]=counter(문자열)
 -- ARGV[1..n]=되살릴 후보 번호. 재건이 DB 로 걸러 넘긴다
 -- 반환 실제로 넣은 번호의 수

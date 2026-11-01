@@ -52,7 +52,7 @@ public record CouponIssueProperties(
          *
          * 그 번호는 아직 큐에 떠 있어 곧 행이 되는데, 그것을 남에게 내주면 둘 중 하나가
          * uk_mc_coupon_seq 에 걸려 그 요청이 실패한다
-         * (docs/coupon/rebuild-raise-each-2026-10-14.md 5.4).
+         * (docs/coupon/rebuild-v2/design.md 5.4).
          */
         require(freeMargin >= 1, "freeMargin 은 1 이상이어야 한다");
 
@@ -66,7 +66,7 @@ public record CouponIssueProperties(
          *
          * 명령 단위 타임아웃만으로는 이 시간이 안 묶인다. 재건 한 번이 Redis 를 서른 번
          * 안팎 치는데, 명령마다 상한 아래로 느리기만 하면 아무것도 안 터지면서 총합이
-         * 분 단위로 는다 (docs/coupon/rebuild-gate-2026-10-31.md 6장).
+         * 분 단위로 는다 (docs/coupon/rebuild-v3/design.md 6장).
          *
          * 이 값보다 문 시한이 짧아야 한다. 아니면 예산을 다 쓴 뒤에도 문이 그만큼 더 닫혀 있다.
          */

@@ -10,7 +10,7 @@ AWS 실측     20,000 VU / ramp 60초 / hold 30초 / 재고 10,000장 / 전용 �
 시나리오     fm-backend main 8ed43e2 의 loadtest/issue.js, k6 v1.7.1
 쿠폰         회차마다 번호를 바꿨다 (900009 ~ 900014).  근거는 6장이다
 주입         k6 를 먼저 띄우고 그로부터 24초 뒤에 걸었다.  회차별 시각은 2장이다
-대시보드     docs/coupon/rounds-2026-10-10/
+대시보드     docs/coupon/rebuild-v1/rounds/
 ```
 
 ---
@@ -78,7 +78,7 @@ AWS 실측     20,000 VU / ramp 60초 / hold 30초 / 재고 10,000장 / 전용 �
 | `453f2aaf` | 회차마다 다른 쿠폰으로 시드한다 | 같은 쿠폰을 거듭 쓰면 시험 환경에서 뒤처짐이 쏟아졌다 |
 | `378aa35a` | 문을 열 때 카운터를 올리기만 한다 | 5장에서 찾은 것을 막는 방어다 |
 
-앞선 두 고침과 재건 전용 타임아웃의 근거는 `budget-breakdown-2026-10-10.md` 에 있다.
+앞선 두 고침과 재건 전용 타임아웃의 근거는 `rebuild-v1/budget-breakdown.md` 에 있다.
 
 ---
 
@@ -238,7 +238,7 @@ DB 행과 큐 티켓을 동시에 가지면 음수가 된다. `writeFree` 에 �
 ## 6. 회차마다 쿠폰을 바꾸면 뒤처짐이 사라짐
 
 **같은 쿠폰을 거듭 쓰면 장애가 없는 회차에도 뒤처짐이 쏟아졌다.** 2026-10-10 J-3 에서
-1,130건이었고 원인은 `budget-breakdown-2026-10-10.md` 6장에 있다.
+1,130건이었고 원인은 `rebuild-v1/budget-breakdown.md` 6장에 있다.
 
 | 회차 | 쿠폰 | 장애 | 뒤처짐 표본 |
 |---|---|---|---:|
@@ -266,7 +266,7 @@ DB 행과 큐 티켓을 동시에 가지면 음수가 된다. `writeFree` 에 �
 **붙이면 얻는 것은 감지 지연 37초다.** J-2 에서 플러시가 10:08:46.5 에 뒤처짐을 알았고
 재연결 감시는 10:09:23 에 알았다. 그 사이 BEHIND 가 쏟아졌지만 아무도 재건으로 잇지 않았다.
 
-**팀은 아직 붙이지 않았다.** 정할 것이 남아 있고 그것은 `budget-breakdown-2026-10-10.md`
+**팀은 아직 붙이지 않았다.** 정할 것이 남아 있고 그것은 `rebuild-v1/budget-breakdown.md`
 6.0 에 적었다.
 
 ### 6.1 그것이 만든 부작용
@@ -371,7 +371,7 @@ TestFailoverNotAvailableFault: Test failover already in progress
 
 ## 9. 대시보드
 
-회차마다 다섯 장을 받았다. 파일은 `rounds-2026-10-10/` 에 있다.
+회차마다 다섯 장을 받았다. 파일은 `rebuild-v1/rounds/` 에 있다.
 
 | 대시보드 | 무엇이 보이나 |
 |---|---|
@@ -382,12 +382,12 @@ TestFailoverNotAvailableFault: Test failover already in progress
 | `fm-hosts` | 인스턴스 CPU 와 메모리 |
 
 ```
-rounds-2026-10-10/N-1-fm-overview.png   서버 1대 종료
-rounds-2026-10-10/N-2-fm-overview.png   캐시 페일오버
-rounds-2026-10-10/N-3-fm-overview.png   서버 1대 종료 (복합을 걸려다 거부됐다)
-rounds-2026-10-10/N-4-fm-overview.png   서버 1대 종료 (같은 이유)
-rounds-2026-10-10/O-1-fm-overview.png   순번 키 유실
-rounds-2026-10-10/P-1-fm-overview.png   서버 1대 종료 + 캐시 페일오버
+rebuild-v1/rounds/N-1-fm-overview.png   서버 1대 종료
+rebuild-v1/rounds/N-2-fm-overview.png   캐시 페일오버
+rebuild-v1/rounds/N-3-fm-overview.png   서버 1대 종료 (복합을 걸려다 거부됐다)
+rebuild-v1/rounds/N-4-fm-overview.png   서버 1대 종료 (같은 이유)
+rebuild-v1/rounds/O-1-fm-overview.png   순번 키 유실
+rebuild-v1/rounds/P-1-fm-overview.png   서버 1대 종료 + 캐시 페일오버
 ```
 
 **N-1 과 N-3 와 O-1 은 회차가 끝난 뒤에 구간을 지정해 다시 받았다.** 회차 중에 받으려 했을
