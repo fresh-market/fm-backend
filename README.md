@@ -60,7 +60,12 @@ cd backend
 
 요구사항이 지연을 재지 않으므로 SLO 를 하나 더 걸었다.
 
-> 부하 시험 환경에서 요구 부하를 걸었을 때, **처리된 발급 응답의 p99 가 1초 이하다.**
+> 부하 시험 환경에서 요구 부하를 걸었을 때, **발급 요청 응답의 p99 가 1초 이하다.**
+
+**모든 응답을 센다.** 발급받은 200 뿐 아니라 소진(409, 410)과 혼잡(503)과 게이트웨이
+실패(502, 504)까지 그 창에 들어온 요청 전부다. k6 의 `http_req_duration` 이고 그라파나가
+보는 것과 같은 계통이다. **거절을 빨리 돌려보내는 것으로 이 수를 좋게 만들 수 없도록**
+혼잡 비율에 1% 상한을 따로 건다.
 
 팀은 이 한 줄에서 타임아웃 계층 전체를 역산했다(5장). 그리고 팀은 커머스 도메인도 함께 만들어, 요구사항 명세 72개 기능을 32개 테이블과 13개 도메인으로 옮겼다.
 
@@ -459,10 +464,6 @@ flowchart TB
 였다. 근거와 아홉 회차 대조표는 [rebuild-v2/rounds.md](./docs/coupon/rebuild-v2/rounds.md) 에
 있다.
 
-**그래서 이 표와 2장의 SLO 문장은 재는 모집단이 다르다.** 2장은 "처리된 발급 응답의 p99" 라
-적었고 그것이 `coupon_settled_duration` 이다. 이 표는 더 넓은 `http_req_duration` 이고 같은
-1초 선을 넘지 않았다. **무장애 회차의 수치(6장)는 아직 옛 지표로 잰 값이라, SLO 문장을 고치려면
-그쪽을 다시 재야 한다.** 장애가 없는 회차에서는 둘이 거의 같지만 확인하지 않았다.
 
 > 회차별 원본과 주입 시각은 [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md), 대시보드는 [rebuild-v4/rounds/](./docs/coupon/rebuild-v4/rounds/) 에 있다. 앞선 판들은 [rebuild-v1/rounds.md](./docs/coupon/rebuild-v1/rounds.md) 와 [rebuild-v2/rounds.md](./docs/coupon/rebuild-v2/rounds.md) 에 있다.
 
@@ -556,6 +557,10 @@ flowchart TB
 | 실패율 | | **0.00%** | |
 | 봐서는 안 되는 응답 | 0건 | **0건** | 통과 |
 | 혼잡 503 비율 | 1% 이하 | **0.00%** | 통과 |
+
+**이 회차는 실패율과 혼잡이 둘 다 0 이다.** 거절이 한 건도 없어서 발급받은 응답과 전체 응답이
+같은 모집단이고, 그래서 0.133초를 어느 쪽으로 읽어도 값이 같다. **장애 회차에서는 그 둘이
+갈라지므로 5.6 표가 실패율을 같이 싣는다.**
 
 ```sql
 SELECT COUNT(*), MAX(issue_seq), MAX(issue_seq) - COUNT(*) AS gap, COUNT(DISTINCT member_id)
