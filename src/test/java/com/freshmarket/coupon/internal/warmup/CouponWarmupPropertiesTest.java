@@ -67,7 +67,7 @@ class CouponWarmupPropertiesTest {
      *
      * 2026-10-02 회차에서 옮긴 값이다. 3,000 에 동시성 20 으로 데운 직후의 첫 회차가 p99
      * 460.33ms 였고, 20,000 에 동시성 300 으로 올리니 66.37ms 가 됐다. 바뀌면 그 근거가
-     * 사라지므로 여기서 고정한다 (docs/coupon/rebuild-reconnect-and-fault-2026-10-01.md).
+     * 사라지므로 여기서 고정한다 (docs/coupon/rebuild-v1/reconnect-and-fault.md).
      */
     @Test
     void 안_적으면_실측에서_나온_값으로_뜬다() {

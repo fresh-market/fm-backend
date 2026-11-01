@@ -57,7 +57,7 @@ public class CouponSeqAllocator {
      * 받은 번호를 여기에 적어 둔다. 재건이 그 값을 카운터의 하한으로 쓴다.
      *
      * 남의 큐를 모아 세는 대신 각자 자기가 받은 최댓값으로 카운터를 올리는 것이 이 설계의 축이다
-     * (docs/coupon/rebuild-raise-each-2026-10-14.md 3장).
+     * (docs/coupon/rebuild-v2/design.md 3장).
      */
     private final CouponSeqMarks marks;
 

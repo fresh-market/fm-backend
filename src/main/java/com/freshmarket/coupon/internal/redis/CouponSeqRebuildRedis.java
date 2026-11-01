@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
  * {@code RedisCommandTimeoutException: Command timed out after 100 millisecond(s)} 로 끝났다.
  * 승격 직후의 새 프라이머리가 아직 부하를 받는 중이라 재건의 명령이 100ms 를 넘겼다. 재건이
  * 못 돌아 카운터가 뒤로 밀린 채 남았고, 재고 10,000장 중 1,030장이 안 나갔다
- * ({@code docs/coupon/budget-breakdown-2026-10-10.md} 4장).
+ * ({@code docs/coupon/rebuild-v1/budget-breakdown.md} 4장).
  *
  * <p><b>커넥션이 하나 늘어나는 것이 대가다.</b> 전용 3대에서 Valkey 커넥션 셋이다. 재건이
  * 드물게 도는 일이라 이 커넥션은 거의 놀지만, 타임아웃이 팩토리 단위 설정이라 커넥션을

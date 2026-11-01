@@ -567,7 +567,7 @@ counter >= MAX(issue_seq)
 것이고 차이가 곧 뒤처진 양이다. **팀은 이제 그 차이를 잰다.** 플러시가 배치마다 카운터를 읽어
 자기가 내보낸 최대 순번과 견주고, 깨지면 `COUPON_SEQ_COUNTER_BEHIND` 와
 `coupon.seq.counter.behind` 에 남긴다. **플러시는 재기만 하고 재건은 안 띄운다**
-([검증 회차](rebuild-fix-verification-2026-09-21.md) 3장).
+([검증 회차](rebuild-v1/fix-verification.md) 3장).
 
 ---
 

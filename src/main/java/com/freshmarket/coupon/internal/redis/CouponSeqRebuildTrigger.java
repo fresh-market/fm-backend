@@ -48,17 +48,17 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
     /*
      * 쿠폰마다 이 대가 마지막으로 재건을 띄운 시각이다. 그 간격 안에는 다시 안 띄운다.
      *
-     * inProgress 만으로는 모자란다. 그것은 "도는 동안" 만 막는데, 문이 그보다 오래 서 있기
-     * 때문이다. 재건이 끝나도 문의 시한이 남아 있으면 다음 요청이 -4 를 받아 또 깨우고, 그
-     * 재건이 문을 다시 닫는다. 트래픽이 있는 한 안 멈춘다.
+     * inProgress 만으로는 모자란다. 그것은 "도는 동안" 만 막는데, 발급 차단이 그보다 오래 서 있기
+     * 때문이다. 재건이 끝나도 차단의 시한이 남아 있으면 다음 요청이 -4 를 받아 또 깨우고, 그
+     * 재건이 차단을 다시 건다. 트래픽이 있는 한 안 멈춘다.
      *
      * 2026-11-01 Z-2 가 그 모양이었다. 같은 값으로 재건이 61번 돌았고
      * (issued=7301 dbMax=7307 counter=7307), 그동안 발급이 막혀 혼잡이 90.02% 이고 재고
      * 10,000장 중 2,699장이 안 나갔다.
      *
-     * 간격을 두면 전파는 살고 고리는 끊긴다. 남의 대가 문을 세운 것을 보고 자기 재건을 한
-     * 번 도는 것이 전파이고(docs/coupon/rebuild-gate-2026-10-31.md 3.3), 그 한 번 뒤로는
-     * 간격이 막으므로 문이 시한에 열린다.
+     * 간격을 두면 전파는 살고 고리는 끊긴다. 남의 대가 발급 차단을 건 것을 보고 자기 재건을 한
+     * 번 도는 것이 전파이고(docs/coupon/rebuild-v3/design.md 3.3), 그 한 번 뒤로는
+     * 간격이 막으므로 차단이 시한에 풀린다.
      */
     private final Map<Long, Long> lastSuspectNanos = new ConcurrentHashMap<>();
 
@@ -129,7 +129,7 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
      *
      * <p><b>재기만 하고 재건은 안 띄운다.</b> 재건은 그 이벤트의 플러시를 3초 넘게 멈추므로
      * 오탐이 곧 장애다. 정상 운영에서 이 표본이 0건이라는 것을 회차로 확인한 뒤에 붙인다
-     * ({@code docs/coupon/rebuild-measurement-2026-09-21b.md} 5장).
+     * ({@code docs/coupon/rebuild-v1/measurement-cache-loss.md} 5장).
      *
      * <p><b>카운터가 없으면 기준을 버린다.</b> 재건 중이거나 이벤트가 닫힌 것이라 견줄 대상이
      * 아니다. 다만 이 때문에 이벤트를 발급 이력째 다시 준비하면 그 첫 배치가 한 번 걸릴 수 있다.
@@ -193,7 +193,7 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
      * 방금 띄웠으면 다시 안 띄운다.
      *
      * 재연결 감시가 쓰는 것과 같은 설정을 쓴다. 둘이 막으려는 것이 같기 때문이다. 한쪽은
-     * 재연결을 여러 번 보는 것이고 다른 한쪽은 문을 여러 번 보는 것인데, 둘 다 "같은 장애
+     * 재연결을 여러 번 보는 것이고 다른 한쪽은 발급 차단을 여러 번 보는 것인데, 둘 다 "같은 장애
      * 하나에 재건이 거듭 뜨는 것" 이다.
      *
      * 갱신을 성공한 쪽에서만 한다. 막힌 호출이 시계를 밀면 트래픽이 계속 있는 동안 간격이
@@ -226,7 +226,7 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
                 return;
             } catch (CouponSeqStallBudgetException e) {
                 /*
-                 * 정지 예산을 넘겼다. 다시 돌면 그 시도가 문을 또 닫아 발급 정지가 예산
+                 * 정지 예산을 넘겼다. 다시 돌면 그 시도가 차단을 또 걸어 발급 정지가 예산
                  * 너머로 늘어난다. 여기서 끝낸다.
                  */
                 log.error("event=COUPON_SEQ_REBUILD_ABANDONED couponId={} attempt={} reason={}",

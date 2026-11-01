@@ -48,7 +48,7 @@ import org.springframework.data.redis.core.script.RedisScript;
  *
  * 세는 것이 없는 것도 계약이다. 예전에는 명부를 읽어 참가자 수를 세고 전원이 자기 큐를 올리기를
  * 기다렸는데, 그 세기가 실패하는 경우가 회차마다 새로 나왔다
- * (docs/coupon/rebuild-raise-each-2026-10-14.md 7.1).
+ * (docs/coupon/rebuild-v2/design.md 7.1).
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -223,7 +223,7 @@ class CouponSeqRebuilderTest {
      * B 단계는 주인 없는 번호를 free 에 되돌린다. 이 되돌리기가 결번을 0 으로 지켰다.
      *
      * 빼면 V 회차에서 결번이 42, 20, 3, 1 로 남았고 넣은 회차는 0 이었다
-     * (docs/coupon/rebuild-raise-each-2026-10-14.md 7.5).
+     * (docs/coupon/rebuild-v2/design.md 7.5).
      */
     @Test
     void 주인_없는_번호를_free_에_되돌린다() {
@@ -388,7 +388,7 @@ class CouponSeqRebuilderTest {
      *
      * 명령 단위 타임아웃으로는 이 시간이 안 묶인다. 재건이 Redis 를 서른 번 안팎 치는데
      * 명령마다 상한 아래로 느리기만 하면 아무것도 안 터지면서 총합이 분 단위로 늘고, 그동안
-     * 발급이 멈춰 있다 (docs/coupon/rebuild-gate-2026-10-31.md 6장).
+     * 발급이 멈춰 있다 (docs/coupon/rebuild-v3/design.md 6장).
      */
     @Test
     void 정지_예산을_넘기면_그만둔다() {

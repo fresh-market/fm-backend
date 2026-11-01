@@ -293,7 +293,7 @@ class CouponIssueServiceTest {
      *
      * 뒤로 간 카운터로 번호를 내주면 이미 번호를 쥔 회원에게 새 번호가 나가고, 그 회원의
      * INSERT 둘이 부딪혀 먼저 온 사람이 맨 뒤로 갈 수 있다
-     * (docs/coupon/rebuild-gate-2026-10-31.md 1장).
+     * (docs/coupon/rebuild-v3/design.md 1장).
      */
     @Test
     void 재건_중이면_혼잡으로_답한다() {

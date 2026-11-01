@@ -1,6 +1,6 @@
 # 두 고침이 실제로 도는지 본 회차 (2026-09-21)
 
-[앞 회차](rebuild-measurement-2026-09-21b.md)가 찾은 둘을 팀이 고쳐 배포하고 다시 돌렸다.
+[앞 회차](measurement-cache-loss.md)가 찾은 둘을 팀이 고쳐 배포하고 다시 돌렸다.
 
 ```
 AWS 실측     20,000 VU / ramp 60초 / 재고 10,000장 / 전용 인스턴스 3대
@@ -75,7 +75,7 @@ i-07a8 (DB 막힘)  CONTRIBUTED 3    size 231   lagMillis 864
 i-0ba2 (DB 막힘)  CONTRIBUTED 330             lagMillis 3185
 ```
 
-**`size=231` 이 증거다.** DB 에 못 닿는 인스턴스가 자기 큐 231건을 올렸다. 팀이 고치기 전이라면 그 인스턴스가 `findById` 에서 터져 0건이었다([앞 회차](rebuild-measurement-2026-09-21b.md) 3장).
+**`size=231` 이 증거다.** DB 에 못 닿는 인스턴스가 자기 큐 231건을 올렸다. 팀이 고치기 전이라면 그 인스턴스가 `findById` 에서 터져 0건이었다([앞 회차](measurement-cache-loss.md) 3장).
 
 ## 5. 3초가 여유 있는 값이 아니다
 

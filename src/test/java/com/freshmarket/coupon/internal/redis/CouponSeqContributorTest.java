@@ -37,7 +37,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
  *
  * 계약은 셋이다. 쓰기가 "없을 때만" 인가, 남의 쿠폰을 안 섞는가, 덩이로 나눠 보내는가.
  * 첫째가 멈춤을 없앤 근거다. 덮어쓰기로 되돌아가면 재건이 확정 표시를 미확정으로 덮어 회수가
- * 끝난 번호를 남에게 넘긴다 (docs/coupon/rebuild-raise-each-2026-10-14.md 5.2).
+ * 끝난 번호를 남에게 넘긴다 (docs/coupon/rebuild-v2/design.md 5.2).
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)

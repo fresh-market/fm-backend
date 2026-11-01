@@ -4,7 +4,7 @@
 
 ```
 재고 10,000장 / 동시 요청 20,000명 / ramp-up 60초
-  ->  초과 발급 0건 / 1인 1매 / 번호 유실 0 / p99 0.247초        AWS 실측
+  ->  초과 발급 0건 / 1인 1매 / 번호 유실 0 / p99 0.133초        AWS 실측
 ```
 
 Java 21 / Spring Boot 4.0.5 / MySQL 8.4 / Valkey(Redis) 9.0 / AWS (Terraform)
@@ -60,7 +60,12 @@ cd backend
 
 요구사항이 지연을 재지 않으므로 SLO 를 하나 더 걸었다.
 
-> 부하 시험 환경에서 요구 부하를 걸었을 때, **처리된 발급 응답의 p99 가 1초 이하다.**
+> 부하 시험 환경에서 요구 부하를 걸었을 때, **발급 요청 응답의 p99 가 1초 이하다.**
+
+**모든 응답을 센다.** 발급받은 200 뿐 아니라 소진(409, 410)과 혼잡(503)과 게이트웨이
+실패(502, 504)까지 그 창에 들어온 요청 전부다. k6 의 `http_req_duration` 이고 그라파나가
+보는 것과 같은 계통이다. **거절을 빨리 돌려보내는 것으로 이 수를 좋게 만들 수 없도록**
+혼잡 비율에 1% 상한을 따로 건다.
 
 팀은 이 한 줄에서 타임아웃 계층 전체를 역산했다(5장). 그리고 팀은 커머스 도메인도 함께 만들어, 요구사항 명세 72개 기능을 32개 테이블과 13개 도메인으로 옮겼다.
 
@@ -425,36 +430,40 @@ flowchart TB
 **4. 스프링 서버와 Redis 가 함께 죽어도 새 장치가 필요 없다.** 스프링 서버 사망은 회수가 소진 시점에 풀고 Redis 사망은 재건이 채우는데, **훅이 각각 따로 있어 서로를 안 기다린다.**
 
 장애를 주입해서 계측했다. 부하를 먼저 띄우고 램프가 오르는 중(k6+24초)에 장애를 걸었다.
+재건 설계는 `rebuild-v4` 이고 커밋에 같은 이름의 태그가 달려 있다.
 
-| 회차 | 장애 | 발급 | `max_seq` | 결번 | 초과 발급 | p99 |
-|---|---|---:|---:|---:|---:|---:|
-| N-1 | 스프링 서버 1대 비정상 종료 | **10,000** | 10,000 | **0** | 0 | 0.276초 |
-| N-2 | 캐시 Multi-AZ 페일오버 | **10,000** | 10,000 | **0** | 0 | 0.578초 |
-| P-1 | 스프링 서버 1대 종료 + 캐시 페일오버 | 9,542 | 9,542 | **0** | 0 | 0.708초 |
+| 장애 | 발급 | 결번 | 초과 발급 | `http` p99 |
+|---|---:|---:|---:|---:|
+| 스프링 서버 1대 비정상 종료 | **10,000** | **0** | 0 | 0.444초 |
+| 캐시 Multi-AZ 페일오버 | 9,905 | **0** | 0 | **0.451초** |
+| 스프링 서버 1대 종료 + 캐시 페일오버 | 9,600 | **0** | 0 | 0.343초 |
 
 **셋 다 초과 발급 0 이고 1인 1매가 지켜졌다.** 정합성은 어느 장애에서도 안 깨졌다.
 
-**결번이 세 회차 다 0 이다.** 나간 번호를 하나도 안 잃었다. P-1 의 `max_seq` 가 9,542 인 것은 두 장애가 겹쳐 재고가 다 안 나갔다는 뜻이고, **나간 만큼은 전부 DB 에 들어갔다.**
+**결번이 세 회차 다 0 이다.** 나간 번호를 하나도 안 잃었다. 복합의 발급이 9,600 인 것은 두
+장애가 겹쳐 재고가 다 안 나갔다는 뜻이고, **나간 만큼은 전부 DB 에 들어갔다.**
 
-**단일 장애는 재고를 다 내보냈다.** 서버 한 대가 죽어도, 캐시가 페일오버해도 10,000장이 전부 나갔다. 복합에서만 458장이 남았다.
+**p99 가 세 회차 다 SLO 1초 안이다.** 이 값은 `http_req_duration` 이라 **혼잡(503)과 게이트웨이
+실패(502/504)까지 담는다.** 발급받은 요청만 세는 것이 아니라 **그 창에 들어온 모든 요청**이고,
+그래서 이전 판들이 쓰던 `coupon_settled_duration` 보다 사용자 경험에 가깝다.
 
-**p99 가 세 회차 다 SLO 1초 안이다.** 가장 높은 것이 복합 장애의 0.708초다.
+**셋 중 가로로 비교할 수 있는 것은 캐시 페일오버의 0.451초뿐이다.** 서버를 죽이는 두 회차는
+그 대로 가던 요청이 ALB 에서 끊기는데, 끊긴 요청의 지연은 분포에 온전히 안 들어간다. **더 센
+장애가 더 낮은 p99 로 나오는 것이 그 때문이고**, 그 수를 "복합이 더 빨랐다" 로 읽으면 틀린다.
 
-**다만 이 p99 는 모집단이 깎인 값이다.** 세 회차의 p99 는 `coupon_settled_duration`, 즉
-**답을 받은 요청만** 담는 지표에서 나왔다. 장애 회차에서 답을 못 받은 요청이 바로 가장 느린
-요청들이라, 그것들이 빠진 분포의 p99 는 실제 사용자 경험보다 좋게 나온다. N-1 은 게이트웨이
-실패가 12,420건, N-2 는 7,723건이었고 그 요청들은 이 p99 에 안 들어가 있다.
+**캐시 페일오버만 그 왜곡이 없다.** 서버가 안 죽어 전 인스턴스가 살아 있고, 느려진 만큼 앱이
+혼잡으로 돌려보냈을 뿐 **모든 요청이 답을 받았다.**
 
-**2026-10-14 회차에서 그 왜곡의 크기를 처음 쟀다.** 한 회차는 `settled` p99 가 748ms 인데
-같은 구간의 `http_req_duration` p90 이 59.99초였다. 그래서 팀은 **판정 임계를
-`http_req_duration` 으로 옮겼고**, 그쪽이 그라파나가 보는 것과 같은 계통이다. 근거와 아홉
-회차 대조표는 [rounds-2026-10-14.md](./docs/coupon/rounds-2026-10-14.md) 에 있다.
+**재건이 대별로 한 번씩 돌았다.** 캐시 페일오버에서 3대가 각각 한 번, 복합에서 남은 2대가 각각
+한 번이다. 서버만 죽이는 장애는 Redis 를 안 건드려 재건이 안 뜬다.
 
-**위 표의 세 회차는 그 변경 전에 잰 것이라 `http` 기준 값이 없다.** 다시 잴 때 채운다.
+**지표를 바꾸기까지 두 판이 걸렸다.** 전에는 `coupon_settled_duration`, 즉 **답을 받은 요청만**
+담는 지표로 쟀다. 한 회차는 그 값이 748ms 인데 같은 구간의 `http_req_duration` p90 이 59.99초
+였다. 근거와 아홉 회차 대조표는 [rebuild-v2/rounds.md](./docs/coupon/rebuild-v2/rounds.md) 에
+있다.
 
-**거절의 모양이 장애마다 다르다.** 서버가 죽으면 그 대로 가던 요청이 게이트웨이 실패로 끊기고(12,420건), 캐시가 페일오버하면 전 인스턴스가 함께 느려져 혼잡으로 돌려보낸다(69.91%). 서버가 다 살아 있는 쪽이 오히려 혼잡이 높다.
 
-> 회차별 원본과 주입 시각은 [fault-injection-2026-10-10.md](./docs/coupon/fault-injection-2026-10-10.md), 대시보드는 [rounds-2026-10-10/](./docs/coupon/rounds-2026-10-10/) 에 있다.
+> 회차별 원본과 주입 시각은 [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md), 대시보드는 [rebuild-v4/rounds/](./docs/coupon/rebuild-v4/rounds/) 에 있다. 앞선 판들은 [rebuild-v1/rounds.md](./docs/coupon/rebuild-v1/rounds.md) 와 [rebuild-v2/rounds.md](./docs/coupon/rebuild-v2/rounds.md) 에 있다.
 
 > 대체 경로를 새로 만들지 않는다는 원칙은 [failure-response.md](./docs/incident/failure-response.md), 구성 요소별 상세는 [coupon.md 8장](./docs/coupon/coupon.md), 재건 절차는 [redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md), 회로를 어디에 거는지는 [coupon-failure.md](./docs/coupon/coupon-failure.md) 에 있다.
 
@@ -546,6 +555,9 @@ flowchart TB
 | 실패율 | | **0.00%** | |
 | 봐서는 안 되는 응답 | 0건 | **0건** | 통과 |
 | 혼잡 503 비율 | 1% 이하 | **0.00%** | 통과 |
+
+**이 회차는 거절이 한 건도 없다.** 발급받은 응답과 전체 응답이 같은 모집단이라 0.133초를 어느
+쪽으로 읽어도 값이 같다. **장애 회차에서는 그 둘이 갈라진다**(5.6).
 
 ```sql
 SELECT COUNT(*), MAX(issue_seq), MAX(issue_seq) - COUNT(*) AS gap, COUNT(DISTINCT member_id)
@@ -857,16 +869,20 @@ api-contract migration  app-config test         archunit        build
 | [coupon/coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) | 회차별 설정과 실측값 |
 | [coupon/coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) | 회수 기준 시간을 60초로 둔 근거 |
 | [coupon/warmup.md](./docs/coupon/warmup.md) | 워밍업이 무엇을 데우고 무엇을 못 데우나 |
-| [coupon/rebuild-measurement-2026-09-21.md](./docs/coupon/rebuild-measurement-2026-09-21.md) | 재건을 실제로 일으켜 본 회차와 거기서 찾은 것 |
-| [coupon/rebuild-measurement-2026-09-21b.md](./docs/coupon/rebuild-measurement-2026-09-21b.md) | 캐시 유실을 직접 주입해 본 회차. 기여가 DB 읽기 뒤에 있다 |
-| [coupon/rebuild-fix-verification-2026-09-21.md](./docs/coupon/rebuild-fix-verification-2026-09-21.md) | 두 고침이 실제로 도는지 본 회차. 3초가 여유 있는 값이 아니다 |
-| [coupon/rebuild-early-exit-2026-09-22.md](./docs/coupon/rebuild-early-exit-2026-09-22.md) | 조기 종료를 붙이고 돌려 본 회차. DB 장애가 길면 명부가 빈다 |
-| [coupon/rebuild-queue-contribution-2026-09-22.md](./docs/coupon/rebuild-queue-contribution-2026-09-22.md) | 큐가 실제로 재건에 쓰인 회차. 조기 종료가 2ms 에 끝났다 |
-| [coupon/rebuild-duration-2026-09-23.md](./docs/coupon/rebuild-duration-2026-09-23.md) | 재건 정지를 네 구간으로 쪼개 처음 잰 회차 |
-| [coupon/rebuild-reconnect-and-fault-2026-10-01.md](./docs/coupon/rebuild-reconnect-and-fault-2026-10-01.md) | 재연결을 재건의 신호로 붙인 회차. 무장애 p99 가 열다섯 배로 흔들린다 |
-| [coupon/fault-injection-2026-10-02.md](./docs/coupon/fault-injection-2026-10-02.md) | 장애 3종을 워밍업 올린 뒤 다시 잰 회차. 승격 재건이 걸리고 pause-timeout 으로 건너뛴다 |
-| [coupon/rounds-2026-10-14.md](./docs/coupon/rounds-2026-10-14.md) | 메모리 한도를 넣고 옛 재건과 새 재건을 나란히 잰 회차. 힙 덤프가 처음 남았고 판정 지표의 왜곡을 쟀다 |
-| [coupon/rebuild-gate-2026-10-31.md](./docs/coupon/rebuild-gate-2026-10-31.md) | 재건이 끝날 때까지 순번을 안 내주는 설계. 선착순을 지키려고 발급 정지를 되들인다 |
+| [coupon/rebuild-v1/measurement.md](./docs/coupon/rebuild-v1/measurement.md) | 재건을 실제로 일으켜 본 회차와 거기서 찾은 것 |
+| [coupon/rebuild-v1/measurement-cache-loss.md](./docs/coupon/rebuild-v1/measurement-cache-loss.md) | 캐시 유실을 직접 주입해 본 회차. 기여가 DB 읽기 뒤에 있다 |
+| [coupon/rebuild-v1/fix-verification.md](./docs/coupon/rebuild-v1/fix-verification.md) | 두 고침이 실제로 도는지 본 회차. 3초가 여유 있는 값이 아니다 |
+| [coupon/rebuild-v1/early-exit.md](./docs/coupon/rebuild-v1/early-exit.md) | 조기 종료를 붙이고 돌려 본 회차. DB 장애가 길면 명부가 빈다 |
+| [coupon/rebuild-v1/queue-contribution.md](./docs/coupon/rebuild-v1/queue-contribution.md) | 큐가 실제로 재건에 쓰인 회차. 조기 종료가 2ms 에 끝났다 |
+| [coupon/rebuild-v1/duration.md](./docs/coupon/rebuild-v1/duration.md) | 재건 정지를 네 구간으로 쪼개 처음 잰 회차 |
+| [coupon/rebuild-v1/reconnect-and-fault.md](./docs/coupon/rebuild-v1/reconnect-and-fault.md) | 재연결을 재건의 신호로 붙인 회차. 무장애 p99 가 열다섯 배로 흔들린다 |
+| [coupon/rebuild-v1/rounds-warmup.md](./docs/coupon/rebuild-v1/rounds-warmup.md) | 장애 3종을 워밍업 올린 뒤 다시 잰 회차. 승격 재건이 걸리고 pause-timeout 으로 건너뛴다 |
+| [coupon/rebuild-v2/rounds.md](./docs/coupon/rebuild-v2/rounds.md) | 메모리 한도를 넣고 옛 재건과 새 재건을 나란히 잰 회차. 힙 덤프가 처음 남았고 판정 지표의 왜곡을 쟀다 |
+| [coupon/rebuild-v3/design.md](./docs/coupon/rebuild-v3/design.md) | 재건이 끝날 때까지 순번을 안 내주는 설계. 선착순을 지키려고 발급 정지를 되들인다 |
+| [coupon/rebuild-v4/design.md](./docs/coupon/rebuild-v4/design.md) | **지금 도는 재건.** 깨우기부터 A, B 단계와 순번 발급 차단까지 한 자리에 모았다 |
+| [coupon/rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) | rebuild-v4 의 장애 3종. 재건이 설계대로 돌았고 판정을 http 로 옮긴 뒤의 첫 측정이다 |
+| [coupon/rebuild-v5/design.md](./docs/coupon/rebuild-v5/design.md) | 같은 일을 서버마다 되풀이하지 않는 설계 제안. 코드로 아직 안 옮겼다 |
+| [coupon/rebuild-v4/revert-rejected.md](./docs/coupon/rebuild-v4/revert-rejected.md) | 주도자 재건으로 되돌리는 안과 반려 사유. 근거가 된 측정이 결함 하나 때문이었다 |
 | [coupon/virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) | 가상 스레드를 어떻게 쟀나 |
 | [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
 | [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |
