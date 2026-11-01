@@ -189,6 +189,28 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
     }
 
     /*
+     * 재건이 네 키에 수명을 건다.
+     *
+     * 전손이면 넷 다 재건이 만든다. 평상시에는 순번 확보가 카운터에서 물려받아 거는데 그
+     * 경로를 안 지나므로, 여기서 안 걸면 넷이 이벤트보다 오래 산다.
+     *
+     * 예전에는 자바가 카운터에 EXPIREAT 을 걸고 그 값을 PTTL 로 되읽어 나머지 셋에 걸었다.
+     * 왕복이 다섯이었고 그 사이에 재건이 죽으면 셋이 수명 없이 남았다. 지금은 카운터를 세우는
+     * 스크립트가 넷을 한꺼번에 건다 (docs/coupon/rebuild-v5/design.md 9.1).
+     */
+    @Test
+    void 네_키에_수명을_건다() {
+        발급행을_심는다(9101, 1);
+        발급행을_심는다(9102, 40);
+
+        sut.rebuild(COUPON_ID);
+
+        assertThat(redisTemplate.getExpire(COUNTER)).isPositive();
+        assertThat(redisTemplate.getExpire(SEQ)).isPositive();
+        assertThat(redisTemplate.getExpire(FREE)).isPositive();
+    }
+
+    /*
      * 여러 번 돌아도 결과가 같다. 멱등이 이 설계의 요점이다.
      *
      * 재연결 감시가 인스턴스마다 독립으로 띄우므로 한 장애에 여러 번 돈다. 예전에는 그것이
