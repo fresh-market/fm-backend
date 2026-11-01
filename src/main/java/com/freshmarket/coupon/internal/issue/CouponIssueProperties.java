@@ -21,9 +21,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param commitWait 요청 스레드가 자기 발급의 확정을 기다리는 시간. 넘으면 혼잡으로 끊는다.
  *                   재는 구간은 큐에 넣은 뒤부터 DB 커밋과 Redis 확정 표시가 끝날 때까지다.
  *                   순번 확보와 응답 직렬화는 이 안에 없다
- * @param rebuildContributeWait Redis 재건을 주도하는 인스턴스가 남들이 자기 큐를 올리기를
- *                              기다리는 시간. 살아 있으면 밀리초에 끝나고, 죽었으면 이만큼 기다린 뒤
- *                              그 큐를 없는 것으로 친다
+ * @param freeMargin 주인 잃은 번호를 되살릴 때 카운터에서 이만큼 떨어진 것만 본다.
+ *                   시각을 들고 있는 것이 없어 카운터와의 거리로 나이를 잰다
  * @param couponCacheTtl 마감이 없는 쿠폰의 스냅샷을 이 JVM 이 들고 있는 시간.
  *                       마감이 있으면 이 값을 안 쓰고 Redis 키와 같은 시각에 버린다
  */
@@ -35,8 +34,12 @@ public record CouponIssueProperties(
         @DefaultValue("1") int flushThreads,
         @DefaultValue("2147483647") int queueCapacity,
         @DefaultValue("2s") Duration commitWait,
-        @DefaultValue("3s") Duration rebuildContributeWait,
-        @DefaultValue("5s") Duration couponCacheTtl) {
+        @DefaultValue("true") boolean rebuildOnReconnect,
+        @DefaultValue("10s") Duration rebuildOnReconnectMinInterval,
+        @DefaultValue("5s") Duration couponCacheTtl,
+        @DefaultValue("500") int freeMargin,
+        @DefaultValue("1s") Duration raiseGateTtl,
+        @DefaultValue("5s") Duration rebuildStallBudget) {
 
     public CouponIssueProperties {
         require(batchSize >= 1, "batchSize 는 1 이상이어야 한다");
@@ -44,7 +47,32 @@ public record CouponIssueProperties(
         require(queueCapacity >= 1, "queueCapacity 는 1 이상이어야 한다");
         require(!batchWindow.isNegative(), "batchWindow 는 음수일 수 없다");
         require(!couponCacheTtl.isNegative(), "couponCacheTtl 은 음수일 수 없다");
-        require(rebuildContributeWait.isPositive(), "rebuildContributeWait 는 양수여야 한다");
+        /*
+         * 0 이면 방금 나간 번호까지 되살릴 후보로 본다.
+         *
+         * 그 번호는 아직 큐에 떠 있어 곧 행이 되는데, 그것을 남에게 내주면 둘 중 하나가
+         * uk_mc_coupon_seq 에 걸려 그 요청이 실패한다
+         * (docs/coupon/rebuild-v2/design.md 5.4).
+         */
+        require(freeMargin >= 1, "freeMargin 은 1 이상이어야 한다");
+
+        /*
+         * 재건이 도는 동안 발급을 끊어 두는 시한이다. 0 이면 문이 서자마자 열려 뜻이 없어진다.
+         */
+        require(raiseGateTtl.toMillis() >= 1, "raiseGateTtl 은 1ms 이상이어야 한다");
+
+        /*
+         * 재건이 문을 닫아 둘 수 있는 총 벽시계다. 넘으면 재건을 그만두고 문을 시한에 맡긴다.
+         *
+         * 명령 단위 타임아웃만으로는 이 시간이 안 묶인다. 재건 한 번이 Redis 를 서른 번
+         * 안팎 치는데, 명령마다 상한 아래로 느리기만 하면 아무것도 안 터지면서 총합이
+         * 분 단위로 는다 (docs/coupon/rebuild-v3/design.md 6장).
+         *
+         * 이 값보다 문 시한이 짧아야 한다. 아니면 예산을 다 쓴 뒤에도 문이 그만큼 더 닫혀 있다.
+         */
+        require(rebuildStallBudget.compareTo(raiseGateTtl) > 0,
+                "rebuildStallBudget(" + rebuildStallBudget + ") 은 raiseGateTtl("
+                        + raiseGateTtl + ") 보다 길어야 한다");
 
         /*
          * 회수 기준이 확정 대기보다 짧으면 회수가 아직 살아 있는 요청의 번호를 뺏는다.

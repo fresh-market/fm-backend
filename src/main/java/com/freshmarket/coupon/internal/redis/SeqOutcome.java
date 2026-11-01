@@ -31,7 +31,17 @@ public sealed interface SeqOutcome {
     record SoldOutFinal() implements SeqOutcome {
     }
 
-    /** 이벤트 준비 전이거나 카운터 재건 중이다. 재고는 있을 수 있으므로 503 과 Retry-After 로 답한다. */
+    /** 이벤트 준비 전이거나 카운터가 통째로 사라졌다. 재고는 있을 수 있으므로 503 과 Retry-After 로 답한다. */
     record NotPrepared() implements SeqOutcome {
+    }
+
+    /**
+     * 재건이 도는 중이다. <b>{@link NotPrepared} 와 갈라야 하는 이유가 하나뿐이지만
+     * 결정적이다.</b> 저쪽은 "카운터가 없다" 라 그 인스턴스의 기억을 버리는 신호인데, 이쪽에서
+     * 버리면 재건이 카운터를 세울 하한을 잃는다.
+     *
+     * <p>사용자가 보는 응답은 둘 다 503 이다.
+     */
+    record Rebuilding() implements SeqOutcome {
     }
 }

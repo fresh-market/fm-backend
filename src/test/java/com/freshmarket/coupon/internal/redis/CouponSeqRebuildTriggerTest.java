@@ -1,5 +1,7 @@
 package com.freshmarket.coupon.internal.redis;
 
+import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
+import java.time.Duration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -51,9 +53,6 @@ class CouponSeqRebuildTriggerTest {
     @Mock
     private ValueOperations<String, String> valueOperations;
 
-    @Mock
-    private CouponSeqInstances instances;
-
     private MeterRegistry registry;
 
     @BeforeEach
@@ -63,7 +62,19 @@ class CouponSeqRebuildTriggerTest {
     }
 
     private CouponSeqRebuildTrigger 트리거() {
-        return new CouponSeqRebuildTrigger(rebuilder, redisTemplate, instances, registry);
+        return 트리거(Duration.ofSeconds(10));
+    }
+
+    /*
+     * 간격을 0 으로 주면 "막지 않는다" 가 된다. 간격 자체를 안 보는 시험들이 그것을 쓴다.
+     */
+    private CouponSeqRebuildTrigger 트리거(Duration suspectMinInterval) {
+        CouponIssueProperties properties = new CouponIssueProperties(
+                Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
+                Duration.ofSeconds(2), true, suspectMinInterval, Duration.ofSeconds(5), 500,
+                Duration.ofSeconds(1), Duration.ofSeconds(5));
+        return new CouponSeqRebuildTrigger(rebuilder, redisTemplate, new CouponSeqMarks(),
+                properties, registry);
     }
 
     private void given카운터가(String value) {
@@ -78,13 +89,78 @@ class CouponSeqRebuildTriggerTest {
         return registry.summary("coupon.seq.counter.behind").max();
     }
 
+    /*
+     * 정지 예산을 넘긴 재건은 다시 돌리지 않는다.
+     *
+     * 다시 돌면 그 시도가 문을 또 닫아 발급 정지가 예산 너머로 늘어난다. 예산을 둔 뜻이
+     * 바로 그것을 막는 것이다 (docs/coupon/rebuild-v3/design.md 6장).
+     */
+    @Test
+    void 정지_예산을_넘기면_다시_안_돌린다() throws Exception {
+        CouponSeqRebuildTrigger sut = 트리거();
+        doThrow(new CouponSeqStallBudgetException("예산 5000ms 를 넘겼다"))
+                .when(rebuilder).rebuild(COUPON_ID);
+
+        sut.suspect(COUPON_ID);
+        Thread.sleep(300);
+
+        verify(rebuilder, times(1)).rebuild(COUPON_ID);
+    }
+
+    /*
+     * 같은 장애 하나에 재건이 거듭 뜨지 않는다.
+     *
+     * inProgress 만으로는 모자란다. 그것은 도는 동안만 막는데 문은 그보다 오래 서 있어서,
+     * 재건이 끝난 뒤 다음 요청이 -4 를 받아 또 깨우고 그 재건이 문을 다시 닫는다.
+     * 2026-11-01 Z-2 에서 같은 값으로 61번 돌았고 재고 2,699장이 안 나갔다.
+     */
+    @Test
+    void 간격_안에는_다시_안_띄운다() throws Exception {
+        CouponSeqRebuildTrigger sut = 트리거(Duration.ofSeconds(10));
+
+        sut.suspect(COUPON_ID);
+        Thread.sleep(200);
+        for (int i = 0; i < 20; i++) {
+            sut.suspect(COUPON_ID);
+        }
+        Thread.sleep(200);
+
+        verify(rebuilder, times(1)).rebuild(COUPON_ID);
+    }
+
+    // 간격이 지나면 다시 뜬다. 안 그러면 한 번 띄운 쿠폰이 영영 재건을 못 한다
+    @Test
+    void 간격이_지나면_다시_띄운다() throws Exception {
+        CouponSeqRebuildTrigger sut = 트리거(Duration.ofMillis(50));
+
+        sut.suspect(COUPON_ID);
+        Thread.sleep(200);
+        sut.suspect(COUPON_ID);
+        Thread.sleep(200);
+
+        verify(rebuilder, times(2)).rebuild(COUPON_ID);
+    }
+
+    // 쿠폰을 섞지 않는다. 한 쿠폰의 간격이 남의 재건을 막으면 그 이벤트가 통째로 늦는다
+    @Test
+    void 쿠폰마다_따로_센다() throws Exception {
+        CouponSeqRebuildTrigger sut = 트리거(Duration.ofSeconds(10));
+
+        sut.suspect(COUPON_ID);
+        sut.suspect(9002L);
+        Thread.sleep(300);
+
+        verify(rebuilder, times(1)).rebuild(COUPON_ID);
+        verify(rebuilder, times(1)).rebuild(9002L);
+    }
+
     @Test
     void 한_번_부르면_재건이_한_번_뜬다() {
         CouponSeqRebuildTrigger sut = 트리거();
 
         sut.suspect(COUPON_ID);
 
-        verify(rebuilder, timeout(5_000)).rebuildIfLost(COUPON_ID);
+        verify(rebuilder, timeout(5_000)).rebuild(COUPON_ID);
     }
 
     /*
@@ -99,7 +175,7 @@ class CouponSeqRebuildTriggerTest {
             재건이_시작됐다.countDown();
             재건을_붙잡는다.await(5, TimeUnit.SECONDS);
             return null;
-        }).when(rebuilder).rebuildIfLost(anyLong());
+        }).when(rebuilder).rebuild(anyLong());
 
         CouponSeqRebuildTrigger sut = 트리거();
 
@@ -112,7 +188,7 @@ class CouponSeqRebuildTriggerTest {
         재건을_붙잡는다.countDown();
 
         // then
-        verify(rebuilder, timeout(5_000).times(1)).rebuildIfLost(COUPON_ID);
+        verify(rebuilder, timeout(5_000).times(1)).rebuild(COUPON_ID);
     }
 
     /*
@@ -122,7 +198,7 @@ class CouponSeqRebuildTriggerTest {
     @Test
     void 재건이_실패하면_다음_요청이_다시_띄운다() throws Exception {
         doThrow(new IllegalStateException("DB 가 답하지 않는다"))
-                .when(rebuilder).rebuildIfLost(anyLong());
+                .when(rebuilder).rebuild(anyLong());
         CouponSeqRebuildTrigger sut = 트리거();
 
         /*
@@ -136,7 +212,44 @@ class CouponSeqRebuildTriggerTest {
         }
 
         // 몇 번인지는 정하지 않는다. 이 시험이 지키려는 것은 "한 번 실패하면 끝" 이 아니라는 것뿐이다
-        verify(rebuilder, timeout(5_000).atLeast(2)).rebuildIfLost(COUPON_ID);
+        verify(rebuilder, timeout(5_000).atLeast(2)).rebuild(COUPON_ID);
+    }
+
+    /*
+     * 한 번 실패하고 끝내면 재연결 경로에서 재건이 영영 안 돈다.
+     *
+     * 요청 경로에는 "다음 요청" 이 있지만 재연결 감시는 재연결마다 한 번만 깨우므로 그 다음이
+     * 없다. 2026-10-10 J-2 회차에서 재건이 Redis 타임아웃 한 번으로 끝나 재고 10,000장 중
+     * 1,030장이 안 나갔다.
+     */
+    @Test
+    void 재건이_실패하면_그_자리에서_다시_해_본다() {
+        doThrow(new IllegalStateException("승격 직후라 느리다"))
+                .doThrow(new IllegalStateException("아직 느리다"))
+                .doNothing()
+                .when(rebuilder).rebuild(anyLong());
+        CouponSeqRebuildTrigger sut = 트리거();
+
+        // when 한 번만 부른다. 다음 요청이 띄워 주기를 기대하지 않는다
+        sut.suspect(COUPON_ID);
+
+        verify(rebuilder, timeout(5_000).times(3)).rebuild(COUPON_ID);
+    }
+
+    /*
+     * 재시도에 상한이 없으면 안 된다. 승격이 아니라 설정이 틀린 경우에는 몇 번을 해도 실패하고,
+     * 그 스레드가 영영 안 끝나면 다음 신호를 받을 일꾼이 없다.
+     */
+    @Test
+    void 계속_실패하면_세_번에서_그만둔다() {
+        doThrow(new IllegalStateException("무엇을 해도 실패한다"))
+                .when(rebuilder).rebuild(anyLong());
+        CouponSeqRebuildTrigger sut = 트리거();
+
+        sut.suspect(COUPON_ID);
+
+        verify(rebuilder, timeout(5_000).times(3)).rebuild(COUPON_ID);
+        verify(rebuilder, never()).rebuild(COUPON_ID + 1);
     }
 
     /*
@@ -147,33 +260,11 @@ class CouponSeqRebuildTriggerTest {
      */
     @Test
     void 플러시_뒤_확인은_Redis_실패를_삼킨다() {
-        when(redisTemplate.hasKey(anyString()))
+        when(valueOperations.get(COUNTER))
                 .thenThrow(new RedisConnectionFailureException("Redis 가 답하지 않는다"));
         CouponSeqRebuildTrigger sut = 트리거();
 
         assertThatCode(() -> sut.checkAfterFlush(COUPON_ID, 10)).doesNotThrowAnyException();
-
-        verifyNoInteractions(rebuilder);
-    }
-
-    // 재건 중이면 이 인스턴스도 자기 큐를 올려야 한다
-    @Test
-    void 재건_표시가_있으면_후보로_넘긴다() {
-        when(redisTemplate.hasKey("coupon:9001:rebuild")).thenReturn(true);
-        CouponSeqRebuildTrigger sut = 트리거();
-
-        sut.checkAfterFlush(COUPON_ID, 10);
-
-        verify(rebuilder, timeout(5_000)).rebuildIfLost(COUPON_ID);
-    }
-
-    // 평상시에는 아무 일도 안 한다. 배치마다 도는 자리라 여기서 새면 재건이 쉬지 않고 돈다
-    @Test
-    void 재건_표시가_없으면_아무것도_안_한다() {
-        when(redisTemplate.hasKey("coupon:9001:rebuild")).thenReturn(false);
-        CouponSeqRebuildTrigger sut = 트리거();
-
-        sut.checkAfterFlush(COUPON_ID, 10);
 
         verifyNoInteractions(rebuilder);
     }
@@ -265,31 +356,6 @@ class CouponSeqRebuildTriggerTest {
         assertThat(뒤처짐_표본()).isZero();
     }
 
-    /*
-     * 이 시험이 2026-09-22 회차가 드러낸 자리를 고정한다.
-     *
-     * 명부 갱신을 flush 뒤에 뒀더니, DB 를 10초 막았을 때 세 대가 모두 명부에서 빠졌다.
-     * 배치를 못 끝내 알림도 멈춘 것이다. 셋이 다 올렸는데도 주도자가 그것을 모른 채
-     * 정해진 시간을 끝까지 기다렸다. 큐가 두꺼워 기여가 가장 중요한 순간이 하필 그때다.
-     */
-    @Test
-    void 큐를_쥐었다는_알림은_쓰기와_무관하다() {
-        트리거().holdingQueue();
-
-        verify(instances).refresh();
-    }
-
-    // 플러시 뒤 확인은 명부를 안 건드린다. 쓰기가 실패해도 알림은 이미 갔어야 한다
-    @Test
-    void 플러시_뒤_확인은_명부를_갱신하지_않는다() {
-        when(redisTemplate.hasKey(anyString())).thenReturn(false);
-        given카운터가(null);
-
-        트리거().checkAfterFlush(COUPON_ID, 10);
-
-        verify(instances, never()).refresh();
-    }
-
     // 쿠폰이 다르면 서로를 막지 않는다. 집합의 키가 쿠폰이라는 뜻이다
     @Test
     void 다른_쿠폰은_서로를_막지_않는다() {
@@ -298,8 +364,8 @@ class CouponSeqRebuildTriggerTest {
         sut.suspect(COUPON_ID);
         sut.suspect(COUPON_ID + 1);
 
-        verify(rebuilder, timeout(5_000)).rebuildIfLost(COUPON_ID);
-        verify(rebuilder, timeout(5_000)).rebuildIfLost(COUPON_ID + 1);
-        verify(rebuilder, times(2)).rebuildIfLost(anyLong());
+        verify(rebuilder, timeout(5_000)).rebuild(COUPON_ID);
+        verify(rebuilder, timeout(5_000)).rebuild(COUPON_ID + 1);
+        verify(rebuilder, times(2)).rebuild(anyLong());
     }
 }

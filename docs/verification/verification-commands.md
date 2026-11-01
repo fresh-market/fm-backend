@@ -175,13 +175,15 @@ python3 common/.github/llm-verify/run.py --mode match \
 CI 가 부르는 것과 같다. **CI 가 실패했을 때 로컬에서 재현하는 용도다.**
 
 ```bash
-GEMINI_API_KEY=... python3 common/.github/llm-verify/run.py --mode judge \
+python3 common/.github/llm-verify/run.py --mode judge \
   --backend backend --common common --infra infra \
   --base <base SHA> --head <head SHA> \
   --out verify-out.md
 ```
 
-키가 없으면 종료 코드 1 이다.
+**환경 변수로 키를 주지 않는다.** 인증은 CLI 가 맡으므로 `codex` 가 설치돼 있고 로그인돼
+있으면 된다. 없으면 종료 코드 1 이고 `codex 를 찾을 수 없다` 가 찍힌다.
+모델을 고정하려면 `CODEX_MODEL` 을 준다. 비우면 CLI 기본값을 쓴다.
 `--out` 이 만드는 파일이 PR 코멘트로 올라가는 내용 그대로다.
 
 ## 5. 레지스트리 재생성
@@ -279,7 +281,7 @@ CI 가 이상하다
 
 | 증상 | 원인 | 조치 |
 |---|---|---|
-| `GEMINI_API_KEY 가 없다` | 키 미설정 | 4번은 키가 필요하다. 2번을 쓴다 |
+| `codex 를 찾을 수 없다` | CLI 미설치 | 4번은 CLI 와 로그인이 필요하다. 2번을 쓴다 |
 | `어긋난다. gen_items.py 를 -o 로 다시 돌려라` | 문서를 고치고 재생성 안 함 | 5번 실행 |
 | `층위를 알 수 없다` | 문서에 `[코드]` 태그가 없는데 기본값도 안 줌 | 인자 끝에 층위를 준다 |
 | `ID 중복` | 같은 항목 ID 가 두 문서에 있다 | 문서에서 하나를 고친다 |

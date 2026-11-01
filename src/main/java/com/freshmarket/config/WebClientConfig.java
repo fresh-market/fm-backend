@@ -4,9 +4,11 @@ import com.freshmarket.common.logging.ExternalApiLoggingExchangeFilter;
 import com.freshmarket.common.logging.TraceIdExchangeFilter;
 import io.netty.channel.ChannelOption;
 import java.time.Duration;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.webclient.WebClientCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
@@ -87,5 +89,34 @@ public class WebClientConfig {
     @Bean
     public WebClient kakaoApiWebClient(WebClient.Builder builder) {
         return builder.build();
+    }
+
+    /*
+     * [2026-09-27 KST] 토스페이먼츠 전용 벤더 계층. 카카오와 달리 호스트가 하나
+     * (api.tosspayments.com)뿐이라 baseUrl을 여기서 고정하고, 인증(Basic, 시크릿키:)도 모든
+     * 호출에 공통이라 defaultHeaders로 한 번만 건다 — TossPaymentGateway가 매 호출마다 헤더를
+     * 새로 만들 필요가 없다.
+     *
+     * 시크릿키는 property로만 주입받는다(application-local.yml.example 참고) — 코드에 값이
+     * 직접 남지 않는다. secret-key는 기본값을 두지 않는다: 값이 없으면 기동 시점에 바로 실패해야,
+     * "빈 문자열로 Basic 인증을 보내서 토스가 401을 주는" 상황을 나중에야 알아채는 것보다 낫다.
+     *
+     * setBasicAuth(secretKey, "")가 "Basic base64(secretKey:)"를 만든다 — 토스 문서가 요구하는
+     * "시크릿키 뒤에 콜론만 붙이고 비밀번호는 비운다"는 형식과 정확히 같다.
+     *
+     * @Profile("prod") — TossPaymentGateway와 똑같이 prod에서만 뜬다. 이게 없으면 이 빈이
+     * local/batch/integrationTest 등 모든 프로필에서 무조건 생성되면서 toss.secret-key가 없는
+     * 로컬 개발 환경(MockPaymentGateway만 쓰는)까지 기동을 못 하게 만든다 — 아무도 안 쓰는 빈
+     * 때문에 기동이 막히는 것은 이 빈을 쓰는 TossPaymentGateway 자체가 prod 전용인 것과 어긋난다.
+     */
+    @Bean
+    @Profile("prod")
+    public WebClient tossPaymentWebClient(WebClient.Builder builder,
+            @Value("${toss.base-url:https://api.tosspayments.com}") String tossBaseUrl,
+            @Value("${toss.secret-key}") String tossSecretKey) {
+        return builder
+                .baseUrl(tossBaseUrl)
+                .defaultHeaders(headers -> headers.setBasicAuth(tossSecretKey, ""))
+                .build();
     }
 }

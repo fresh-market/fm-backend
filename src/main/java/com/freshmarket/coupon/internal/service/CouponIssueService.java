@@ -116,6 +116,17 @@ public class CouponIssueService {
                 rebuildTrigger.suspect(couponId);
                 throw congested(IssueResult.NOT_PREPARED);
             }
+            /*
+             * 재건이 도는 중이다. 틀린 번호를 주느니 끊는다.
+             *
+             * 그래도 재건을 깨운다. 문을 세운 것은 남의 대일 수 있고, 이 대도 자기 큐를
+             * 되살리고 자기 기억으로 카운터를 올려야 한다. 이미 돌고 있으면 그 호출이 그냥
+             * 돌아간다. 이 깨우기가 곧 문의 전파 경로다 (설계 문서 3.3).
+             */
+            case SeqOutcome.Rebuilding ignored -> {
+                rebuildTrigger.suspect(couponId);
+                throw congested(IssueResult.REBUILDING);
+            }
         };
     }
 

@@ -18,7 +18,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.TestPropertySource;
 
 /*
  * 재건이 실제 규모에서 얼마나 걸리는지 잰다.
@@ -30,7 +29,6 @@ import org.springframework.test.context.TestPropertySource;
  * 여기서 재려는 것은 읽고 계산하고 쓰는 데 걸리는 시간이다. 운영 값 3초는 여기에 그대로 더해진다.
  */
 @SpringBootTest
-@TestPropertySource(properties = "coupon.issue.rebuild-contribute-wait=1ms")
 class CouponSeqRebuildLatencyIntegrationTest extends IntegrationTestSupport {
 
     private static final long COUPON_ID = 9601L;
@@ -68,26 +66,23 @@ class CouponSeqRebuildLatencyIntegrationTest extends IntegrationTestSupport {
 
     @Test
     void 만_건_규모의_재건_시간을_잰다() throws IOException {
-        int 큐에_떠_있는_수 = 큐를_흉내_낸다(200);
         int 발급행 = 발급행_수();
 
         long start = System.nanoTime();
-        sut.rebuildIfLost(COUPON_ID);
+        sut.rebuild(COUPON_ID);
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
 
         // 잰 값이 뜻을 가지려면 재건이 실제로 끝나 있어야 한다
         assertThat(redisTemplate.opsForValue().get(counter())).isNotNull();
-        assertThat(redisTemplate.opsForHash().size(seq())).isEqualTo(발급행 + 큐에_떠_있는_수);
+        assertThat(redisTemplate.opsForHash().size(seq())).isEqualTo(발급행);
 
         String report = """
-                재건 지연 (큐 수집 대기 제외)
+                재건 지연 (기다림이 없다)
 
                 발급행       %,d
-                큐에 떠 있음  %,d
-                결번         %,d
+                되살린 번호   %,d
                 걸린 시간    %,d ms
-                """.formatted(발급행, 큐에_떠_있는_수,
-                redisTemplate.opsForZSet().zCard(free()), elapsedMillis);
+                """.formatted(발급행, redisTemplate.opsForZSet().zCard(free()), elapsedMillis);
         Files.createDirectories(REPORT.getParent());
         Files.writeString(REPORT, report);
         System.out.println(report);
@@ -97,17 +92,6 @@ class CouponSeqRebuildLatencyIntegrationTest extends IntegrationTestSupport {
      * 다른 인스턴스가 자기 큐를 올린 것을 흉내 낸다.
      * 이 JVM 의 큐에 넣으면 플러시 스레드가 곧바로 가져가 회차마다 결과가 달라진다.
      */
-    private int 큐를_흉내_낸다(int count) {
-        Map<String, String> queued = new HashMap<>(count);
-        for (int i = 0; i < count; i++) {
-            // 결번으로 비워 둔 번호 중 앞쪽을 큐가 쥐고 있는 것으로 둔다
-            int seq = (i + 1) * GAP_EVERY;
-            queued.put(String.valueOf(FIRST_MEMBER_ID + TOTAL_QUANTITY + i), String.valueOf(seq));
-        }
-        redisTemplate.opsForHash().putAll("coupon:" + COUPON_ID + ":rebuild:queued", queued);
-        return count;
-    }
-
     private void 발급행을_채운다() {
         List<int[]> rows = new ArrayList<>(TOTAL_QUANTITY);
         for (int seq = 1; seq <= TOTAL_QUANTITY; seq++) {
@@ -182,8 +166,7 @@ class CouponSeqRebuildLatencyIntegrationTest extends IntegrationTestSupport {
     private void 키를_지운다() {
         redisTemplate.delete(List.of(seq(), free(), counter(),
                 "coupon:" + COUPON_ID + ":pending",
-                "coupon:" + COUPON_ID + ":rebuild",
-                "coupon:" + COUPON_ID + ":rebuild:queued"));
+                "coupon:" + COUPON_ID + ":rebuild"));
     }
 
     private int 발급행_수() {

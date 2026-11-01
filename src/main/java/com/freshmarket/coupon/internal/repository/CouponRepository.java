@@ -117,6 +117,24 @@ public interface CouponRepository extends JpaRepository<Coupon, Long> {
     List<Long> findClosableEvents(@Param("closableBefore") LocalDateTime closableBefore);
 
     /**
+     * 재건이 대상으로 삼을 이벤트를 모은다.
+     *
+     * <p>Redis 재연결을 받은 인스턴스가 부른다. 그 신호에는 쿠폰이 안 실려 있어 <b>열려 있는
+     * 선착순 이벤트를 여기서 찾는다</b> ({@code docs/coupon/rebuild-redesign.md} 4장).
+     *
+     * <p>마감이 지난 것도 담는다. 마감 뒤에도 회수와 뒷정리가 도는 구간이 있어 그 구간의 키가
+     * 어긋난 채로 남으면 안 된다. 대신 켜져 있는 것만 보므로 대상이 자연히 작다.
+     *
+     * <p>선착순의 정의가 두 열의 존재다. 수량만 있고 마감이 없으면 선착순이 아니다.
+     */
+    @Query(value = """
+            SELECT coupon_id FROM coupon
+             WHERE is_active = TRUE AND total_quantity IS NOT NULL AND issue_end_at IS NOT NULL
+             ORDER BY coupon_id
+            """, nativeQuery = true)
+    List<Long> findOpenLimitedEvents();
+
+    /**
      * 배치가 발급 수를 실제 행 수로 맞춘다.
      *
      * <p>아무도 발급 중에 이 값을 갱신하지 않는다. 상한은 순번이 행 단위로 강제하므로 이 값이

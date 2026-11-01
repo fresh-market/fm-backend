@@ -84,7 +84,8 @@ class CouponIssueServiceTest {
     void setUp() {
         CouponIssueProperties properties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), 500, 1, 10_000,
-                Duration.ofMillis(100), Duration.ofSeconds(3), Duration.ofSeconds(5));
+                Duration.ofMillis(100), true, Duration.ofSeconds(10), Duration.ofSeconds(5), 500,
+                Duration.ofSeconds(1), Duration.ofSeconds(5));
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
         sut = new CouponIssueService(couponCache, memberApi, allocator, rebuildTrigger, queue, writeCircuit,
                 properties, metrics, fixed);
@@ -284,6 +285,36 @@ class CouponIssueServiceTest {
                 .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
 
         // then
+        verify(rebuildTrigger).suspect(COUPON_ID);
+    }
+
+    /*
+     * 재건이 도는 동안에는 틀린 번호를 주느니 끊는다.
+     *
+     * 뒤로 간 카운터로 번호를 내주면 이미 번호를 쥔 회원에게 새 번호가 나가고, 그 회원의
+     * INSERT 둘이 부딪혀 먼저 온 사람이 맨 뒤로 갈 수 있다
+     * (docs/coupon/rebuild-v3/design.md 1장).
+     */
+    @Test
+    void 재건_중이면_혼잡으로_답한다() {
+        givenAllocated(new SeqOutcome.Rebuilding());
+
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
+        verify(queue, never()).submit(any());
+    }
+
+    /*
+     * 재건 중에도 재건을 깨운다. 문을 세운 것은 남의 대일 수 있고 이 대도 자기 몫을 해야 한다.
+     * 이 깨우기가 곧 문의 전파 경로다 (같은 문서 3.3).
+     */
+    @Test
+    void 재건_중이어도_재건을_깨운다() {
+        givenAllocated(new SeqOutcome.Rebuilding());
+
+        assertThatThrownBy(() -> sut.issue(COUPON_ID, MEMBER_ID))
+                .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.CONGESTED);
+
         verify(rebuildTrigger).suspect(COUPON_ID);
     }
 

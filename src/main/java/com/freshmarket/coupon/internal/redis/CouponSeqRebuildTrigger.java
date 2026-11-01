@@ -1,6 +1,8 @@
 package com.freshmarket.coupon.internal.redis;
 
+import java.time.Duration;
 import java.util.Map;
+import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -35,13 +37,31 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
 
     private static final String COUNTER_BEHIND = "coupon.seq.counter.behind";
 
+    // 재건을 몇 번까지 해 보나. 승격 직후의 타임아웃은 한 번 쉬면 사라진다
+    private static final int REBUILD_ATTEMPTS = 3;
+
+    // 첫 쉼이다. 시도 횟수를 곱해 점점 길어진다
+    private static final Duration REBUILD_BACKOFF = Duration.ofMillis(200);
+
     private final Set<Long> inProgress = ConcurrentHashMap.newKeySet();
 
     /*
-     * 이 인스턴스가 이 쿠폰에서 지금까지 본 가장 큰 순번이다.
-     * 카운터가 뒤로 갔는지를 이것과 견줘서 안다. 카운터가 사라진 동안에는 지운다.
+     * 쿠폰마다 이 대가 마지막으로 재건을 띄운 시각이다. 그 간격 안에는 다시 안 띄운다.
+     *
+     * inProgress 만으로는 모자란다. 그것은 "도는 동안" 만 막는데, 발급 차단이 그보다 오래 서 있기
+     * 때문이다. 재건이 끝나도 차단의 시한이 남아 있으면 다음 요청이 -4 를 받아 또 깨우고, 그
+     * 재건이 차단을 다시 건다. 트래픽이 있는 한 안 멈춘다.
+     *
+     * 2026-11-01 Z-2 가 그 모양이었다. 같은 값으로 재건이 61번 돌았고
+     * (issued=7301 dbMax=7307 counter=7307), 그동안 발급이 막혀 혼잡이 90.02% 이고 재고
+     * 10,000장 중 2,699장이 안 나갔다.
+     *
+     * 간격을 두면 전파는 살고 고리는 끊긴다. 남의 대가 발급 차단을 건 것을 보고 자기 재건을 한
+     * 번 도는 것이 전파이고(docs/coupon/rebuild-v3/design.md 3.3), 그 한 번 뒤로는
+     * 간격이 막으므로 차단이 시한에 풀린다.
      */
-    private final Map<Long, Integer> highWater = new ConcurrentHashMap<>();
+    private final Map<Long, Long> lastSuspectNanos = new ConcurrentHashMap<>();
+
 
     /*
      * 스레드 하나로 족하다. 재건은 이벤트당 많아야 몇 번 도는 일이고, 둘이 붙어 봐야 같은 락을
@@ -55,16 +75,19 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
 
     private final CouponSeqRebuilder rebuilder;
     private final StringRedisTemplate redisTemplate;
-    private final CouponSeqInstances instances;
+    private final CouponSeqMarks marks;
+    private final Duration suspectMinInterval;
     private final DistributionSummary behind;
 
     public CouponSeqRebuildTrigger(CouponSeqRebuilder rebuilder,
                                    StringRedisTemplate redisTemplate,
-                                   CouponSeqInstances instances,
+                                   CouponSeqMarks marks,
+                                   CouponIssueProperties properties,
                                    MeterRegistry registry) {
         this.rebuilder = rebuilder;
         this.redisTemplate = redisTemplate;
-        this.instances = instances;
+        this.marks = marks;
+        this.suspectMinInterval = properties.rebuildOnReconnectMinInterval();
         this.behind = DistributionSummary.builder(COUNTER_BEHIND)
                 .description("카운터가 이미 나간 순번보다 얼마나 뒤처졌나. 정상 운영에서는 표본이 0건이다")
                 .register(registry);
@@ -79,9 +102,6 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
     @Override
     public void checkAfterFlush(long couponId, int maxIssuedSeq) {
         try {
-            if (Boolean.TRUE.equals(redisTemplate.hasKey(CouponSeqKeys.rebuild(couponId)))) {
-                suspect(couponId);
-            }
             measureBehind(couponId, maxIssuedSeq);
         } catch (DataAccessException e) {
             /*
@@ -109,7 +129,7 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
      *
      * <p><b>재기만 하고 재건은 안 띄운다.</b> 재건은 그 이벤트의 플러시를 3초 넘게 멈추므로
      * 오탐이 곧 장애다. 정상 운영에서 이 표본이 0건이라는 것을 회차로 확인한 뒤에 붙인다
-     * ({@code docs/coupon/rebuild-measurement-2026-09-21b.md} 5장).
+     * ({@code docs/coupon/rebuild-v1/measurement-cache-loss.md} 5장).
      *
      * <p><b>카운터가 없으면 기준을 버린다.</b> 재건 중이거나 이벤트가 닫힌 것이라 견줄 대상이
      * 아니다. 다만 이 때문에 이벤트를 발급 이력째 다시 준비하면 그 첫 배치가 한 번 걸릴 수 있다.
@@ -117,10 +137,11 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
     private void measureBehind(long couponId, int maxIssuedSeq) {
         String raw = redisTemplate.opsForValue().get(CouponSeqKeys.counter(couponId));
         if (raw == null) {
-            highWater.remove(couponId);
+            marks.forget(couponId);
             return;
         }
-        int mark = highWater.merge(couponId, maxIssuedSeq, Math::max);
+        marks.saw(couponId, maxIssuedSeq);
+        int mark = marks.of(couponId);
         long counter;
         try {
             counter = Long.parseLong(raw);
@@ -138,17 +159,6 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
     }
 
     /**
-     * 큐를 쥐었다고 명부에 알린다. 플러시가 배치를 집은 직후에 부른다.
-     *
-     * <p><b>쓰기 성공에 묶으면 안 된다.</b> DB 가 막힌 인스턴스가 배치를 못 끝내 알림이 멈추면
-     * 큐를 쥐고 있는데도 명부에서 빠진다. 실제 회차에서 그렇게 됐다.
-     */
-    @Override
-    public void holdingQueue() {
-        instances.refresh();
-    }
-
-    /**
      * 요청 스레드와 플러시 스레드가 부른다. 하는 일이 집합에 넣는 것뿐이라 지는 값이 거의 없다.
      *
      * <p><b>부르는 자리가 둘인 이유가 있다.</b> 요청 경로만 두면 ALB 가 요청을 안 보내는
@@ -159,16 +169,16 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
      * 그 둘을 가르는 것은 {@link CouponSeqRebuilder} 가 DB 를 보고 한다.
      */
     public void suspect(long couponId) {
+        if (tooSoon(couponId)) {
+            return;
+        }
         if (!inProgress.add(couponId)) {
             return;
         }
         try {
             worker.execute(() -> {
                 try {
-                    rebuilder.rebuildIfLost(couponId);
-                } catch (RuntimeException e) {
-                    // 삼키면 안 되지만 이 스레드를 죽여서도 안 된다. 다음 요청이 다시 띄운다
-                    log.error("event=COUPON_SEQ_REBUILD_FAILED couponId={}", couponId, e);
+                    rebuildWithRetry(couponId);
                 } finally {
                     inProgress.remove(couponId);
                 }
@@ -176,6 +186,79 @@ public class CouponSeqRebuildTrigger implements CouponSeqRebuildSignal {
         } catch (RejectedExecutionException e) {
             // 종료 중이다. 표시를 남기면 다음 기동에서도 안 뜨므로 지운다
             inProgress.remove(couponId);
+        }
+    }
+
+    /*
+     * 방금 띄웠으면 다시 안 띄운다.
+     *
+     * 재연결 감시가 쓰는 것과 같은 설정을 쓴다. 둘이 막으려는 것이 같기 때문이다. 한쪽은
+     * 재연결을 여러 번 보는 것이고 다른 한쪽은 발급 차단을 여러 번 보는 것인데, 둘 다 "같은 장애
+     * 하나에 재건이 거듭 뜨는 것" 이다.
+     *
+     * 갱신을 성공한 쪽에서만 한다. 막힌 호출이 시계를 밀면 트래픽이 계속 있는 동안 간격이
+     * 영영 안 끝난다.
+     */
+    private boolean tooSoon(long couponId) {
+        long now = System.nanoTime();
+        Long last = lastSuspectNanos.get(couponId);
+        if (last != null && now - last < suspectMinInterval.toNanos()) {
+            return true;
+        }
+        lastSuspectNanos.put(couponId, now);
+        return false;
+    }
+
+    /*
+     * 물러나며 다시 해 본다. 한 번 실패하고 끝내면 그 장애에서 재건이 영영 안 돈다.
+     *
+     * "다음 요청이 다시 띄운다" 에 기대던 자리인데 재연결 경로에는 그 다음이 없다. 감시가
+     * 재연결마다 한 번만 깨우므로 그 한 번이 실패하면 끝이다. 2026-10-10 J-2 회차가 그렇게
+     * 끝났고 재고 10,000장 중 1,030장이 안 나갔다.
+     *
+     * 여러 번 돌려도 결과가 같다. 재건은 네 키를 비우고 다시 세우며, 실패하면 락이 풀리므로
+     * 다음 시도가 처음부터 한다.
+     */
+    private void rebuildWithRetry(long couponId) {
+        for (int attempt = 1; attempt <= REBUILD_ATTEMPTS; attempt++) {
+            try {
+                rebuilder.rebuild(couponId);
+                return;
+            } catch (CouponSeqStallBudgetException e) {
+                /*
+                 * 정지 예산을 넘겼다. 다시 돌면 그 시도가 차단을 또 걸어 발급 정지가 예산
+                 * 너머로 늘어난다. 여기서 끝낸다.
+                 */
+                log.error("event=COUPON_SEQ_REBUILD_ABANDONED couponId={} attempt={} reason={}",
+                        couponId, attempt, e.getMessage());
+                return;
+            } catch (RuntimeException e) {
+                if (attempt == REBUILD_ATTEMPTS) {
+                    // 삼키면 안 되지만 이 스레드를 죽여서도 안 된다
+                    log.error("event=COUPON_SEQ_REBUILD_FAILED couponId={} attempts={}", couponId, attempt, e);
+                    return;
+                }
+                log.warn("event=COUPON_SEQ_REBUILD_RETRY couponId={} attempt={} reason={}",
+                        couponId, attempt, e.getClass().getSimpleName());
+                if (!backOff(attempt)) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /*
+     * 점점 길게 쉰다. 승격 직후의 새 프라이머리는 몇백 밀리초가 지나면 자리를 잡는다.
+     *
+     * 거짓으로 돌아오면 종료 중이므로 부르는 쪽이 그만둔다.
+     */
+    private boolean backOff(int attempt) {
+        try {
+            Thread.sleep(REBUILD_BACKOFF.multipliedBy(attempt).toMillis());
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

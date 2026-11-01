@@ -14,6 +14,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.freshmarket.coupon.internal.exception.DataAccessFailures;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import com.freshmarket.coupon.internal.redis.CouponSeqCommitter;
 import com.freshmarket.coupon.internal.repository.MemberCouponBulkRepository;
 import lombok.RequiredArgsConstructor;
@@ -43,9 +46,6 @@ public class CouponIssueFlusher implements SmartLifecycle {
 
     private static final long SHUTDOWN_WAIT_SECONDS = 10;
 
-    // 멈춘 동안 루프가 다시 보는 간격이다. 배치 윈도우보다 짧아야 재개가 늦지 않는다
-    private static final long PAUSE_POLL_MILLIS = 5;
-
     private final CouponIssueQueue queue;
     private final MemberCouponBulkRepository bulkRepository;
     private final CouponSeqCommitter committer;
@@ -60,24 +60,45 @@ public class CouponIssueFlusher implements SmartLifecycle {
      * 알려 준다" 는 바깥 방향이라 기동 시점에 있을 이유가 없다.
      */
     private final ObjectProvider<CouponSeqRebuildSignal> rebuildSignal;
-
-    private volatile boolean running;
+    private final MeterRegistry registry;
 
     /*
-     * 재건이 큐를 훑는 동안 켜진다.
-     * 이것이 없으면 훑는 사이에 플러시가 같은 티켓을 DB 로 내려, 재건이 확정된 매핑을 미확정으로
-     * 덮는다. 그러면 회수가 그 번호를 남에게 넘겨 같은 번호가 두 번 나간다 (coupon.md 9장).
+     * commit-wait 예산 720ms 가 어디로 가는지 보려고 붙였다 (2026-10-10).
+     *
+     * 그전에는 커넥션 획득만 HikariCP 가 재고 나머지는 아무도 안 쟀다. 무장애 회차가 p99
+     * 541밀리초인데 그 시간이 어디 있는지 못 짚었다. 셋을 가르면 예산 항목과 맞출 수 있다.
+     *
+     *   큐 대기    티켓을 넣은 뒤 플러시가 집을 때까지.  예산에서 유일하게 상한이 없다
+     *   배치 쓰기  INSERT 실행과 커밋.  socketTimeout 300ms 가 맞는지 본다
+     *   확정 표시  markCommitted 한 번.  redis timeout 100ms 와 견준다
      */
-    private volatile boolean paused;
+    private Timer queueWait;
+    private Timer batchWrite;
+    private Timer markCommit;
 
-    // 지금 배치를 쓰고 있는 스레드 수다. 멈춤은 이 값이 0 이 되어야 완료된다
-    private final AtomicInteger inFlight = new AtomicInteger();
+    private volatile boolean running;
 
     private ExecutorService executor;
 
     @Override
     public void start() {
         int threads = properties.flushThreads();
+        /*
+         * 기동 때 만들어 둔다. 첫 표본에서 만들면 "표본이 0 건" 과 "계량기가 없다" 가 안 갈린다.
+         * 이 저장소가 계량기를 기동 때 다 만들어 두는 규칙을 따른다.
+         */
+        queueWait = Timer.builder("coupon.issue.queue.wait")
+                .description("티켓이 큐에서 기다린 시간. commit-wait 예산에서 상한이 없는 항목이다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+        batchWrite = Timer.builder("coupon.issue.batch.write")
+                .description("벌크 INSERT 의 실행과 커밋. socketTimeout 300ms 와 견준다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+        markCommit = Timer.builder("coupon.issue.mark.commit")
+                .description("확정 표시 한 번. redis timeout 100ms 와 견준다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
         running = true;
         executor = Executors.newFixedThreadPool(threads, namedThreadFactory());
         for (int i = 0; i < threads; i++) {
@@ -163,40 +184,6 @@ public class CouponIssueFlusher implements SmartLifecycle {
         }
     }
 
-    /**
-     * 큐를 얼린다. 돌고 있던 배치가 끝날 때까지 기다리고 돌아온다.
-     *
-     * <p>재건이 큐를 훑기 직전에 부른다. 표시만 켜고 돌아오면 아직 쓰고 있는 배치가 남아 있어,
-     * 훑는 도중에 그 티켓들이 DB 로 내려간다.
-     *
-     * @return 정말로 멈췄으면 true. 시한 안에 배치가 안 끝나면 false 이고, 그때는 부른 쪽이
-     *         훑기를 포기해야 한다
-     */
-    public boolean pause(Duration timeout) {
-        paused = true;
-        long deadline = System.nanoTime() + timeout.toNanos();
-        while (inFlight.get() > 0) {
-            if (System.nanoTime() > deadline) {
-                log.warn("event=COUPON_FLUSHER_PAUSE_TIMEOUT inFlight={}", inFlight.get());
-                paused = false;
-                return false;
-            }
-            try {
-                Thread.sleep(PAUSE_POLL_MILLIS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                paused = false;
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /** 얼린 큐를 다시 흐르게 한다. {@link #pause} 가 true 를 줬으면 반드시 짝을 지어 부른다. */
-    public void resume() {
-        paused = false;
-    }
-
     private void loop() {
         long windowNanos = properties.batchWindow().toNanos();
         int batchSize = properties.batchSize();
@@ -204,11 +191,6 @@ public class CouponIssueFlusher implements SmartLifecycle {
 
         while (running) {
             try {
-                if (paused) {
-                    // 재건이 큐를 훑는 중이다. 이 창은 밀리초 단위라 짧게 자고 다시 본다
-                    Thread.sleep(PAUSE_POLL_MILLIS);
-                    continue;
-                }
                 IssueTicket first = queue.poll(windowNanos);
                 if (first == null) {
                     continue;
@@ -218,20 +200,12 @@ public class CouponIssueFlusher implements SmartLifecycle {
                 fillWithinWindow(batch, batchSize, windowNanos);
 
                 long couponId = batch.get(0).couponId();
-
-                /*
-                 * 큐를 쥐었다는 것을 쓰기보다 먼저 알린다.
-                 * 아래 checkAfterFlush 에 묶으면 DB 가 막힌 인스턴스가 배치를 못 끝내 알림도
-                 * 멈춘다. 하필 그때가 큐가 두꺼워 기여가 가장 중요한 순간이다.
-                 */
-                rebuildSignal.getObject().holdingQueue();
-
-                inFlight.incrementAndGet();
-                try {
-                    flush(batch);
-                } finally {
-                    inFlight.decrementAndGet();
+                long pickedAt = System.nanoTime();
+                for (IssueTicket ticket : batch) {
+                    queueWait.record(pickedAt - ticket.queuedAtNanos(), TimeUnit.NANOSECONDS);
                 }
+
+                flush(batch);
                 /*
                  * 재건이 도는지 배치마다 한 번 본다. 요청당이 아니라 배치당이라 값이 싸다.
                  * 이 확인이 없으면 요청을 못 받는 인스턴스가 자기 큐를 영영 안 올린다 (coupon.md 9장).
@@ -278,10 +252,12 @@ public class CouponIssueFlusher implements SmartLifecycle {
 
     private void flush(List<IssueTicket> batch) {
         try {
+            long writeStartedAt = System.nanoTime();
             writeCircuit.write(() -> {
                 bulkRepository.insertAll(batch);
                 return null;
             });
+            batchWrite.record(System.nanoTime() - writeStartedAt, TimeUnit.NANOSECONDS);
         } catch (DataAccessException e) {
             /*
              * 벌크 쓰기가 통째로 실패했다. DB 는 어느 행 때문에 걸렸는지 알려주지 않는다.
@@ -384,6 +360,7 @@ public class CouponIssueFlusher implements SmartLifecycle {
              */
             repairs.computeIfAbsent(ticket.couponId(), key -> new ArrayList<>())
                     .add(new CouponSeqCommitter.Repair(ticket.memberId(), ticket.issueSeq(), actual));
+            recordRepair(ticket, actual);
             ticket.complete(new IssueOutcome.AlreadyIssued(actual));
             return;
         }
@@ -466,10 +443,35 @@ public class CouponIssueFlusher implements SmartLifecycle {
         for (IssueTicket ticket : issued) {
             mark(marks, ticket.couponId(), ticket.memberId(), ticket.issueSeq());
         }
+        long markStartedAt = System.nanoTime();
         marks.forEach(committer::markCommitted);
+        markCommit.record(System.nanoTime() - markStartedAt, TimeUnit.NANOSECONDS);
         for (IssueTicket ticket : issued) {
             ticket.complete(new IssueOutcome.Issued(ticket.issueSeq()));
         }
+    }
+
+    /*
+     * 이 회원이 번호를 두 번 받았다. 그 사실과 방향을 남긴다.
+     *
+     * 방향이 요점이다. 두 번호 중 어느 쪽이 DB 에 남았느냐가 선착순이 지켜졌는지를 가른다.
+     *
+     *   kept < burned   먼저 받은 번호가 남았다.  순서가 지켜졌다
+     *   kept > burned   나중에 받은 번호가 남았다.  이 회원이 맨 뒤로 갔다
+     *
+     * 뒤쪽이 재건 중 발급을 막는 설계가 0 으로 만들려는 수다
+     * (docs/coupon/rebuild-v3/design.md 8장). 세는 자리가 없어서 지금까지 한 번도
+     * 못 쟀고, 그래서 순서가 실제로 얼마나 깨지고 있었는지 아무도 모른다.
+     */
+    private void recordRepair(IssueTicket ticket, int actual) {
+        boolean inverted = actual > ticket.issueSeq();
+        Counter.builder("coupon.issue.seq.repaired")
+                .tag("inverted", Boolean.toString(inverted))
+                .description("한 회원이 번호를 두 번 받아 하나를 반납한 건수. inverted 가 선착순이 깨진 쪽이다")
+                .register(registry)
+                .increment();
+        log.warn("event=COUPON_ISSUE_SEQ_REPAIRED couponId={} memberId={} burned={} kept={} inverted={}",
+                ticket.couponId(), ticket.memberId(), ticket.issueSeq(), actual, inverted);
     }
 
     private static void mark(Map<Long, Map<Long, Integer>> marks, long couponId, long memberId, int seq) {

@@ -1,5 +1,6 @@
 package com.freshmarket.coupon.internal.issue;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
@@ -37,10 +38,12 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
     private static final String FREE = "coupon:9001:free";
     private static final String COUNTER = "coupon:9001:counter";
     private static final String PENDING = "coupon:9001:pending";
-    private static final String INSTANCES = "coupon:instances";
 
     @Autowired
     private CouponIssueQueue queue;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     @Autowired
     private StringRedisTemplate redisTemplate;
@@ -50,45 +53,8 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
 
     @BeforeEach
     void 키를_비운다() {
-        redisTemplate.delete(List.of(SEQ, FREE, COUNTER, PENDING, INSTANCES));
+        redisTemplate.delete(List.of(SEQ, FREE, COUNTER, PENDING));
     }
-
-    /*
-     * 큐를 쥐었다는 알림이 쓰기와 무관하다는 것을 본다.
-     *
-     * 이 알림을 flush 뒤에 뒀다가 2026-09-22 회차에서 걸렸다. DB 를 10초 막았더니 배치가
-     * 안 끝나 알림도 멈췄고, 큐를 쥐고 있는데도 세 대가 모두 명부에서 빠졌다. 그러면 재건
-     * 주도자가 그 큐를 안 기다린 채 키를 세워 그 번호들을 남에게 다시 내준다.
-     *
-     * 여기서는 단위 시험이 못 보는 것을 본다. 플러시 루프가 실제로 돌면서 명부에 자기를
-     * 올리는가다. 루프가 private 이라 이 자리에서만 확인된다.
-     */
-    @Test
-    void 배치를_집으면_명부에_자기를_올린다() throws Exception {
-        assertThat(redisTemplate.opsForZSet().size(INSTANCES)).isZero();
-
-        /*
-         * 갱신은 주기마다 한 번뿐이라 배치 하나로는 안 쓰일 수 있다.
-         * 앞선 시험이 이미 썼으면 그 주기가 지나야 다시 쓴다. 그래서 배치를 계속 흘리면서
-         * 기다린다. 주기를 짧게 바꾸는 것보다 이쪽이 운영값을 그대로 검증한다.
-         */
-        Awaitility.await().atMost(10, TimeUnit.SECONDS).pollInterval(500, TimeUnit.MILLISECONDS)
-                .untilAsserted((ThrowingRunnable) () -> {
-                    결과를_기다린다(순번을_받은_요청(다음_회원(), 다음_순번()));
-                    assertThat(redisTemplate.opsForZSet().size(INSTANCES)).isEqualTo(1);
-                });
-    }
-
-    private long 다음_회원() {
-        return 9200L + 회원_번호.incrementAndGet();
-    }
-
-    private int 다음_순번() {
-        return 회원_번호.get();
-    }
-
-    private final java.util.concurrent.atomic.AtomicInteger 회원_번호 =
-            new java.util.concurrent.atomic.AtomicInteger();
 
     @Test
     void 큐에_넣으면_행이_되고_결과가_돌아온다() throws Exception {
@@ -151,6 +117,8 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
      */
     @Test
     void 이미_가진_회원이면_번호를_반납하고_매핑을_고친다() throws Exception {
+        double 바른_순서_전 = 고친_건수(false);
+        double 역전_전 = 고친_건수(true);
         결과를_기다린다(순번을_받은_요청(9101L, 1));
         redisTemplate.opsForHash().delete(SEQ, "9101");
 
@@ -163,6 +131,39 @@ class CouponIssueFlusherIntegrationTest extends IntegrationTestSupport {
             assertThat(redisTemplate.opsForZSet().score(FREE, "7")).isEqualTo(7.0);
             assertThat(redisTemplate.opsForHash().get(SEQ, "9101")).isEqualTo("1:1");
         });
+        // 먼저 받은 1 이 남았다. 순서가 지켜진 쪽이다
+        assertThat(고친_건수(false) - 바른_순서_전).isEqualTo(1);
+        assertThat(고친_건수(true) - 역전_전).isZero();
+    }
+
+    /*
+     * 선착순이 깨지는 쪽이다. 먼저 받은 번호가 아직 큐에 있는 사이 그 회원이 재시도해 나중
+     * 번호를 받았고, 그쪽이 먼저 커밋됐다. 그러면 먼저 온 사람이 맨 뒤로 간다.
+     *
+     * 이 수를 세는 자리가 없어서 지금까지 한 번도 못 쟀다. 재건 중 발급을 막는 설계가 0 으로
+     * 만들려는 것이 이 수다 (docs/coupon/rebuild-v3/design.md 8장).
+     */
+    @Test
+    void 나중_번호가_남으면_역전으로_센다() throws Exception {
+        double 역전_전 = 고친_건수(true);
+        결과를_기다린다(순번을_받은_요청(9101L, 7));
+        redisTemplate.opsForHash().delete(SEQ, "9101");
+
+        IssueTicket earlier = 순번을_받은_요청(9101L, 1);
+        IssueOutcome outcome = 결과를_기다린다(earlier);
+
+        assertThat(outcome).isEqualTo(new IssueOutcome.AlreadyIssued(7));
+        assertThat(발급된_행_수()).isEqualTo(1);
+        assertThat(고친_건수(true) - 역전_전).isEqualTo(1);
+    }
+
+    /*
+     * 지표는 스프링 컨텍스트가 공유하므로 시험끼리 누적된다. 절대값이 아니라 증분으로 본다.
+     */
+    private double 고친_건수(boolean inverted) {
+        return meterRegistry.find("coupon.issue.seq.repaired")
+                .tag("inverted", Boolean.toString(inverted))
+                .counters().stream().mapToDouble(c -> c.count()).sum();
     }
 
     /*

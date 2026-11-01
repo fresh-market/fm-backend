@@ -79,7 +79,9 @@ class CouponWriteWarmupIntegrationTest extends IntegrationTestSupport {
                 true, WARMUP_COUPON_ID, 1, 1, Duration.ofSeconds(60), rows, Duration.ofSeconds(20));
         CouponIssueProperties issueProperties = new CouponIssueProperties(
                 Duration.ofSeconds(60), Duration.ofMillis(20), chunk, 1,
-                Integer.MAX_VALUE, Duration.ofSeconds(2), Duration.ofSeconds(3), Duration.ofSeconds(5));
+                Integer.MAX_VALUE, Duration.ofSeconds(2),
+                true, Duration.ofSeconds(10), Duration.ofSeconds(5), 500,
+                Duration.ofSeconds(1), Duration.ofSeconds(5));
         return new CouponWriteWarmup(jdbcTemplate, bulkRepository, properties, issueProperties, transactionManager);
     }
 

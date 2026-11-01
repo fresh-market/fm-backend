@@ -11,18 +11,27 @@ import com.freshmarket.coupon.internal.entity.CouponScope;
  * <p>{@code future} 가 플러시 스레드와 요청 스레드를 잇는 유일한 통로다. 요청 스레드는 이것만
  * 기다리고 실패를 직접 보지 못한다. 반납도 실패를 잡은 플러시 스레드가 맡는다.
  *
- * @param issueLimit 쿠폰의 총 수량. {@code chk_mc_issue_seq} 가 순번과 함께 보므로 행에 넣는다
- * @param issueSeq   순번 확보에서 받은 번호
+ * @param issueLimit     쿠폰의 총 수량. {@code chk_mc_issue_seq} 가 순번과 함께 보므로 행에 넣는다
+ * @param issueSeq       순번 확보에서 받은 번호
+ * @param queuedAtNanos  큐에 들어간 시각. 플러시가 집을 때 빼서 큐 대기를 잰다
  */
 public record IssueTicket(long couponId,
                           long memberId,
                           CouponScope scope,
                           int issueLimit,
                           int issueSeq,
+                          long queuedAtNanos,
                           CompletableFuture<IssueOutcome> future) {
 
+    /*
+     * 큐 대기는 commit-wait 예산에서 유일하게 상한이 없는 항목인데 재는 것이 없었다.
+     *
+     * 나머지 셋은 각자 타임아웃이 막아 최악이 정해지지만 이것은 앞선 배치가 다 빠질 때까지다.
+     * 그래서 예산을 넘긴 요청이 어디서 시간을 썼는지 알 수 없었다 (2026-10-10).
+     */
     public static IssueTicket of(long couponId, long memberId, CouponScope scope, int issueLimit, int issueSeq) {
-        return new IssueTicket(couponId, memberId, scope, issueLimit, issueSeq, new CompletableFuture<>());
+        return new IssueTicket(couponId, memberId, scope, issueLimit, issueSeq,
+                System.nanoTime(), new CompletableFuture<>());
     }
 
     /*
