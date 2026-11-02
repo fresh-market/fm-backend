@@ -378,14 +378,14 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 한 행에 커넥션 풀 크�
 
 **대체 경로는 새로 만들지 않는다.** Redis 가 죽으면 새 요청만 혼잡(503)으로 끊고, DB 가 죽으면 회로가 열려 번호를 아예 안 태운다. 장애로 못 쓴 번호도 반납하지 않는데, 반납하면 나중에 온 사람이 그 번호를 가져가고 먼저 온 사람이 맨 뒤로 가기 때문이다.
 
-키를 잃었을 때는 DB 와 스프링 서버 대기열에서 다시 세운다. 깨어난 각 서버가 자기 큐를 되살리고 카운터를 올리는 방식이라 주도자도 기다림도 명부도 없다. 그동안 그 쿠폰의 순번 발급은 차단되는데, **푸는 쪽을 따로 안 두고 시한 1초가 푼다.**
+키를 잃었을 때는 DB 와 스프링 서버 대기열에서 다시 세운다. 깨어난 각 서버가 자기 큐를 되살리고 카운터를 올리는 방식이라 주도자도 기다림도 명부도 없다. 그동안 그 쿠폰의 순번 발급은 차단되는데, **푸는 쪽을 따로 안 두고 차단 시한 1초가 푼다.**
 
 | 구간 | 시간 |
 |---|---|
-| 재건 한 번 | 77 ~ 197밀리초 |
+| 재건이 한 번 도는 시간 | 77 ~ 197밀리초 |
 | 순번 발급 정지 | 1.23 ~ 1.88초 |
 
-정지의 절반 이상은 차단 시한이다. 전원이 끝난 것을 아는 길을 없앤 대가이고, 그 대신 주도자가 죽어도 전체가 안 멈춘다. 다만 서버마다 한 번씩 도는 것이 보장은 아니어서, 한 회차에서는 한 대가 재시도를 페일오버 창 안에 다 쓰고 포기해 두 대만 돌았다.
+순번 발급 정지의 절반 이상은 차단 시한이 차지한다. 전원이 끝난 것을 아는 길을 없앤 대가이고, 그 대신 주도자가 죽어도 전체가 안 멈춘다. 다만 서버마다 한 번씩 도는 것이 보장은 아니어서, 한 회차에서는 한 대가 재시도를 페일오버 창 안에 다 쓰고 포기해 두 대만 돌았다.
 
 장애를 주입해서 계측했다. 부하를 먼저 띄우고 램프가 오르는 중(k6+24초)에 장애를 걸었다.
 재건 설계는 `rebuild-v4` 이고 커밋에 같은 이름의 태그가 달려 있다.
@@ -701,10 +701,10 @@ LLM 은 갈아 끼울 수 있게 두었다. 로컬은 `./verify.sh --agent "code
 | 아키텍처 | [domain-map.md](./docs/code-architecture/domain-map.md), [code-architecture/](./docs/code-architecture/) (규칙은 `guideline`, 근거는 `rationale` 로 짝), [api/README.md](./docs/api/README.md) |
 | 예산 | [resource-budget.md](./docs/resource-budget.md) 인스턴스별 커넥션과 스레드 |
 | **쿠폰 설계 전체** | [coupon/coupon.md](./docs/coupon/coupon.md), [requirement.md](./docs/coupon/requirement.md), [coupon-v4.md](./docs/coupon/coupon-v4.md) |
-| 쿠폰 내부 | [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md) 키 6개, [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md) Lua 넷, [coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) 회수 기준 시간 |
+| 쿠폰 내부 | [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md) 키 6개, [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md) Lua 4개, [coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) 회수 기준 시간 |
 | 장애 | [failure-response.md](./docs/incident/failure-response.md) 공통, [coupon-failure.md](./docs/coupon/coupon-failure.md) 발급 경로 |
 | 부하 시험 | [coupon-load-scenarios.md](./docs/coupon/coupon-load-scenarios.md) 회차를 왜 그렇게 짰나, [coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) 회차별 값, [warmup.md](./docs/coupon/warmup.md), [virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) |
-| **재건** | [rebuild-v4/design.md](./docs/coupon/rebuild-v4/design.md) 지금 도는 것, [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) 그 회차, [rebuild-v5/design.md](./docs/coupon/rebuild-v5/design.md) 다음 제안 |
+| **재건** | [rebuild-v4/design.md](./docs/coupon/rebuild-v4/design.md) 지금 도는 것, [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) `rebuild-v4` 회차, [rebuild-v5/design.md](./docs/coupon/rebuild-v5/design.md) 다음 제안 |
 | 재건 계보 | [rebuild-v1/](./docs/coupon/rebuild-v1/) 9회차, [rebuild-v2/](./docs/coupon/rebuild-v2/), [rebuild-v3/design.md](./docs/coupon/rebuild-v3/design.md), [revert-rejected.md](./docs/coupon/rebuild-v4/revert-rejected.md) |
 | 그 밖 | [verification-guide.md](./docs/verification/verification-guide.md), [loadtest/](./loadtest/), [wiki](https://github.com/fresh-market/fm-backend/wiki), [`fm-infra`](https://github.com/fresh-market/fm-infra) |
 
