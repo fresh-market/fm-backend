@@ -98,13 +98,7 @@ order -> cart      removeCheckedOutItems 구매분만 멱등 삭제
 
 ### 캠페인 대상을 만드는 배치
 
-| 배치 | 주기 | 하는 일 | 다음 단계에 넘기는 것 |
-|---|---|---|---|
-| 소비기한 만료 | 일 1회 | 경과 로트를 판매 불가로 전환 -> 폐기 등록 | 가용 재고 0 이면 품절 |
-| 일별 판매 집계 | 일 1회 | 결제 완료 주문 기준 `daily_sales` 적재 | **판매율 저조 판정의 원천** |
-| 캠페인 대상 선정 | 이벤트 전 | 임박순 -> 저조순으로 로트를 뽑는다 | 쿠폰 이벤트의 대상 목록 |
-| 쿠폰 만료 / 이벤트 종료 | 주기 / 마감 후 | 조건부 UPDATE 로 상태 전이, Redis 네 키 정리 | 카운터 정산 |
-| 정합성 검증 | 수동 | 발급 이력 **300만 건 전체**를 훑는다 | 리포트만. **고치지 않는다** |
+일별 판매 집계가 판매율 저조 판정의 원천이 되고, 소비기한 만료 처리가 경과 로트를 걷어낸다. 그 둘을 입력으로 캠페인 대상 선정이 임박순에서 저조순으로 로트를 뽑으면 그것이 쿠폰 이벤트의 대상 목록이 된다. 이벤트가 끝나면 쿠폰 만료와 종료 배치가 상태를 전이시키고 Redis 네 키를 정리한다.
 
 **회수 배치와 검증 배치는 섞지 않는다.** 회수는 고치는 일이고 검증은 재는 일이다. 검증이 고치기 시작하면 재실행 결과가 달라져 요구사항을 위반한다.
 
@@ -138,17 +132,10 @@ L0   member  product  admin                                        아무것도 
 
 ```
 com.freshmarket
-├── product/                    65 파일. 도메인 하나가 어떻게 생겼나
+├── product/                    도메인 하나가 어떻게 생겼나 (65 파일)
 │   ├── ProductApi.java             공개 계약. 다른 도메인은 이것만 본다
 │   ├── ProductOptionInfo.java      계약이 주고받는 값. 엔티티는 안 나간다
-│   └── internal/
-│       ├── controller/             상품, 카테고리, 관리자 상품/카테고리/이미지
-│       ├── service/                ProductService, CategoryService, ProductOptionAvailabilityService ...
-│       ├── batch/                  옵션 판매상태 동기화, 미확정 이미지 정리
-│       ├── client/                 ImageStorageClient, S3ImageStorageClient
-│       ├── entity/                 Product, ProductOption, ProductImage, Category ...
-│       ├── repository/             ProductQueryRepository 등 6개
-│       └── config/  dto/  exception/
+│   └── internal/                   controller service batch client entity repository config dto exception
 ├── coupon/  member/  stock/  order/  payment/  cart/  admin/
 ├── common/                     응답 봉투, 예외 계층, 인증 필터, 커서 페이지네이션
 └── config/
@@ -287,17 +274,13 @@ flowchart TB
     style RDS fill:#e1f5fe,stroke:#0277bd
 ```
 
-그림에서 읽을 것은 네 가지다.
-
-**큐는 인스턴스마다 하나씩이고 공유하지 않는다.** 요청 스레드가 티켓을 자기 인스턴스의 큐에 넣고 자면, 그 인스턴스의 플러시 스레드 하나가 20ms 마다 또는 500건이 차면 끊어서 한 번에 `INSERT` 한다. 커넥션을 쓰는 것은 플러시 스레드뿐이고 그 수가 인스턴스 수에 묶여 있어서, **요청이 2만으로 늘어도 커넥션 수요는 안 는다.**
-
-발급이 도는 동안 인스턴스 하나가 쓰는 커넥션은 사실상 1개다. 요청 스레드는 트랜잭션을 안 열고 `flush-threads` 가 1이라 DB 를 만지는 것이 그 스레드 하나뿐이다. 캐시는 이벤트가 열릴 때 한 번 채우고 발급 창 안에서 다섯 값이 고정되므로 마감까지 DB 를 다시 안 친다.
+**큐는 인스턴스마다 하나씩이고 공유하지 않는다.** 요청 스레드가 티켓을 자기 인스턴스의 큐에 넣고 자면, 그 인스턴스의 플러시 스레드 하나가 20ms 마다 또는 500건이 차면 끊어서 한 번에 `INSERT` 한다. 커넥션을 쓰는 것은 그 스레드뿐이고 `flush-threads` 가 1이라, **요청이 2만으로 늘어도 인스턴스 하나가 쓰는 커넥션은 사실상 1개다.** 캐시는 이벤트가 열릴 때 한 번 채우고 발급 창 안에서 다섯 값이 고정되므로 마감까지 DB 를 다시 안 친다.
 
 그런데도 풀을 2로 둔 것은 그 한 번 때문이다. 이벤트가 열리는 순간에만 캐시 적재와 플러시가 겹치는데, 1이면 플러시가 그것을 기다리고 그 대기가 `slow-call-duration` 을 넘기면 DB 쓰기 회로가 열려 그 배치가 통째로 밀린다.
 
-> 겹치는 구간과 1로 못 내리는 근거는 [resource-budget.md](./docs/resource-budget.md) 에 있다.
-
 알림은 두 갈래로 나간다. 스프링 서버가 내는 지표는 Alertmanager 가 Slack 으로 보내고, 모니터링이 죽어도 알아야 하는 것은 CloudWatch 가 SNS 로 보낸다.
+
+> 겹치는 구간과 풀을 1로 못 내리는 근거는 [resource-budget.md](./docs/resource-budget.md) 에 있다.
 
 ### 5.1 버전과 v4 채택
 
@@ -312,10 +295,7 @@ flowchart TB
 
 #### 버전별 성능 예상
 
-* **v1**: 쿠폰 발급시 쿠폰 개수를 차감해야 하므로 UPDATE 쿼리로 한 행에 커넥션 풀 크기만큼 락 경합이 발생된다.
-* **v2**: 레디스를 중앙화 순번 발급기로 사용해 여러 인스턴스에서의 요청을 순차적으로 순번 카운팅 가능하고, 재발급 요청 캐시에서 빠르게 거절 가능하다.
-* **v3**: 스프링 서버 대기열을 두면 레디스 장애 발생시에도 발급된 순번 대기해놓고 처리 가능하고 Bulk Insert 로 DB 커넥션/쓰기/왕복/컨텍스트 스위칭 감소시킬 수 있다. 다만 요청 스레드는 동시에 큐에서 대기할 수 있는 요청이 `server.tomcat.threads.max` 200 개여서 성능은 이슈가 있을 것이다.
-* **v4**: 요청 스레드를 가상 스레드로 사용하면 블로킹시 캐리어 스레드와 언마운트되어 요청이 커널 스레드 수에 묶이지 않아서 컨텍스트 스위칭을 줄일 수 있다. 이를 활용해서 쿠폰 발급 DB 반영은 캐리어 스레드로 하고 요청과 응답은 가상 스레드를 사용하면 성능이 개선될 것이다.
+v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 한 행에 커넥션 풀 크기만큼 락 경합을 만든다. v2 는 레디스를 중앙 순번 발급기로 써서 여러 인스턴스의 요청을 순차로 세고 재발급 요청을 캐시에서 빠르게 거절한다. v3 는 대기열을 두어 레디스 장애 중에도 발급된 순번을 들고 있다가 처리하고 Bulk INSERT 로 커넥션과 왕복과 컨텍스트 스위칭을 줄이는데, 다만 요청 스레드가 `server.tomcat.threads.max` 200 에 묶여 거기서 막힌다. v4 는 그 요청 스레드를 가상 스레드로 바꾼다. 블로킹할 때 캐리어 스레드와 언마운트되므로 요청이 커널 스레드 수에 묶이지 않는다.
 
 > **어느 단계가 얼마를 버는지는 재야 알 수 있다.** 팀은 네 버전을 각 3회 돌렸고 결과는
 > [6.1](#61-결과) 에 있다.
@@ -447,37 +427,11 @@ flowchart TB
 
 ### 5.8 정합성 검증
 
-성능 측정과 별개로, 요구사항이 **스스로 검증할 수단**을 요구한다.
-
-```mermaid
-flowchart TB
-    ADMIN["관리자"] -->|"POST /v1/admin/coupons/{couponId}:verifyConsistency"| CTL["AdminCouponConsistencyController"]
-    SCHED["CouponConsistencyScheduler<br/>batch 프로필, 매일 04:30 KST"] --> SVC
-    CTL --> SVC["CouponConsistencyService"]
-    SVC --> REPO["CouponConsistencyRepository<br/>집계 전용, JPA 안 쓴다"]
-
-    REPO --> T1[("member_coupon  발급 이력 300만 건")]
-    REPO --> T2[("member_coupon_status_history  상태 전이")]
-    REPO --> T3[("coupon  issued_quantity, total_quantity")]
-
-    SVC --> CHK{"다섯을 본다"}
-    CHK --> V1["발급 수와 issued_quantity"]
-    CHK --> V2["발급 수와 total_quantity<br/>초과 또는 과소"]
-    CHK --> V3["순번의 연속성<br/>결번 수가 곧 어긋남이다"]
-    CHK --> V4["1인 1매"]
-    CHK --> V5["상태와 이력의 마지막 전이"]
-
-    V1 & V2 & V3 & V4 & V5 --> REP["CouponConsistencyReport<br/>리포트만. 고치지 않는다"]
-
-    style CHK fill:#fff3cd,stroke:#d39e00
-    style REP fill:#d4edda,stroke:#155724
-```
+성능 측정과 별개로, 요구사항이 스스로 검증할 수단을 요구한다. `CouponConsistencyService` 가 발급 이력 300만 건을 훑어 다섯을 본다. 발급 수와 `issued_quantity`, 발급 수와 `total_quantity`, 순번의 연속성, 1인 1매, 상태와 이력의 마지막 전이다. 관리자 API 와 매일 04:30 KST 스케줄러가 같은 서비스를 부른다.
 
 검증은 회수와 종료 배치가 끝난 뒤에 돈다. 먼저 돌면 아직 보정되지 않은 것을 어긋남으로 세기 때문이다.
 
 **그리고 고치지 않는다.** 회수는 고치는 일이고 검증은 재는 일인데, 검증이 고치기 시작하면 재실행 결과가 달라져 요구사항을 위반한다. 같은 이유로 중간 결과도 저장하지 않는다. 매번 300만 건을 처음부터 전부 훑어야 같은 데이터에서 같은 결과가 나온다.
-
-배치 프로필만 `socketTimeout` 이 300초인 것도 이 때문이다. 두 표를 통째로 훑는 한 문장이 전역값 10초를 넘긴다.
 
 > 검증 항목과 어긋남의 모양은 [coupon.md 10장](./docs/coupon/coupon.md) 에 있다.
 
@@ -497,11 +451,7 @@ flowchart TB
 
 ### 6.1 결과
 
-| 조건 | 값 |
-|---|---|
-| 회차 | v1 부터 v4 까지 각 3회, 모두 12회차 |
-| 부하 | `ramping-vus` 0 -> 20,000 VU / 60초, VU 하나가 사람 하나, `m7i-flex.large` 에서 k6 1.7.1 |
-| 스프링 서버 | 전용 `t3.small` 3대 / RDS `db.t4g.micro` Multi-AZ / ElastiCache `cache.t4g.micro` 2노드 |
+v1 부터 v4 까지 각 3회, 모두 12회차를 돌렸다. 부하는 `ramping-vus` 로 0 에서 20,000 VU 를 60초에 올렸고 VU 하나가 사람 하나다. 생성기는 `m7i-flex.large` 의 k6 1.7.1, 서버는 전용 `t3.small` 3대에 RDS `db.t4g.micro` Multi-AZ 와 ElastiCache `cache.t4g.micro` 2노드다.
 
 **채택안 v4 가 요구 조건을 전부 통과한다.**
 
@@ -512,12 +462,8 @@ flowchart TB
 | 결번(`gap`) | 0 | **0** | 통과 |
 | ramp-up | 60초 | **60초** | 통과 |
 | **p99** | 1초 이하 | **0.133초** | 통과 |
-| 실패율 | | **0.00%** | |
 | 봐서는 안 되는 응답 | 0건 | **0건** | 통과 |
 | 혼잡 503 비율 | 1% 이하 | **0.00%** | 통과 |
-
-이 회차는 거절이 한 건도 없다. 발급받은 응답과 전체 응답이 같은 모집단이라 0.133초를 어느 쪽으로
-읽어도 값이 같다. 장애 회차에서는 그 둘이 갈라진다(5.6).
 
 ```sql
 SELECT COUNT(*), MAX(issue_seq), MAX(issue_seq) - COUNT(*) AS gap, COUNT(DISTINCT member_id)
@@ -525,8 +471,7 @@ SELECT COUNT(*), MAX(issue_seq), MAX(issue_seq) - COUNT(*) AS gap, COUNT(DISTINC
 -- 10000 / 10000 / 0 / 10000
 ```
 
-임계는 넷이고 회차마다 판정을 남긴다. 지연, 실패율, 봐서는 안 되는 응답, 거절 비율인데 **넷을
-다 읽은 것이 이 회차가 처음이다.**
+이 회차는 거절이 한 건도 없어서 발급받은 응답과 전체 응답이 같은 모집단이다. 0.133초를 어느 쪽으로 읽어도 값이 같고, 장애 회차에서는 그 둘이 갈라진다(5.6). 임계 넷을 다 읽은 것도 이 회차가 처음이다.
 
 #### 버전을 가른 것
 
@@ -565,42 +510,29 @@ v3 가 혼자 버는 것은 값이 아니라 고름이다. 3회차의 가장 나
 
 ![버전별 부하 시험 결과](./docs/images/loadtest/versions-loadtest.png)
 
-**`발급 200` 누적선이 v4 와 v2 와 v3 에서는 10K 에 닿는데 v1 구간(08:00~08:20)만 4K 에서 멈춘다.**
-그 옆의 `봐서는 안 되는 것` 이 같은 구간에서 16K 로 솟고 나머지 구간은 바닥이며, 실패율도 그
-구간에서만 100% 를 친다.
-
-`회로 상태` 는 값이 없고 `회로가 즉시 거절한 요청` 도 0 req/s 다. 12회차 어디서도 회로가 열리지
-않았다는 뜻이다.
-
 ![스프링 서버와 JVM](./docs/images/loadtest/versions-app-jvm.png)
 
-**`HikariCP 커넥션` 이 v1 구간에서만 35 까지 세 번 치솟는다.** 풀이 8 인데 그만큼 잡혔다는 것은
-대기까지 합친 값이고, 뒤에 선 요청이 커넥션을 못 받아 500 으로 끝난 자리다. 나머지 구간은 바닥에
-붙어 있다.
+**세 가지가 v1 구간(08:00~08:20)에만 몰려 있다.** `발급 200` 누적선이 다른 구간에서는 10K 에 닿는데 여기서만 4K 에서 멈추고, `봐서는 안 되는 것` 이 16K 로 솟고, 실패율이 100% 를 친다. 같은 구간에서 `HikariCP 커넥션` 이 35 까지 세 번 치솟는데 풀이 8 이므로 그만큼은 대기까지 합친 값이고, **뒤에 선 요청이 커넥션을 못 받아 500 으로 끝난 자리다.**
 
-`스레드 수` 는 v3 구간(08:40, 09:00 부근)에서 175 까지 오르는데 v4 구간(07:20~07:40)은 50 근처다.
-`server.tomcat.threads.max` 200 이 v3 의 실제 상한이었고 v4 에는 그 벽이 없다. `톰캣 스레드`
-패널이 아예 `No data` 인 것도 같은 이야기로, 가상 스레드를 켜면 톰캣 스레드 풀 자체가 안 쓰인다.
+`스레드 수` 는 v3 구간에서 175 까지 오르고 v4 구간은 50 근처다. `server.tomcat.threads.max` 200 이 v3 의 실제 상한이었고 v4 에는 그 벽이 없다. `톰캣 스레드` 패널이 아예 `No data` 인 것도 같은 이야기다.
 
-GC 일시정지는 최대 2ms 이고 힙은 여유가 있다. **꼬리가 GC 때문이 아니다.**
+회로는 12회차 어디서도 열리지 않았고, GC 일시정지는 최대 2ms 에 힙도 여유가 있다. **꼬리가 GC 때문이 아니다.**
 
-### 6.2 해석: 값을 조여서 고칠 수 없는 문제
+### 6.2 해석과 개선: 워밍업
 
-**이 절부터 6.4 까지는 처음 요구 부하를 통과시킨 회차 이야기다.** 그 회차에서 워밍업을 찾았고,
-그 발견이 지금 코드에 들어가 있다.
+**여기부터 6.4 까지는 처음 요구 부하를 통과시킨 회차 이야기다.** 그 회차에서 워밍업을 찾았고 그 발견이 지금 코드에 들어가 있다.
 
-회로를 뺀 뒤에도 남은 것은 p99 하나였다. 같은 커밋, 같은 사양, 같은 시나리오, 차이는 **본 시험 전에 트래픽이 지나갔느냐** 하나다.
+회로를 뺀 뒤에도 남은 것은 p99 하나였다. 같은 커밋, 같은 사양, 같은 시나리오였고 차이는 본 시험 전에 트래픽이 지나갔느냐 하나였다.
 
 | | 차가움 | 데워짐 |
 |---|---:|---:|
 | 발급 / 소진 | 9,979 / 10,000 | **10,000 / 10,000** |
-| 실패율 | 0.00% | 0.00% |
 | 혼잡 503 | 21 | **0** |
 | **p99** | **4.69초** | **0.247초** |
 
 정합성은 차가워도 지켜진다. 초과 발급 0, 인스턴스 유실 0, 서버 오류 0 이다. **못 지키는 것은 p99 하나인데 그 차이가 19배다.**
 
-그 시간이 어디에 있었나. 스프링 서버가 잰 최대 5,638ms 와 k6 가 잰 5,660ms 가 거의 같다 - **ALB 큐잉이 아니라 스프링 서버가 그만큼 붙잡고 있었다.** `commit-wait` 800ms 와 Redis 왕복 200ms 를 합쳐도 1초인데 한 요청이 4,839ms 를 머물렀다. 나머지는 **어느 타임아웃도 덮지 않는 구간**, CPU 를 얻기까지 기다린 시간이다.
+그 시간이 어디 있었나. 스프링 서버가 잰 최대 5,638ms 와 k6 가 잰 5,660ms 가 거의 같아 **ALB 큐잉이 아니라 스프링 서버가 그만큼 붙잡고 있었다.** `commit-wait` 800ms 와 Redis 왕복 200ms 를 합쳐도 1초인데 한 요청이 4,839ms 를 머물렀다. 나머지는 어느 타임아웃도 덮지 않는 구간, CPU 를 얻기까지 기다린 시간이다.
 
 ```
 JIT 컴파일 증가분   차가움 49,676ms  /  데워짐 11,113ms      90초 회차 동안
@@ -609,68 +541,27 @@ node CPU steal      차가움 11.0%     /  데워짐 3.7%
 
 차가운 JVM 은 요청을 처리하면서 동시에 자기를 컴파일하고 있었던 것이다.
 
-#### 그 회차의 대시보드
-
 ![선착순 발급 결과와 회로](./docs/images/loadtest/issue-result-circuit.png)
 
-**발급 200 과 소진 409 가 각각 정확히 10,000 에서 평평해진다.** 200 이 먼저 닿고 409 가 뒤따른다.
-"봐서는 안 되는 것" 패널이 `No data` 라 초과 발급과 서버 오류 계열은 한 건도 없다.
-
-회로 상태는 값이 없고 즉시 거절도 0 req/s 인데, 느린 호출 비율만 램프 구간에서 60% 까지 두 번
-튀었다. 임계선이 50% 다.
-
-> **오진이 그때도 재현됐다는 증거다.** 이 회로를 metrics-only 로 안 바꿨으면 그 두 번의 스파이크
-> 에서 회로가 열렸고 6.4 의 붕괴가 그대로 일어났다. 판정은 그대로 두고 거절만 안 하기 때문에
-> **무엇이 느렸는지는 여전히 보이면서** 재고가 남은 요청을 거절하지 않는다.
+발급 200 과 소진 409 가 각각 정확히 10,000 에서 평평해지고 "봐서는 안 되는 것" 패널은 `No data` 다. 회로는 안 열렸지만 **느린 호출 비율이 램프 구간에서 임계선 50% 를 넘겨 60% 까지 두 번 튀었다.** 이 회로를 metrics-only 로 안 바꿨으면 그 두 번에서 회로가 열렸고 6.4 의 붕괴가 그대로 일어났다.
 
 ![부하 생성기가 보내는 것](./docs/images/loadtest/k6-generator.png)
 
-**꼬리가 서버 밖에 있었다.** 응답 분해가 그 근거다.
+**꼬리가 서버 밖에도 있었다.** 응답 분해에서 `blocked p99` 가 약 640ms 인데 `waiting p99` 는 380ms 이고 `connecting` 과 `sending` 은 0 에 가깝다. 소진이 나는 순간에 2만 VU 가 한꺼번에 연결을 잡으려 하기 때문이다.
 
-```
-blocked p99 (409)   약 640ms      생성기가 연결을 얻기까지 기다린 시간
-waiting p99 (409)   약 380ms      서버가 답을 만든 시간
-waiting p99 (200)   약 270ms
-connecting, sending 거의 0
-```
+### 6.3 코드로 넣은 워밍업
 
-서버가 답하는 시간보다 생성기가 연결을 기다린 시간이 길다. 소진이 나는 순간에 2만 VU 가
-한꺼번에 연결을 잡으려 하기 때문이다. `connecting` 과 `sending` 이 0 에 가까우므로 네트워크나
-전송이 아니라 **생성기 쪽 연결 확보**가 그 구간의 정체다.
-
-### 6.3 개선: 코드로 넣은 워밍업
-
-`coupon-event.sh` 가 이벤트 직전에 인스턴스를 띄우므로 **실제 이벤트는 항상 차갑게 시작한다.** 그래서 운영 절차로 두지 않고 기동 절차로 만들었다.
-
-기준은 가동 시간이 아니라 처리한 요청 수다.
-
-| 워밍업 트래픽 | 그 트래픽의 최대 응답 | p95 |
-|---|---:|---:|
-| 200건 | 1.72초 | 1.41초 |
-| **3,000건** | **171ms** | **88ms** |
+`coupon-event.sh` 가 이벤트 직전에 인스턴스를 띄우므로 **실제 이벤트는 항상 차갑게 시작한다.** 그래서 운영 절차로 두지 않고 기동 절차로 만들었다. 기준은 가동 시간이 아니라 처리한 요청 수다.
 
 **초반 요청 하나가 후반 요청보다 7배 더 데운다.** 0 에서 200 까지는 건당 20ms 인데 200 에서 3,200 까지는 건당 2.7ms 다. JVM 이 자주 도는 메서드부터 컴파일하기 때문이다.
 
-```yaml
-coupon.warmup:
-  enabled: true
-  coupon-id: 1000000    # 전용 워밍업 쿠폰. 카운터를 소진 상태로 세워 member_coupon 에 안 쓴다
-  requests: 20000       # 실제 회차와 같은 수. 3,000 으로는 첫 회차가 0.460초다
-  concurrency: 300      # 램프가 초당 333개를 넣으므로 그쪽에 맞춘다
-  max-duration: 180s    # 못 채워도 끝낸다. 없으면 readiness 가 안 올라가 이벤트를 못 연다
-  write-rows: 10000     # 배치 INSERT 를 넣었다 되돌리며 데운다. 0 이면 안 한다
-  write-timeout: 20s    # 한 라운드의 트랜잭션 상한
-```
+`CouponWarmupRunner` 가 `ApplicationRunner` 라 `ApplicationReadyEvent` 앞에 돈다. 스프링 부트가 그 이벤트에서 readiness 를 올리므로 여기서 데우면 readiness 가 자연히 늦춰지고, `coupon-event.sh open` 의 "healthy 대기" 가 곧 "warm 대기" 가 된다. 스크립트는 안 바뀐다.
 
-`CouponWarmupRunner` 가 `ApplicationRunner` 라 `ApplicationReadyEvent` **앞에** 돈다. 스프링 부트가 그 이벤트에서 readiness 를 올리므로, 여기서 데우면 readiness 가 자연히 늦춰지고 `coupon-event.sh open` 의 "healthy 대기" 가 곧 "warm 대기" 가 된다. 스크립트는 안 바뀐다.
+HTTP 요청은 카운터를 소진으로 세워 두어 순번 확보에서 끝나므로 큐 앞에서 멈춘다. 그래서 배치 INSERT 는 `CouponWriteWarmup` 이 따로 맡아 워밍업 회원과 발급분을 한 트랜잭션에 넣고 통째로 롤백한다. 운영 데이터에 한 행도 안 남는다. **다만 큐 뒤는 둘을 합쳐도 못 데운다.** 큐 submit 과 플러시 스레드와 `markCommitted` 와 future 완료는 커밋이 성공해야만 도는 코드라, 롤백하면 그 앞에서 끝나고 커밋하면 행이 남는다.
 
-HTTP 요청은 큐 앞에서 멈춘다. 카운터를 소진으로 세워 두어 순번 확보에서 끝나기 때문이다. 그래서 배치 INSERT 는 `CouponWriteWarmup` 이 따로 맡는데, 워밍업 회원과 발급분을 한 트랜잭션에 넣고 통째로 롤백하므로 운영 데이터에 한 행도 안 남는다. 외래 키 검사는 같은 트랜잭션 안을 보므로 통과한다.
+값은 회차를 거듭하며 올렸다. 3,000 에 동시성 20 으로 데운 직후의 첫 회차가 p99 0.460초였는데 20,000 에 동시성 300 으로 올리니 0.066초가 됐다. 컴파일 양은 비슷한데 7배가 차이 난다. **문제는 얼마나 컴파일하느냐가 아니라 요청이 올 때 발급 경로가 이미 컴파일돼 있느냐였다.** 대가로 기동이 25~30초에서 61~66초로 늘었다.
 
-**다만 큐 뒤는 둘을 합쳐도 못 데운다.** 큐 submit 과 플러시 스레드와 `markCommitted` 와 future 완료는 커밋이 성공해야만 도는 코드다. 롤백하면 그 앞에서 끝나고, 돌게 하려면 커밋해야 하고, 커밋하면 행이 남는다.
-
-이 값들은 회차를 거듭하며 올린 것이다. 3,000 에 동시성 20 으로 데운 직후의 첫 회차가 p99 0.460초였는데, 20,000 에 동시성 300 으로 올리니 0.066초가 됐다. 컴파일 양은 비슷한데 7배가 차이 난다. **문제는 얼마나 컴파일하느냐가 아니라 요청이 올 때 발급 경로가 이미 컴파일돼 있느냐였다.** 대가로 기동이 25~30초에서 61~66초로 늘었다.
-
-설정값과 그것을 정한 근거와 물렸던 것들은 [`docs/coupon/warmup.md`](./docs/coupon/warmup.md) 에 있다.
+> 설정값과 그것을 정한 근거와 물렸던 것들은 [`docs/coupon/warmup.md`](./docs/coupon/warmup.md) 에 있다.
 
 ### 6.4 시험 중에 고친 것
 
@@ -682,15 +573,13 @@ HTTP 요청은 큐 앞에서 멈춘다. 카운터를 소진으로 세워 두어 
 | `rewriteBatchedStatements` 미적용 | 494행이 **495개의 INSERT 문**으로 나감 | 드라이버 옵션을 `data-source-properties` 로 이관 |
 | **시나리오가 ramp-up 을 재현 못 함** | 같은 설정인데 도착률이 364/s 와 2,000/s 로 갈림 | VU 하나 = 사람 하나, 한 번만 발사 |
 | k6 임계가 SLO 와 달랐음 | `p(95)<2000` 통과가 SLO 통과인지 알 수 없었다 | 임계를 `p99<1000` 으로 |
-| 전용 서버 지표 미수집 | 정작 시험 대상의 지표가 전무 | `prometheus.yml` 에 `coupon` job 추가 |
-| 3대가 한 이름으로 겹침 | 전부 `freshmarket-coupon` 으로 표시 | 모든 EC2 job 에 `instance_id` 라벨 |
 | 배치 서버 메모리 고갈 | 익스포터가 죽었는데 **JVM 만 살아 `up=1`** | t3.micro -> t3.small |
 | 헬스체크가 바쁜 인스턴스를 죽임 | 20초 안에 두 번 늦으면 퇴출 -> ASG 종료 | Timeout 5->8초, ASG 타입 ELB->EC2 |
 | 마이그레이션 번호 충돌 | DB 는 V30 인데 새 파일이 V23. 3대가 크래시 루프 | `V31` 로 올림 |
 
 **`up = 1` 이 정상을 뜻하지 않았다.** 관측 도구 자신의 실명(失明)은 그 도구가 못 잡는다.
 
-`ramping-vus` 건도 남길 만하다. 그것은 도착률을 정하지 않고, VU 가 응답을 기다리는 동안에는 다음 요청을 못 보낸다. 스프링 서버가 느리면 부하가 저절로 약해지고 빠르면 세진다는 뜻이다. **시험이 스스로 봐주고 잘하면 벌을 주고 있었다.** 그 전 회차들의 지연 수치는 서로 비교할 수 없어 기록에서 걷어냈다. 정합성 결과는 그 회차들에서도 늘 지켜졌다.
+`ramping-vus` 건도 남길 만하다. 그것은 도착률을 정하지 않고, VU 가 응답을 기다리는 동안에는 다음 요청을 못 보낸다. **시험이 스스로 봐주고 잘하면 벌을 주고 있었다.** 그 전 회차들의 지연 수치는 서로 비교할 수 없어 기록에서 걷어냈다. 정합성 결과는 그 회차들에서도 늘 지켜졌다.
 
 ### 6.5 실제 인프라에서 다시 한 계측
 
@@ -806,47 +695,18 @@ LLM 은 갈아 끼울 수 있게 두었다. 로컬은 `./verify.sh --agent "code
 
 ## 문서 위키
 
-| | |
+| 갈래 | 어디에 |
 |---|---|
-| [project-guideline.md](./docs/project/project-guideline.md) | 작업 흐름, 병합을 막는 조건 |
-| [git-convention.md](./docs/project/git-convention.md) | 브랜치와 커밋 규칙 |
-| [tech-stack.md](./docs/project/tech-stack.md) | 라이브러리와 선정 근거 |
-| [configuration.md](./docs/project/configuration.md) | 설정 파일과 로컬 DB |
-| [resource-budget.md](./docs/resource-budget.md) | 인스턴스별 커넥션과 스레드 예산 |
-| [api/README.md](./docs/api/README.md) | API 명세 (72개 기능) |
-| [code-architecture/domain-map.md](./docs/code-architecture/domain-map.md) | 13개 도메인과 층 |
-| [code-architecture/](./docs/code-architecture/) | 규칙은 `guideline`, 근거는 `rationale` 로 짝 |
-| [coupon/coupon.md](./docs/coupon/coupon.md) | **선착순 쿠폰 설계 전체** |
-| [coupon/requirement.md](./docs/coupon/requirement.md) | 주어진 요구사항 |
-| [coupon/coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md) | 발급이 쓰는 Redis 키 여섯, 그리고 언제 무엇이 바뀌나 |
-| [coupon/coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md) | Lua 스크립트 넷이 무엇을 묶고 언제 도나 |
-| [coupon/redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md) | 재건이 무엇이고 어떤 순서로 도나 |
-| [incident/failure-response.md](./docs/incident/failure-response.md) | **스프링 서버가 장애에 어떻게 반응하나** (공통) |
-| [coupon/coupon-failure.md](./docs/coupon/coupon-failure.md) | **선착순 발급이 장애에 어떻게 반응하나** (회로와 실측) |
-| [coupon/coupon-v4.md](./docs/coupon/coupon-v4.md) | 채택안 v4 가 정하고 만든 것 |
-| [coupon/coupon-load-scenarios.md](./docs/coupon/coupon-load-scenarios.md) | 부하 회차를 왜 그렇게 짰나 |
-| [coupon/coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) | 회차별 설정과 실측값 |
-| [coupon/coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) | 회수 기준 시간을 60초로 둔 근거 |
-| [coupon/warmup.md](./docs/coupon/warmup.md) | 워밍업이 무엇을 데우고 무엇을 못 데우나 |
-| [coupon/rebuild-v1/measurement.md](./docs/coupon/rebuild-v1/measurement.md) | 재건을 실제로 일으켜 본 회차와 거기서 찾은 것 |
-| [coupon/rebuild-v1/measurement-cache-loss.md](./docs/coupon/rebuild-v1/measurement-cache-loss.md) | 캐시 유실을 직접 주입해 본 회차. 기여가 DB 읽기 뒤에 있다 |
-| [coupon/rebuild-v1/fix-verification.md](./docs/coupon/rebuild-v1/fix-verification.md) | 두 고침이 실제로 도는지 본 회차. 3초가 여유 있는 값이 아니다 |
-| [coupon/rebuild-v1/early-exit.md](./docs/coupon/rebuild-v1/early-exit.md) | 조기 종료를 붙이고 돌려 본 회차. DB 장애가 길면 명부가 빈다 |
-| [coupon/rebuild-v1/queue-contribution.md](./docs/coupon/rebuild-v1/queue-contribution.md) | 큐가 실제로 재건에 쓰인 회차. 조기 종료가 2ms 에 끝났다 |
-| [coupon/rebuild-v1/duration.md](./docs/coupon/rebuild-v1/duration.md) | 재건 정지를 네 구간으로 쪼개 처음 잰 회차 |
-| [coupon/rebuild-v1/reconnect-and-fault.md](./docs/coupon/rebuild-v1/reconnect-and-fault.md) | 재연결을 재건의 신호로 붙인 회차. 무장애 p99 가 열다섯 배로 흔들린다 |
-| [coupon/rebuild-v1/rounds-warmup.md](./docs/coupon/rebuild-v1/rounds-warmup.md) | 장애 3종을 워밍업 올린 뒤 다시 잰 회차. 승격 재건이 걸리고 pause-timeout 으로 건너뛴다 |
-| [coupon/rebuild-v2/rounds.md](./docs/coupon/rebuild-v2/rounds.md) | 메모리 한도를 넣고 옛 재건과 새 재건을 나란히 잰 회차. 힙 덤프가 처음 남았고 판정 지표의 왜곡을 쟀다 |
-| [coupon/rebuild-v3/design.md](./docs/coupon/rebuild-v3/design.md) | 재건이 끝날 때까지 순번을 안 내주는 설계. 선착순을 지키려고 발급 정지를 되들인다 |
-| [coupon/rebuild-v4/design.md](./docs/coupon/rebuild-v4/design.md) | **지금 도는 재건.** 깨우기부터 A, B 단계와 순번 발급 차단까지 한 자리에 모았다 |
-| [coupon/rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) | rebuild-v4 의 장애 3종. 재건이 설계대로 돌았고 판정을 http 로 옮긴 뒤의 첫 측정이다 |
-| [coupon/rebuild-v5/design.md](./docs/coupon/rebuild-v5/design.md) | 같은 일을 서버마다 되풀이하지 않는 설계 제안. 코드로 아직 안 옮겼다 |
-| [coupon/rebuild-v4/revert-rejected.md](./docs/coupon/rebuild-v4/revert-rejected.md) | 주도자 재건으로 되돌리는 안과 반려 사유. 근거가 된 측정이 결함 하나 때문이었다 |
-| [coupon/virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) | 가상 스레드를 어떻게 쟀나 |
-| [verification/verification-guide.md](./docs/verification/verification-guide.md) | 검증 도구 사용법 |
-| [loadtest/](./loadtest/) | k6 시나리오, 더미 데이터 시드 |
-| [wiki](https://github.com/fresh-market/fm-backend/wiki) | 팀 문서, 문제 해결 공유 |
-| [`fm-infra`](https://github.com/fresh-market/fm-infra) | Terraform, 배포 스크립트, **부하 시험 기록** |
+| 작업 흐름과 규칙 | [project-guideline.md](./docs/project/project-guideline.md), [git-convention.md](./docs/project/git-convention.md), [tech-stack.md](./docs/project/tech-stack.md), [configuration.md](./docs/project/configuration.md) |
+| 아키텍처 | [domain-map.md](./docs/code-architecture/domain-map.md), [code-architecture/](./docs/code-architecture/) (규칙은 `guideline`, 근거는 `rationale` 로 짝), [api/README.md](./docs/api/README.md) |
+| 예산 | [resource-budget.md](./docs/resource-budget.md) 인스턴스별 커넥션과 스레드 |
+| **쿠폰 설계 전체** | [coupon/coupon.md](./docs/coupon/coupon.md), [requirement.md](./docs/coupon/requirement.md), [coupon-v4.md](./docs/coupon/coupon-v4.md) |
+| 쿠폰 내부 | [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md) 키 여섯, [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md) Lua 넷, [coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) 회수 기준 시간 |
+| 장애 | [failure-response.md](./docs/incident/failure-response.md) 공통, [coupon-failure.md](./docs/coupon/coupon-failure.md) 발급 경로 |
+| 부하 시험 | [coupon-load-scenarios.md](./docs/coupon/coupon-load-scenarios.md) 회차를 왜 그렇게 짰나, [coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) 회차별 값, [warmup.md](./docs/coupon/warmup.md), [virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) |
+| **재건** | [rebuild-v4/design.md](./docs/coupon/rebuild-v4/design.md) 지금 도는 것, [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) 그 회차, [rebuild-v5/design.md](./docs/coupon/rebuild-v5/design.md) 다음 제안 |
+| 재건 계보 | [rebuild-v1/](./docs/coupon/rebuild-v1/) 아홉 회차, [rebuild-v2/](./docs/coupon/rebuild-v2/), [rebuild-v3/design.md](./docs/coupon/rebuild-v3/design.md), [revert-rejected.md](./docs/coupon/rebuild-v4/revert-rejected.md) |
+| 그 밖 | [verification-guide.md](./docs/verification/verification-guide.md), [loadtest/](./loadtest/), [wiki](https://github.com/fresh-market/fm-backend/wiki), [`fm-infra`](https://github.com/fresh-market/fm-infra) |
 
 작업은 [프로젝트 보드](https://github.com/orgs/fresh-market/projects/6) 의 이슈에서 시작한다.
 
