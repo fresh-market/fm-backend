@@ -35,4 +35,20 @@ public interface CampaignTargetLotRepository extends JpaRepository<CampaignTarge
     @Modifying
     @Query("delete from CampaignTargetLot c where c.targetDate = :targetDate")
     void deleteByTargetDate(@Param("targetDate") LocalDate targetDate);
+
+    /*
+     * 그날 확정본의 버전. 회원용 조회가 캐시 키에 넣는다.
+     *
+     * 재실행하면 당일분을 지우고 다시 넣으므로 새 행의 id 가 더 크다. 그래서 MAX(id) 하나로
+     * "몇 번째 확정본인가" 를 나타낼 수 있다. 확정본이 바뀌면 캐시 키가 통째로 달라져
+     * 옛 항목은 아무도 찾지 않게 된다 — 로컬 캐시라 인스턴스별로 비울 방법이 없는 문제를
+     * 무효화 대신 키 분리로 푼다.
+     *
+     * uk_campaign_target_date_lot(target_date, stock_lot_id) 을 탄다. InnoDB 보조 인덱스는
+     * PK 를 함께 담으므로 행 본문을 읽지 않는다.
+     *
+     * 그날 대상이 없으면 null 이다. 그때는 캐시할 것도 없다(빈 결과는 담지 않는다).
+     */
+    @Query("select max(c.id) from CampaignTargetLot c where c.targetDate = :targetDate")
+    Long findConfirmedVersion(@Param("targetDate") LocalDate targetDate);
 }

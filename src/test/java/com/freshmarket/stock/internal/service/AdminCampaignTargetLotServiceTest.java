@@ -8,6 +8,8 @@ import static org.mockito.Mockito.when;
 import com.freshmarket.common.response.PageCursor;
 import com.freshmarket.product.ProductOptionInfo;
 import com.freshmarket.stock.internal.dto.AdminCampaignTargetLotListResponse;
+import com.freshmarket.stock.internal.batch.CampaignTargetLotRebuildService;
+import com.freshmarket.stock.internal.dto.AdminCampaignTargetLotRebuildResponse;
 import com.freshmarket.stock.internal.entity.CampaignTargetLot;
 import com.freshmarket.stock.internal.repository.CampaignTargetLotRepository;
 import java.math.BigDecimal;
@@ -34,6 +36,9 @@ class AdminCampaignTargetLotServiceTest {
     @Mock
     private CampaignTargetLotProductInfoService campaignTargetLotProductInfoService;
 
+    @Mock
+    private CampaignTargetLotRebuildService campaignTargetLotRebuildService;
+
     private AdminCampaignTargetLotService service;
 
     @BeforeEach
@@ -41,7 +46,8 @@ class AdminCampaignTargetLotServiceTest {
         Clock clock = Clock.fixed(
                 TODAY.atStartOfDay(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
         service = new AdminCampaignTargetLotService(
-                campaignTargetLotRepository, campaignTargetLotProductInfoService, clock);
+                campaignTargetLotRepository, campaignTargetLotProductInfoService,
+                campaignTargetLotRebuildService, clock);
     }
 
     private CampaignTargetLot targetLot(long stockLotId, int targetRank) {
@@ -128,5 +134,27 @@ class AdminCampaignTargetLotServiceTest {
         AdminCampaignTargetLotListResponse result = service.find(null, 9999);
 
         assertThat(result.targets()).isEmpty();
+    }
+
+    /*
+     * 재실행은 확정 로직을 그대로 부르고 결과 건수만 돌려준다.
+     * 자정 배치가 실패했을 때 다음 자정까지 기다리지 않고 복구하는 경로다.
+     */
+    @Test
+    void 재실행하면_확정_건수를_돌려준다() {
+        when(campaignTargetLotRebuildService.rebuild()).thenReturn(12);
+
+        AdminCampaignTargetLotRebuildResponse response = service.rebuildToday();
+
+        assertThat(response.targetDate()).isEqualTo(TODAY);
+        assertThat(response.confirmedCount()).isEqualTo(12);
+    }
+
+    // 후보가 없는 날은 0 이 정상이다. 실패와 구분되어야 한다
+    @Test
+    void 확정된_대상이_없으면_0을_돌려준다() {
+        when(campaignTargetLotRebuildService.rebuild()).thenReturn(0);
+
+        assertThat(service.rebuildToday().confirmedCount()).isZero();
     }
 }

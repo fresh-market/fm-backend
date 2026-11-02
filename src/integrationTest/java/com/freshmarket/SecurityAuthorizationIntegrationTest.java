@@ -219,4 +219,28 @@ class SecurityAuthorizationIntegrationTest extends IntegrationTestSupport {
         mockMvc.perform(post("/v1/auth/tokens"))
                 .andExpect(status().isBadRequest());
     }
+
+    /*
+     * StockSecurityConfig 의 securityMatcher 가 캠페인 경로를 빠뜨리면 fallback 체인
+     * (anyRequest().authenticated())으로 떨어져 로그인한 일반 회원도 호출할 수 있게 된다.
+     * 실제로 그 상태로 배포돼 있었다 — 관리자용 소진율과 로트 식별자가 회원에게 열려 있었고,
+     * 재확정은 회원이 배치를 돌릴 수 있는 상태였다. 그 회귀를 이 두 테스트가 잡는다.
+     */
+    @Test
+    void 로그인한_일반_회원은_캠페인_대상_조회를_할_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(get("/v1/admin/campaigns/target-lots")
+                        .header("Authorization", "Bearer " + memberToken))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void 로그인한_일반_회원은_캠페인_대상_재확정을_할_수_없다() throws Exception {
+        String memberToken = jwtTokenProvider.createAccessToken(1L, TokenType.MEMBER, "ROLE_USER");
+
+        mockMvc.perform(post("/v1/admin/campaigns/target-lots:rebuild")
+                        .header("Authorization", "Bearer " + memberToken))
+                .andExpect(status().isForbidden());
+    }
 }
