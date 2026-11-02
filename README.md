@@ -285,7 +285,7 @@ flowchart TB
     MON --> AM["Alertmanager"] --> SLACK["Slack"]
     ALB & RDS & MON -.-> CW["CloudWatch"] --> SNS["SNS"]
 
-    style COUPON fill:#fff8e1,stroke:#d39e00
+    style COUPON fill:#fff8e1,stroke:#d39e00,color:#333
     style CACHE fill:#f3e5f5,stroke:#7b1fa2
     style RDS fill:#e1f5fe,stroke:#0277bd
 ```

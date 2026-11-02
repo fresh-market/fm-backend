@@ -9,6 +9,7 @@ import com.freshmarket.product.internal.entity.StorageType;
 import com.freshmarket.product.internal.repository.CategoryRepository;
 import com.freshmarket.product.internal.repository.ProductOptionRepository;
 import com.freshmarket.product.internal.repository.ProductRepository;
+import com.freshmarket.stock.internal.ExpiringSoonPolicy;
 import com.freshmarket.stock.internal.dto.ExpiringSoonResponse;
 import com.freshmarket.stock.internal.entity.CampaignTargetLot;
 import com.freshmarket.stock.internal.entity.StockLot;
@@ -16,6 +17,7 @@ import com.freshmarket.stock.internal.repository.CampaignTargetLotCacheRepositor
 import com.freshmarket.stock.internal.repository.CampaignTargetLotRepository;
 import com.freshmarket.stock.internal.repository.StockLotRepository;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -66,8 +68,22 @@ class ExpiringSoonServiceIntegrationTest {
     @Autowired
     private CampaignTargetLotCacheRepository campaignTargetLotCacheRepository;
 
+    @Autowired
+    private Clock clock;
+
     private static final Long SUPPLIER_ID = 999999L;
-    private static final LocalDate TODAY = LocalDate.now();
+
+    /*
+     * 배치와 조회가 보는 기준일이다. 호스트 시간대가 무엇이든 한국 날짜를 준다.
+     *
+     * LocalDate.now() 를 쓰면 안 된다. 시험 JVM 은 build.gradle 이 user.timezone 을 UTC 로
+     * 박아 두어 늘 UTC 이고, 조회는 ExpiringSoonPolicy 가 정한 Asia/Seoul 로 기준일을 센다.
+     * 둘이 갈리는 UTC 15시부터 24시 사이(한국 자정부터 아침 아홉 시)에는 심어 둔 대상의 날짜와
+     * 조회가 찾는 날짜가 하루 어긋나 목록이 통째로 비어 보인다.
+     */
+    private LocalDate today() {
+        return ExpiringSoonPolicy.businessToday(clock);
+    }
 
     /*
      * 캐시는 로컬(JVM) 이라 스프링 컨텍스트와 수명을 같이한다 — 테스트마다 롤백되는 DB 와 달리
@@ -97,9 +113,9 @@ class ExpiringSoonServiceIntegrationTest {
         ProductOption option = productOptionRepository.save(
                 ProductOption.register(product.getId(), "1kg", 10000));
         StockLot lot = stockLotRepository.save(StockLot.register(
-                "lot-req-" + name, option.getId(), TODAY.minusDays(2), TODAY.plusDays(12), 100));
+                "lot-req-" + name, option.getId(), today().minusDays(2), today().plusDays(12), 100));
         campaignTargetLotRepository.save(CampaignTargetLot.register(
-                TODAY, lot.getId(), new BigDecimal("0.0500"), 70, targetRank));
+                today(), lot.getId(), new BigDecimal("0.0500"), 70, targetRank));
     }
 
     @Test
@@ -130,7 +146,7 @@ class ExpiringSoonServiceIntegrationTest {
         ProductOption option = productOptionRepository.save(
                 ProductOption.register(product.getId(), "1kg", 10000));
         stockLotRepository.save(StockLot.register(
-                "lot-req-비대상", option.getId(), TODAY.minusDays(2), TODAY.plusDays(12), 100));
+                "lot-req-비대상", option.getId(), today().minusDays(2), today().plusDays(12), 100));
 
         // when
         CursorPageResponse<ExpiringSoonResponse> result =
@@ -176,5 +192,33 @@ class ExpiringSoonServiceIntegrationTest {
         assertThat(secondPage.items()).hasSize(1);
         assertThat(secondPage.items().get(0).productOptionId())
                 .isNotEqualTo(firstPage.items().get(0).productOptionId());
+    }
+
+    /*
+     * 관리자가 재실행하면 그날 행이 새로 만들어져 확정본 버전이 바뀐다.
+     * 캐시 키에 그 버전이 들어 있어 옛 응답을 다시 내보내지 않는다.
+     *
+     * 이 검증이 필요한 이유가 있다. 캐시는 로컬(JVM)이라 재실행이 들어온 인스턴스에서
+     * 비워봐야 나머지 인스턴스는 그대로다. 무효화가 아니라 키 분리로 푸는 설계라
+     * "키가 실제로 갈리는가" 가 곧 정확성이다.
+     */
+    @Test
+    void 재확정하면_캐시된_옛_목록을_주지_않는다() {
+        // given — 감귤을 확정하고 한 번 조회해 캐시에 담는다
+        saveTargetLot("감귤", 1);
+        CursorPageResponse<ExpiringSoonResponse> before =
+                expiringSoonService.getExpiringSoonProducts(null, null, 20);
+        assertThat(before.items().get(0).productName()).isEqualTo("감귤");
+
+        // when — 그날 확정본을 지우고 다른 상품으로 다시 확정한다 (재실행과 같은 모양)
+        campaignTargetLotRepository.deleteByTargetDate(today());
+        saveTargetLot("사과", 1);
+
+        // then — 캐시를 비우지 않았는데도 새 확정본이 나온다
+        CursorPageResponse<ExpiringSoonResponse> after =
+                expiringSoonService.getExpiringSoonProducts(null, null, 20);
+
+        assertThat(after.items()).hasSize(1);
+        assertThat(after.items().get(0).productName()).isEqualTo("사과");
     }
 }
