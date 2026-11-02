@@ -175,7 +175,7 @@ Terraform 으로 코드화한 **단일 환경**이다(`ap-northeast-2`). 인프�
 **두 AZ(`ap-northeast-2a`, `2c`)에 걸쳐 있다.**
 
 * **ASG 둘** - 평상시 스프링 서버와 선착순 전용
-* **단독 인스턴스 셋** - 모니터링(`t4g.small`), 배치(`t3.small`), 부하 시험용(시험 때만)
+* **단독 인스턴스 3대** - 모니터링(`t4g.small`), 배치(`t3.small`), 부하 시험용(시험 때만)
 * **저장소** - RDS MySQL 8.4 Multi-AZ, ElastiCache Valkey 9.0(primary + replica, 자동 장애 조치)
 * **이미지** - S3 에 두고 CloudFront + OAC 로 내보낸다
 * **설정과 알림** - SSM Parameter Store, CloudWatch -> SNS
@@ -211,17 +211,17 @@ ALB 리스너 규칙 (priority 15)
 
 ### 왜 선착순만 ASG 를 따로 두었나
 
-같은 애플리케이션 이미지를 프로필만 바꿔 띄우는데도 그룹을 나눈 데에는 이유가 다섯 있다.
+같은 애플리케이션 이미지를 프로필만 바꿔 띄우는데도 그룹을 나눈 데에는 이유가 5개 있다.
 
-**가장 큰 이유는 이 그룹이 쿠폰 부하만 받는다는 것이다.** 평상시 스프링 서버와 인스턴스가 겹치지 않으니 다른 기능의 성능에 영향이 없고, 잰 수치가 오직 발급 경로의 것이 된다. 대수와 프로필과 경로가 같으면 개발 서버에서 본 것이 운영에서도 그대로 나오므로, 운영에 올리기 전에 같은 모양의 환경에서 미리 대비할 수 있다. 6장의 회차별 비교가 성립하는 것도 이 조건 덕분이다.
+1. **이 그룹이 쿠폰 부하만 받는다. 5개 중 이것이 가장 크다.** 평상시 스프링 서버와 인스턴스가 겹치지 않으니 다른 기능의 성능에 영향이 없고, 잰 수치가 오직 발급 경로의 것이 된다. 대수와 프로필과 경로가 같으면 개발 서버에서 본 것이 운영에서도 그대로 나오므로, 운영에 올리기 전에 같은 모양의 환경에서 미리 대비할 수 있다. 6장의 회차별 비교가 성립하는 것도 이 조건 덕분이다.
 
-둘째는 격벽이다. 안 나누면 선착순 트래픽이 톰캣 스레드와 커넥션 풀을 다 먹어 상품 조회와 주문이 함께 죽는다. 이벤트가 90초 동안 CPU 90% 를 치는데 그 부하를 평상시 경로와 같은 인스턴스에 태울 이유가 없다.
+2. 격벽이다. 안 나누면 선착순 트래픽이 톰캣 스레드와 커넥션 풀을 다 먹어 상품 조회와 주문이 함께 죽는다. 이벤트가 90초 동안 CPU 90% 를 치는데 그 부하를 평상시 경로와 같은 인스턴스에 태울 이유가 없다.
 
-셋째로 오토스케일링이 이 트래픽에는 안 듣는다(`INF-40`). 확장 판정에 최소 3분이 걸리는데 선착순 쇄도는 그보다 짧게 끝나서, 알람이 울리고 인스턴스가 부팅되는 사이에 재고가 이미 소진된다. 그래서 전용 ASG 에는 정책을 걸지 않고 `min 0 / desired 0` 으로 두며, 대수는 `coupon-event.sh open 3` 이 이벤트 전에 미리 정하고 끝나면 0 으로 내린다.
+3. 오토스케일링이 이 트래픽에는 안 듣는다(`INF-40`). 확장 판정에 최소 3분이 걸리는데 선착순 쇄도는 그보다 짧게 끝나서, 알람이 울리고 인스턴스가 부팅되는 사이에 재고가 이미 소진된다. 그래서 전용 ASG 에는 정책을 걸지 않고 `min 0 / desired 0` 으로 두며, 대수는 `coupon-event.sh open 3` 이 이벤트 전에 미리 정하고 끝나면 0 으로 내린다.
 
-넷째로 설정이 정반대다. 평상시 스프링 서버는 풀을 넉넉히 쓰고 헬스체크를 촘촘히 보지만, 전용 인스턴스는 풀을 2로 조이고 헬스체크를 느슨하게 해야 한다. 한 그룹에 두면 어느 한쪽 기준으로 맞출 수밖에 없다.
+4. 설정이 정반대다. 평상시 스프링 서버는 풀을 넉넉히 쓰고 헬스체크를 촘촘히 보지만, 전용 인스턴스는 풀을 2로 조이고 헬스체크를 느슨하게 해야 한다. 한 그룹에 두면 어느 한쪽 기준으로 맞출 수밖에 없다.
 
-다섯째로 되돌리기와 비교가 쉬워진다. `coupon_dedicated_enabled` 를 끄면 ALB 규칙만 사라지고 발급 요청은 평상시 스프링 서버로 흐른다. 경로가 막히지 않으니 언제든 되돌릴 수 있고, 버전(v1~v4) 비교도 다른 트래픽에 오염되지 않는다.
+5. 되돌리기와 비교가 쉬워진다. `coupon_dedicated_enabled` 를 끄면 ALB 규칙만 사라지고 발급 요청은 평상시 스프링 서버로 흐른다. 경로가 막히지 않으니 언제든 되돌릴 수 있고, 버전(v1~v4) 비교도 다른 트래픽에 오염되지 않는다.
 
 | 전용 경로에만 다른 것 | 값 | 왜 |
 |---|---|---|
@@ -304,7 +304,7 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 한 행에 커넥션 풀 크�
 
 > v4 가 정하고 만든 것은 [coupon-v4.md](./docs/coupon/coupon-v4.md) 에 있다.
 
-### 5.2 버전이 바뀌어도 변하지 않는 다섯
+### 5.2 버전이 바뀌어도 변하지 않는 5개
 
 | 요구 | 지켜야 할 것 | 어긋나면 |
 |---|---|---|
@@ -314,7 +314,7 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 한 행에 커넥션 풀 크�
 | R4 | 재시도가 두 장을 만들지 않는다 | 네트워크 오류 한 번에 R1, R2 가 깨진다 |
 | R5 | 같은 상태 변경이 반복되거나 중첩돼도 한 번만 반영된다 | 사용과 만료가 중복 처리되어 이력과 재고가 어긋난다 |
 
-**다섯 중 R1 이 가장 비싸다.** 나머지는 사후에 정정할 수 있지만 이미 나간 쿠폰은 회수하기 어렵다. 그래서 R1 에서 R4 까지를 스프링 서버가 아니라 스키마에 맡겼다.
+**5개 중 R1 이 가장 비싸다.** 나머지는 사후에 정정할 수 있지만 이미 나간 쿠폰은 회수하기 어렵다. 그래서 R1 에서 R4 까지를 스프링 서버가 아니라 스키마에 맡겼다.
 
 ### 5.3 락 경합을 없앤 행별 한도 스냅샷
 
@@ -328,7 +328,7 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 한 행에 커넥션 풀 크�
 
 **이 구조 덕분에 순번 발급기가 어디에 있든 초과 발급은 나지 않는다.** 안전을 스키마가 책임지니 버전 사이의 차이가 "안전한가" 가 아니라 "얼마나 빠르고 얼마나 자주 실패하는가" 가 된다. 위쪽 구현을 v1 에서 v7 까지 자유롭게 바꿔 볼 수 있었던 것도 그래서다.
 
-다섯 중 R5 만 스프링 서버가 지킨다. 읽고 판단한 뒤에 쓰지 않고, 지금 상태를 `WHERE` 에 넣어 한 문장으로 만든다.
+5개 중 R5 만 스프링 서버가 지킨다. 읽고 판단한 뒤에 쓰지 않고, 지금 상태를 `WHERE` 에 넣어 한 문장으로 만든다.
 
 > 스키마가 무엇을 어떻게 막는지, 주문이 쿠폰을 두 번 못 쓰게 하는 장치까지는 [coupon.md 2장](./docs/coupon/coupon.md) 에 있다.
 
@@ -345,11 +345,11 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 한 행에 커넥션 풀 크�
 
 요청 스레드는 트랜잭션을 안 연다. 큐에 티켓을 넣고 자고, DB 는 플러시 스레드만 쓴다. 요청이 2만으로 늘어도 커넥션 수요가 안 느는 것이 이 설계의 요점이다.
 
-1번을 캐시로 끝낼 수 있는 것은 이벤트가 시작되면 조건이 고정되기 때문이다. 스프링 서버는 시작된 이벤트의 일정을 못 바꾸고, 소진 전이고 마감 전이면 스위치도 못 끈다. 다섯 값이 전부 그대로이므로 요청마다 하던 쿠폰 조회가 사라진다.
+1번을 캐시로 끝낼 수 있는 것은 이벤트가 시작되면 조건이 고정되기 때문이다. 스프링 서버는 시작된 이벤트의 일정을 못 바꾸고, 소진 전이고 마감 전이면 스위치도 못 끈다. 5개 값이 전부 그대로이므로 요청마다 하던 쿠폰 조회가 사라진다.
 
-2번에서 Redis 키 넷을 Lua 하나로 다루는 까닭은 간단하다. 나눠 부르면 그 사이에 남이 끼어든다.
+2번에서 Redis 키 4개를 Lua 하나로 다루는 까닭은 간단하다. 나눠 부르면 그 사이에 남이 끼어든다.
 
-> 키 넷이 각각 무엇을 담고 언제 값이 들고 나는지는 [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md), 스크립트 넷이 무엇을 묶는지는 [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md), 큐와 플러시가 어떻게 도는지는 [coupon-v4.md](./docs/coupon/coupon-v4.md) 에 있다.
+> 키 4개가 각각 무엇을 담고 언제 값이 들고 나는지는 [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md), 스크립트 4개가 무엇을 묶는지는 [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md), 큐와 플러시가 어떻게 도는지는 [coupon-v4.md](./docs/coupon/coupon-v4.md) 에 있다.
 
 ### 5.5 응답 상태 코드 설계
 
@@ -405,7 +405,7 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 한 행에 커넥션 풀 크�
 소진에 닿지 못했고, 그래서 그 경로가 한 번도 안 열렸다.
 
 **p99 가 네 회차 다 SLO 1초 안이다.** 이 값은 `http_req_duration` 이라 혼잡(503)과 게이트웨이
-실패(502/504)까지 담는다. Redis 를 안 건드리는 서버 1대 종료만 재건이 안 떴고, 나머지 셋은
+실패(502/504)까지 담는다. Redis 를 안 건드리는 서버 1대 종료만 재건이 안 떴고, 나머지 3종은
 각각 한 번씩 돌았다.
 
 
@@ -427,7 +427,7 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 한 행에 커넥션 풀 크�
 
 ### 5.8 정합성 검증
 
-성능 측정과 별개로, 요구사항이 스스로 검증할 수단을 요구한다. `CouponConsistencyService` 가 발급 이력 300만 건을 훑어 다섯을 본다. 발급 수와 `issued_quantity`, 발급 수와 `total_quantity`, 순번의 연속성, 1인 1매, 상태와 이력의 마지막 전이다. 관리자 API 와 매일 04:30 KST 스케줄러가 같은 서비스를 부른다.
+성능 측정과 별개로, 요구사항이 스스로 검증할 수단을 요구한다. `CouponConsistencyService` 가 발급 이력 300만 건을 훑어 5가지를 본다. 발급 수와 `issued_quantity`, 발급 수와 `total_quantity`, 순번의 연속성, 1인 1매, 상태와 이력의 마지막 전이다. 관리자 API 와 매일 04:30 KST 스케줄러가 같은 서비스를 부른다.
 
 검증은 회수와 종료 배치가 끝난 뒤에 돈다. 먼저 돌면 아직 보정되지 않은 것을 어긋남으로 세기 때문이다.
 
@@ -439,7 +439,7 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 한 행에 커넥션 풀 크�
 
 ## 6. 부하 시험: 결과, 해석, 개선
 
-이 장은 버전 넷을 가른 회차(6.1)와 워밍업을 찾은 회차(6.2 에서 6.4)를 적는다. 시나리오는
+이 장은 버전 4개를 가른 회차(6.1)와 워밍업을 찾은 회차(6.2 에서 6.4)를 적는다. 시나리오는
 [`loadtest/issue.js`](./loadtest/issue.js) 다.
 
 **둘은 다른 질문에 답한다.** 앞은 어느 설계가 값을 내는지를 묻고, 뒤는 같은 코드가 왜 차가울 때
@@ -471,7 +471,7 @@ SELECT COUNT(*), MAX(issue_seq), MAX(issue_seq) - COUNT(*) AS gap, COUNT(DISTINC
 -- 10000 / 10000 / 0 / 10000
 ```
 
-이 회차는 거절이 한 건도 없어서 발급받은 응답과 전체 응답이 같은 모집단이다. 0.133초를 어느 쪽으로 읽어도 값이 같고, 장애 회차에서는 그 둘이 갈라진다(5.6). 임계 넷을 다 읽은 것도 이 회차가 처음이다.
+이 회차는 거절이 한 건도 없어서 발급받은 응답과 전체 응답이 같은 모집단이다. 0.133초를 어느 쪽으로 읽어도 값이 같고, 장애 회차에서는 그 둘이 갈라진다(5.6). 임계 4개를 다 읽은 것도 이 회차가 처음이다.
 
 #### 버전을 가른 것
 
@@ -590,7 +590,7 @@ HTTP 요청은 카운터를 소진으로 세워 두어 순번 확보에서 끝�
 워밍업 켬    0.302 ~ 0.518초    약 8배
 ```
 
-**워밍업 말고는 구별되지 않았다.** 나머지 셋을 바꾼 여섯 값이 0.302 에서 0.529초 사이에 고르게 흩어져 있고 설정별 경향이 없다. 이 부하 모양에서 그 셋은 병목이 아니라는 뜻이라 기본값을 유지한다.
+**워밍업 말고는 구별되지 않았다.** 나머지 3개를 바꾼 6개 값이 0.302 에서 0.529초 사이에 고르게 흩어져 있고 설정별 경향이 없다. 이 부하 모양에서 그 3개는 병목이 아니라는 뜻이라 기본값을 유지한다.
 
 > 회차별 값은 [coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) 에 있다.
 
@@ -674,7 +674,7 @@ api-contract migration  app-config test         archunit        build
 
 **이 열한 개만 생성물이 아니다.** 어떤 파일이 어떤 항목을 켜는지는 사람이 내리는 판단이라 손으로 관리한다.
 
-### 7.3 게이트 셋 중 차단하는 하나
+### 7.3 게이트 3개 중 차단하는 1개
 
 | 게이트 | 무엇이 도나 | 막나 | 결과가 어디 남나 |
 |---|---|---|---|
@@ -701,11 +701,11 @@ LLM 은 갈아 끼울 수 있게 두었다. 로컬은 `./verify.sh --agent "code
 | 아키텍처 | [domain-map.md](./docs/code-architecture/domain-map.md), [code-architecture/](./docs/code-architecture/) (규칙은 `guideline`, 근거는 `rationale` 로 짝), [api/README.md](./docs/api/README.md) |
 | 예산 | [resource-budget.md](./docs/resource-budget.md) 인스턴스별 커넥션과 스레드 |
 | **쿠폰 설계 전체** | [coupon/coupon.md](./docs/coupon/coupon.md), [requirement.md](./docs/coupon/requirement.md), [coupon-v4.md](./docs/coupon/coupon-v4.md) |
-| 쿠폰 내부 | [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md) 키 여섯, [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md) Lua 넷, [coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) 회수 기준 시간 |
+| 쿠폰 내부 | [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md) 키 6개, [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md) Lua 넷, [coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) 회수 기준 시간 |
 | 장애 | [failure-response.md](./docs/incident/failure-response.md) 공통, [coupon-failure.md](./docs/coupon/coupon-failure.md) 발급 경로 |
 | 부하 시험 | [coupon-load-scenarios.md](./docs/coupon/coupon-load-scenarios.md) 회차를 왜 그렇게 짰나, [coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) 회차별 값, [warmup.md](./docs/coupon/warmup.md), [virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) |
 | **재건** | [rebuild-v4/design.md](./docs/coupon/rebuild-v4/design.md) 지금 도는 것, [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) 그 회차, [rebuild-v5/design.md](./docs/coupon/rebuild-v5/design.md) 다음 제안 |
-| 재건 계보 | [rebuild-v1/](./docs/coupon/rebuild-v1/) 아홉 회차, [rebuild-v2/](./docs/coupon/rebuild-v2/), [rebuild-v3/design.md](./docs/coupon/rebuild-v3/design.md), [revert-rejected.md](./docs/coupon/rebuild-v4/revert-rejected.md) |
+| 재건 계보 | [rebuild-v1/](./docs/coupon/rebuild-v1/) 9회차, [rebuild-v2/](./docs/coupon/rebuild-v2/), [rebuild-v3/design.md](./docs/coupon/rebuild-v3/design.md), [revert-rejected.md](./docs/coupon/rebuild-v4/revert-rejected.md) |
 | 그 밖 | [verification-guide.md](./docs/verification/verification-guide.md), [loadtest/](./loadtest/), [wiki](https://github.com/fresh-market/fm-backend/wiki), [`fm-infra`](https://github.com/fresh-market/fm-infra) |
 
 작업은 [프로젝트 보드](https://github.com/orgs/fresh-market/projects/6) 의 이슈에서 시작한다.
