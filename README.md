@@ -722,6 +722,6 @@ LLM 은 갈아 끼울 수 있게 두었다. 로컬은 `./verify.sh --agent "code
 |---|---|
 | devjohnpark | 선착순 쿠폰 / 인프라 / 공통 모듈 / 코드 검증 시스템 |
 | muzimzz | 회원 / 인증 / 주문 / 결제 / 장바구니 |
-| jaeungchoi | 상품 / 옵션 / 상품 이미지 / 재고 |
+| yongmaru789 | 상품 / 옵션 / 상품 이미지 / 재고 |
 | gyudongjeong | 관리자 계정 / 인증 / 감사 로그 |
 | taejoong15 | 재고(로트) / 캠페인 대상 / 상품 |
