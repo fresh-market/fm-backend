@@ -300,8 +300,18 @@ p99            round 태그로 가른 query_range 의 최댓값
 
 장애 회차에만
   인프라 복구    페일오버 시작 -> 완료 (AWS 이벤트)
-  재건          REBUILD_STARTED -> REBUILT.  안 돌았으면 그렇게 적는다
+  재건          COUPON_SEQ_RAISED 를 서버별로.  안 돌았으면 그렇게 적는다
+  발급 정지      congested-rebuilding 의 첫 발생 -> 마지막 발생
+                봉우리가 여럿이면 각각 적는다.  차단이 풀렸다 다시 걸린 것이다
   발급 재개      TPS 가 0 에서 다시 오른 시각
+```
+
+**발급 정지는 로그로 계산하지 않는다.** 재건 로그로 구간을 재고 차단 1초를 더하는 방법은
+재건에 성공한 서버만 세므로 하한만 나온다. 되돌아간 시도도 차단을 거는데 그 시작 시각을 안
+찍기 때문이다. `congested-rebuilding` 은 요청 쪽에서 센 값이라 그 한계가 없다.
+
+```
+sum(rate(coupon_issue_rejected_total{reason="congested-rebuilding"}[10s]))
 ```
 
 ### 회차 직후에 뽑는 대시보드
