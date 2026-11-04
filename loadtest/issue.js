@@ -11,7 +11,7 @@
 import http from 'k6/http';
 import { sleep } from 'k6';
 import exec from 'k6/execution';
-import { Counter, Rate, Trend } from 'k6/metrics';
+import { Counter, Rate } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
@@ -105,10 +105,10 @@ const congested = new Counter('coupon_congested');
 /*
  * 혼잡을 비율로도 잰다. 임계를 걸 수 있는 모집단이 필요하기 때문이다.
  *
- * coupon.md 7장이 SLO 모집단에서 혼잡(503)을 뺐고, 같은 장이 "거절 비율을 따로 묶어야
- * 한다. 안 그러면 앱이 전부 거절해서 p99 를 맞출 수 있다" 고 적었다. 그런데 그 임계가
- * 없었다. 혼잡은 coupon_settled_duration 에서 빠지고, expectedStatuses 가 503 을 기대
- * 상태로 두어 http_req_failed 에서도 빠진다. 세 임계 어디에도 걸리지 않는다.
+ * coupon.md 7장이 "거절 비율을 따로 묶어야 한다. 안 그러면 앱이 전부 거절해서 p99 를
+ * 맞출 수 있다" 고 적었다. 그런데 그 임계가 없었다. expectedStatuses 가 503 을 기대
+ * 상태로 두어 http_req_failed 에서도 빠지므로, 이 Rate 가 없으면 혼잡을 묶는 임계가
+ * 하나도 없다.
  *
  * Counter 로는 못 건다. k6 의 Counter 임계는 개수와 초당 발생률만 보므로 부하 크기가
  * 바뀌면 같은 숫자가 다른 뜻이 된다. Rate 는 전체 대비 비율이라 그대로 예산이 된다.
@@ -129,19 +129,6 @@ const connectFailed = new Counter('coupon_connect_failed');
  * 반드시 나오는 값이라, 섞으면 장애 회차의 임계가 늘 깨진다.
  */
 const gatewayFailed = new Counter('coupon_gateway_failed');
-/*
- * SLO 가 재는 응답만 담는 지연이다. coupon.md 7장이 모집단을 이렇게 정했다.
- *
- *   대상   발급(200)과 소진(409, 410).  서버가 판정을 끝낸 응답이다
- *   제외   혼잡(503).  요청 예산에서 잘린 값이라 넣으면 예산을 재는 셈이 된다
- *
- * http_req_duration 과 둘 다 둔다. 서로 다른 질문에 답하기 때문이다. 그쪽은 503 까지
- * 담아 사용자가 겪은 시간을 재고, 이쪽은 서버가 판정을 끝낸 것만 담아 SLO 를 잰다.
- * 전에는 하나로 겸했는데, 그 태그는 expectedStatuses 가 정하고 그 목록은
- * http_req_failed 를 위한 것이라 503 이 섞여 들어왔다.
- */
-const settledDuration = new Trend('coupon_settled_duration', true);
-
 export const options = {
   scenarios: {
     /*
@@ -165,31 +152,14 @@ export const options = {
      * coupon.md 7장의 합격 기준을 그대로 옮긴 것이다.
      * "요구 부하를 걸었을 때 처리된 발급 응답의 p99 가 1초 이하다."
      *
-     * 전에는 p(95)<2000 이었다. 분위수도 임계도 SLO 보다 느슨해서, 이 임계를 통과해도
-     * 합격인지 알 수 없었다. 실제로 5,000 VU 회차가 이 임계는 통과하고 SLO 는 미달이었다
-     * (2026-08-30, p99 1.127초). 사람이 Prometheus 를 따로 뒤져야 드러났다.
+     * 모집단은 모든 요청이다. 혼잡(503)과 게이트웨이 실패(502, 504)까지 담는다. 사용자는
+     * 응답 코드를 모르고 기다린 시간만 겪기 때문이다. 그라파나가 보는 것과도 같은 계통이다.
      *
-     * 그 뒤에 모집단을 coupon_settled_duration 으로 옮겼다. 혼잡(503)이 섞이면 예산을
-     * 바꾸는 것만으로 값이 움직인다는 것이 그때의 근거였다.
+     * "혼잡이 섞이면 빨리 거절해서 p99 를 좋게 만들 수 있다" 는 아래 coupon_congested_rate
+     * 가 막는다. 혼잡을 1% 아래로 묶어 두면 그 길이 없다.
      *
-     * 2026-10-14 에 그 선택을 되돌린다. settled 는 "답을 받은 요청" 만 담는데, 장애
-     * 회차에서 답을 못 받은 요청이 바로 가장 느린 요청들이라 모집단이 좋은 쪽으로 치우친다.
-     * Y-2 회차가 그 모양이었다.
-     *
-     *   coupon_settled_duration   p(99) 748ms       통과로 보였다
-     *   http_req_duration         p(90) 59.99s      요청의 90% 가 60초를 기다렸다
-     *
-     * 그 회차는 인스턴스 하나가 OOM 으로 죽는 중이었고, 느린 요청이 끊겨 settled 에서
-     * 빠졌다. 아홉 회차를 다시 읽으니 http_req_failed 가 0% 인 회차에서만 둘이 일치했다.
-     *
-     * 옛 근거였던 "혼잡이 섞여 값이 움직인다" 는 아래 coupon_congested_rate 가 막는다.
-     * 혼잡을 1% 아래로 묶어 두면 빨리 거절해서 p99 를 좋게 만드는 길이 없다.
-     *
-     * 그리고 이 지표는 그라파나가 보는 것과 같은 계통이다. 대시보드에는
-     * http_server_requests_seconds 와 k6_http_req_duration_p99 만 있고 settled 패널이
-     * 없어서, 지금까지 회차 판정과 대시보드가 서로 다른 숫자를 보고 있었다.
-     *
-     * settled 는 지우지 않는다. 임계에서만 뺀다. 둘의 괴리가 "모집단이 깎였나" 를 말해 준다.
+     * 이 자리에 coupon_settled_duration 을 걸었다가 되돌리고 지운 계보는
+     * docs/coupon/coupon-load-scenarios.md 12장에 있다.
      */
     http_req_duration: ['p(99)<1000'],
     /*
@@ -293,13 +263,6 @@ export default function () {
   });
   attempts += 1;
 
-  /*
-   * 서버가 판정을 끝낸 응답만 SLO 지연에 담는다.
-   * 아래 세 갈래(200, 409, 410)가 그것이고 혼잡(503)은 안 담는다.
-   */
-  if (res.status === 200 || res.status === 409 || res.status === 410) {
-    settledDuration.add(res.timings.duration);
-  }
   // 모든 응답을 모집단으로 삼는다. 503 만 세면 비율이 안 나온다
   congestedRate.add(res.status === 503);
 
