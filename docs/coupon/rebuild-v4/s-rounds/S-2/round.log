@@ -1,0 +1,100 @@
+[02:54:42] ################ S-2 ################
+[02:54:42] 장애: cache-failover
+[02:54:42] 1. 앞 회차 되돌리기
+[02:54:42] 1. 되돌리기
+[02:54:44]    배치 i-051c119ec849ce089 에서 실행 중 (명령 207a3c93-b7e1-4572-aa5d-469e69fe3d33)
+-- reset.sql
+coupon_id	total_quantity	issued_quantity	is_active
+900001	10000	0	0
+907001	10000	0	0
+1000000	1	0	0
+1000001	1000000	1000000	0
+1000002	1000000	1000000	0
+1000003	NULL	1000000	0
+완료
+
+[02:54:56] 완료
+
+reset.sql 이 is_active 를 내린다. 다음 회차 전에 이벤트를 다시 열어야 한다.
+켜져 있으면 여는 API 가 "이미 열렸다" 로 돌아가고 지난 회차 카운터가 그대로 남는다.
+
+[02:54:56] 1. 쿠폰만 다시 붓는다. COUPON_ID=907002
+[02:54:58]    배치 i-051c119ec849ce089 에서 실행 중 (명령 7b2c38b0-5baa-407b-baf2-6f09358b01c8)
+-- seed-coupon.sql
+coupon_id	total_quantity	issued_quantity	is_active	issue_start_at	issue_end_at
+907002	10000	0	0	2026-10-31 17:55:01.053766	2026-11-02 17:55:01.053766
+완료
+
+[02:55:10] 완료
+
+이벤트는 아직 안 열렸다. 앱의 관리자 API 로 열어야 Redis 카운터가 선다.
+
+[02:55:10] 2. 전용 인스턴스
+     i-0174dcd33c625403e
+     i-0dae1af3c3a6a5046
+     i-0c1d1abe908ded5e0
+[02:55:11] 3. 이벤트 열기
+     event:open HTTP 200
+[02:55:20] 4. k6 를 띄운다
+     k6 pid 3059
+[02:55:29] 5. +15초에 주입한다
+[02:55:45]    주입을 걸었다 (cache-failover). 부하와 겹쳐 돈다
+[02:55:45] 6. k6 종료 대기
+[02:57:06]    k6 끝 (확인 5 회)
+[02:57:06] 7. k6 요약을 받는다
+         ✗ 'rate<0.01' rate=84.05%
+         coupon_unexpected
+         ✓ 'count==0' count=0
+         ✗ 'p(99)<1000' p(99)=3.18s
+         http_req_failed
+         ✓ 'rate<0.01' rate=0.00%
+         coupon_issued..................: 9998   109.812376/s
+         coupon_unexpected..............: 0      0/s
+         http_req_failed................: 0.00%  0 out of 64468
+     rush ✓ [ 100% ] 00000/20000 VUs  1m30s
+     time="2026-11-01T17:57:01Z" level=error msg="thresholds on metrics 'coupon_congested_rate, http_req_duration' have been crossed"
+[02:57:10] 8. 되돌린다
+[02:57:10] 페일오버는 되돌릴 것이 없다  (cache)
+[02:57:10] 복구 완료. ALB 가 대상을 다시 넣기까지 healthy_threshold 만큼 걸린다
+[02:57:10] 9. 재건과 올리기 로그
+  [i-0174dcd33c625403e]
+    {"@timestamp":"2026-11-01T17:56:26.434605496Z","@version":"1","message":"event=COUPON_SEQ_REBUILD_RETRY couponId=907002 attempt=1 reason=QueryTimeoutException","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuildTrigger","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T17:56:28.67875285Z","@version":"1","message":"event=COUPON_SEQ_RESTORED couponId=907002 held=0","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqContributor","thread_name":"coupon-seq-rebuild","level":"INFO","level_value":20000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T17:56:28.683407299Z","@version":"1","message":"event=COUPON_SEQ_RAISED couponId=907002 issued=9737 dbMax=9739 mark=9739 bound=9739 counter=9739 raiseMillis=109 dbMillis=45 seqHashMillis=56 gateMillis=2","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T17:56:28.705872026Z","@version":"1","message":"event=COUPON_SEQ_FREE_WRITTEN couponId=907002 counter=9739 candidates=2 added=0 freeMillis=20","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+  [i-0dae1af3c3a6a5046]
+    {"@timestamp":"2026-11-01T17:56:26.375243226Z","@version":"1","message":"event=COUPON_SEQ_REBUILD_RETRY couponId=907002 attempt=1 reason=QueryTimeoutException","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuildTrigger","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T17:56:29.08993207Z","@version":"1","message":"event=COUPON_SEQ_RESTORED couponId=907002 held=0","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqContributor","thread_name":"coupon-seq-rebuild","level":"INFO","level_value":20000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T17:56:29.094892609Z","@version":"1","message":"event=COUPON_SEQ_RAISED couponId=907002 issued=9737 dbMax=9739 mark=9738 bound=9739 counter=9739 raiseMillis=110 dbMillis=45 seqHashMillis=57 gateMillis=1","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T17:56:29.118271618Z","@version":"1","message":"event=COUPON_SEQ_FREE_WRITTEN couponId=907002 counter=9739 candidates=2 added=0 freeMillis=20","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+  [i-0c1d1abe908ded5e0]
+    {"@timestamp":"2026-11-01T17:56:26.430656416Z","@version":"1","message":"event=COUPON_SEQ_REBUILD_RETRY couponId=907002 attempt=1 reason=QueryTimeoutException","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuildTrigger","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T17:56:28.611281567Z","@version":"1","message":"event=COUPON_SEQ_RESTORED couponId=907002 held=0","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqContributor","thread_name":"coupon-seq-rebuild","level":"INFO","level_value":20000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T17:56:28.615486623Z","@version":"1","message":"event=COUPON_SEQ_RAISED couponId=907002 issued=9726 dbMax=9729 mark=9736 bound=9736 counter=9739 raiseMillis=122 dbMillis=55 seqHashMillis=60 gateMillis=1","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T17:56:28.643320608Z","@version":"1","message":"event=COUPON_SEQ_FREE_WRITTEN couponId=907002 counter=9739 candidates=2 added=0 freeMillis=25","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+  [i-051c119ec849ce089 배치]
+    (없음)
+[02:57:41] 9.5 건수 지표
+[02:57:41] 10. 정합성
+     issued_rows	max_seq	gap	members
+     9998	10000	2	9998
+     
+     
+     --
+       issued_rows = 재고     재고만큼 나갔다
+       gap = 0                번호만 태우고 사라진 요청이 없다
+       members = issued_rows  1인 1매가 지켜졌다
+     
+[02:57:55] 11. 대시보드
+[02:57:56] 1. 터널 13000 -> i-0ac231da1162705bf:3000
+[02:57:56]    열렸다
+[02:57:57] 2. 렌더 1793555720983 ~ 1793555826261
+[02:58:08]    fm-overview  52363 바이트
+[02:58:20]    fm-hosts  112177 바이트
+[02:58:32]    fm-app-jvm  128316 바이트
+[02:58:44]    fm-data-stores  63701 바이트
+[02:58:55]    fm-loadtest  103970 바이트
+[02:58:55] 3. /Users/junseopark/.claude/jobs/d9af3e4b/tmp/work/infra/loadtest-runs/2026-11-01T17-57-57Z_S-2/grafana
+[02:58:55]    성공 5 / 실패 0
+[02:58:55]    받았다
+[02:58:55] ################ S-2 완료 ################

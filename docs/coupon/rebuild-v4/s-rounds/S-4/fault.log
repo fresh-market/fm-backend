@@ -1,0 +1,10 @@
+[04:12:12] 캐시 페일오버  freshmarket-cache  노드그룹 0001
+[04:12:14] 주입 완료: cache-failover
+전용 인스턴스
+  i-0c1d1abe908ded5e0	healthy
+  i-0dae1af3c3a6a5046	healthy
+  i-0174dcd33c625403e	healthy
+주입 중
+  failover|cache
+[04:12:16] 유지 중. 되돌리려면  ./scripts/loadtest-fault.sh restore
+주입 종료 0

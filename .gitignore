@@ -30,6 +30,9 @@ bin/
 
 ### Log ###
 *.log
+# 부하 시험 회차의 원자료는 근거라서 올린다
+!docs/coupon/**/rounds/**/*.log
+!docs/coupon/**/s-rounds/**/*.log
 
 ### 사람마다 다른 값 ###
 # .env.example 은 올린다. 실제 값이 든 .env 는 올리지 않는다

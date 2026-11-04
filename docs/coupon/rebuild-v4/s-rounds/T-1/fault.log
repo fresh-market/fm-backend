@@ -1,0 +1,10 @@
+[14:58:07] 컨테이너 급사(SIGKILL)  i-0b1373d66779dd618  (남는 대수 2)
+[14:58:13] 주입 완료: app
+전용 인스턴스
+  i-0b1373d66779dd618	healthy
+  i-03bc99b2b37a34411	healthy
+  i-045fbb858dff61922	healthy
+주입 중
+  stop|i-0b1373d66779dd618
+[14:58:15] 유지 중. 되돌리려면  ./scripts/loadtest-fault.sh restore
+주입 종료 0

@@ -1,0 +1,9 @@
+BEHIND 와 재건 완주 건수는 지표로 센다. 로그의 tail 한도와 무관하다.
+
+다음을 모니터링 인스턴스에서 돌린다.
+  P=http://localhost:9090/api/v1/query
+  D=110
+  increase(coupon_seq_counter_behind_count[${D}s])
+  increase(coupon_seq_rebuild_duration_seconds_count[${D}s])
+  increase(coupon_seq_rebuild_duration_seconds_sum[${D}s])
+  time=1793557217

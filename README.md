@@ -387,7 +387,9 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 행 1개에 커넥션 풀 크�
 | 구간 | 시간 |
 |---|---|
 | 서버 1대가 재건을 1번 도는 시간 | 77 ~ 197밀리초 |
-| 쿠폰 순번 발급이 멈춰 있는 시간 | 1.23 ~ 1.88초 |
+| 쿠폰 순번 발급이 멈춰 있는 시간 | 안 쟀다 |
+
+**서버 1대의 구간만 직접 쟀다.** 그 수는 `System.nanoTime()` 으로 잰 것이고, 멈춰 있던 시간은 요청 쪽에 센 지표가 없다. 로그로 계산하면 실패한 재시도를 세는지에 따라 1.2초에서 13초까지 갈려서, 팀은 이 값을 수로 적지 않는다.
 
 **멈춰 있는 시간의 절반 이상은 1초짜리 차단 표시가 차지한다.** 서버들이 서로를 안 기다리니 전부 끝났다는 것을 알 길이 없고, 그래서 마지막 서버가 끝난 뒤에도 1초를 더 기다린다. 서로 기다리게 만들면 이 1초를 줄일 수 있지만 1대가 죽었을 때 전체가 멈춘다.
 
@@ -396,26 +398,34 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 행 1개에 커넥션 풀 크�
 장애를 주입해서 계측했다. 부하를 먼저 띄우고 램프가 오르는 중(k6+24초)에 장애를 걸었다.
 재건 설계는 `rebuild-v4` 이고 커밋에 같은 이름의 태그가 달려 있다.
 
-| 장애 | 발급 | 결번(빈 순번) | 초과 발급 | `http` p99 |
-|---|---:|---:|---:|---:|
-| 스프링 서버 1대 비정상 종료 | **10,000** | **0** | 0 | **0.134초** |
-| 캐시 키 전부 소실 | **10,000** | **0** | 0 | 0.536초 |
-| 캐시 Multi-AZ 페일오버 | 9,633 | 5 | 0 | 0.974초 |
-| 스프링 서버 1대 종료 + 캐시 페일오버 | 9,720 | **0** | 0 | 0.570초 |
+| 장애 | 회차 | 발급 | 미확정 번호 | 초과 발급 | `http` p99 |
+|---|---|---:|---:|---:|---:|
+| 스프링 서버 1대 비정상 종료 | T-1 | **10,000** | **0** | 0 | **0.134초** |
+| 캐시 키 전부 소실 | S-1 | **10,000** | **0** | 0 | 0.536초 |
+| 캐시 Multi-AZ 페일오버 | S-4 | 9,642 | 5 | 0 | 0.974초 |
+| 스프링 서버 1대 종료 + 캐시 페일오버 | S-3 | 9,723 | **0** | 0 | 0.570초 |
+
+**발급과 미확정 번호와 초과 발급은 DB 가 낸 수다.** 발급은 `member_coupon` 의 행 수라서,
+재시도해서 "이미 발급" 을 받은 회원도 쿠폰을 쥐었으니 함께 센다. p99 만 k6 요약에서 온다.
 
 **4회차 다 초과 발급 0 이고 1인 1매가 지켜졌다.** DB 의 `uk_mc_coupon_member` 와
-`uk_mc_coupon_seq` 가 마지막 선이라, 재건이 실패해도 결번이 날 뿐 초과 발급은 안 난다.
+`uk_mc_coupon_seq` 가 마지막 선이라, 재건이 실패해도 미확정 번호가 남을 뿐 초과 발급은 안 난다.
 
-**결번은 재고 손실이 아니라 아직 안 걷힌 번호다.** 번호만 받고 사라진 요청의 번호는 기준 시간이
-지나면 서버가 걷어 다음 사람에게 발급한다. 페일오버 회차는 재고 353장을 남기고 부하가 끝나
-소진에 닿지 못했고, 그래서 그 경로가 1번도 안 열렸다.
+**미확정 번호는 재고 손실이 아니라 아직 안 걷힌 번호다.** 번호만 받고 사라진 요청의 번호를
+서버가 번호 회수 기준 시간이 지나면 걷어 다음 사람에게 발급한다. 페일오버 회차에서는 번호가
+9,647번까지 나갔고 그중 5개가 행이 없다. 그 회차는 번호를 아직 353개 남긴 채 부하가 끝나
+소진에 닿지 못했고, 그래서 걷는 경로가 1번도 안 열렸다.
 
 **p99 가 4회차 다 SLO 1초 안이다.** 이 값은 `http_req_duration` 이라 혼잡(503)과 게이트웨이
 실패(502/504)까지 담는다. Redis 를 안 건드리는 서버 1대 종료만 재건이 안 떴고, 나머지 3종은
 각각 재건이 1회씩 떴다.
 
+**캐시 페일오버는 2번 돌렸고 S-2 를 뺐다.** 그 회차는 p99 가 3.18초로 임계를 깼는데, 앞
+회차가 끝난 지 6분 만에 돌려 캐시가 아직 식지 않은 상태였다. S-4 는 51분을 기다렸다. 뺀 근거를
+회차 문서에 적어 두었다.
 
-> 회차별 원본과 주입 시각은 [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md), 대시보드는 [rebuild-v4/rounds/](./docs/coupon/rebuild-v4/rounds/) 에 있다.
+
+> 회차별 원본과 주입 시각은 [rebuild-v4/s-rounds.md](./docs/coupon/rebuild-v4/s-rounds.md), 원자료는 [rebuild-v4/s-rounds/](./docs/coupon/rebuild-v4/s-rounds/) 에 있다. `settled` 로 재던 앞 판은 [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) 에 있다.
 
 > 대체 경로를 새로 만들지 않는다는 원칙은 [failure-response.md](./docs/incident/failure-response.md), 구성 요소별 상세는 [coupon.md 8장](./docs/coupon/coupon.md), 재건 절차는 [redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md), 회로를 어디에 거는지는 [coupon-failure.md](./docs/coupon/coupon-failure.md) 에 있다.
 
@@ -465,7 +475,7 @@ v1 부터 v4 까지 각 3회, 모두 12회차를 돌렸다. 부하는 `ramping-v
 |---|---|---:|---|
 | 초과 발급 | 0건 | **0건** (10,000 / 재고 10,000) | 통과 |
 | 1인 최대 | 1매 | **1매** | 통과 |
-| 결번(`gap`) | 0 | **0** | 통과 |
+| 미확정 번호(`gap`) | 0 | **0** | 통과 |
 | ramp-up | 60초 | **60초** | 통과 |
 | **p99** | 1초 이하 | **0.133초** | 통과 |
 | 나오면 안 되는 응답(500, 502, 504) | 0건 | **0건** | 통과 |
@@ -710,7 +720,7 @@ LLM 은 갈아 끼울 수 있게 두었다. 로컬은 `./verify.sh --agent "code
 | 쿠폰 내부 | [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md) 키 6개, [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md) Lua 4개, [coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) 회수 기준 시간 |
 | 장애 | [failure-response.md](./docs/incident/failure-response.md) 공통, [coupon-failure.md](./docs/coupon/coupon-failure.md) 발급 경로 |
 | 부하 시험 | [coupon-load-scenarios.md](./docs/coupon/coupon-load-scenarios.md) 회차를 왜 그렇게 짰나, [coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) 회차별 값, [warmup.md](./docs/coupon/warmup.md), [virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) |
-| **재건** | [rebuild-v4/design.md](./docs/coupon/rebuild-v4/design.md) 지금 도는 것, [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) `rebuild-v4` 회차, [rebuild-v5/design.md](./docs/coupon/rebuild-v5/design.md) 다음 제안 |
+| **재건** | [rebuild-v4/design.md](./docs/coupon/rebuild-v4/design.md) 지금 도는 것, [rebuild-v4/s-rounds.md](./docs/coupon/rebuild-v4/s-rounds.md) `http` 로 잰 장애 4종, [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) `settled` 로 잰 앞 판, [rebuild-v5/design.md](./docs/coupon/rebuild-v5/design.md) 다음 제안 |
 | 재건 계보 | [rebuild-v1/](./docs/coupon/rebuild-v1/) 9회차, [rebuild-v2/](./docs/coupon/rebuild-v2/), [rebuild-v3/design.md](./docs/coupon/rebuild-v3/design.md), [revert-rejected.md](./docs/coupon/rebuild-v4/revert-rejected.md) |
 | 그 밖 | [verification-guide.md](./docs/verification/verification-guide.md), [loadtest/](./loadtest/), [wiki](https://github.com/fresh-market/fm-backend/wiki), [`fm-infra`](https://github.com/fresh-market/fm-infra) |
 

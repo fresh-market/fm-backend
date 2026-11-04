@@ -1,0 +1,10 @@
+[02:48:01] 키 삭제: coupon:1000000:counter coupon:1000000:seq coupon:1000000:free coupon:1000000:pending coupon:907001:counter coupon:907001:seq coupon:907001:free coupon:907001:pending
+[02:48:06] 주입 완료: cache-wipe
+전용 인스턴스
+  i-0c1d1abe908ded5e0	healthy
+  i-0dae1af3c3a6a5046	healthy
+  i-0174dcd33c625403e	healthy
+주입 중
+  keys|wipe
+[02:48:08] 유지 중. 되돌리려면  ./scripts/loadtest-fault.sh restore
+주입 종료 0
