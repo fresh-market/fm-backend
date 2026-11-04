@@ -1,0 +1,12 @@
+[03:18:53] 컨테이너 급사(SIGKILL)  i-0174dcd33c625403e  (남는 대수 2)
+[03:18:59] 캐시 페일오버  freshmarket-cache  노드그룹 0001
+[03:19:00] 주입 완료: app+cache-failover
+전용 인스턴스
+  i-0c1d1abe908ded5e0	healthy
+  i-0dae1af3c3a6a5046	healthy
+  i-0174dcd33c625403e	healthy
+주입 중
+  stop|i-0174dcd33c625403e
+  failover|cache
+[03:19:02] 유지 중. 되돌리려면  ./scripts/loadtest-fault.sh restore
+주입 종료 0

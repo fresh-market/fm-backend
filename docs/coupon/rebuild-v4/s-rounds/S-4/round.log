@@ -1,0 +1,98 @@
+[04:11:12] ################ S-4 ################
+[04:11:12] 장애: cache-failover
+[04:11:12] 1. 앞 회차 되돌리기
+[04:11:12] 1. 되돌리기
+[04:11:14]    배치 i-051c119ec849ce089 에서 실행 중 (명령 58b5402e-9147-4987-b525-57bc36ab609d)
+-- reset.sql
+coupon_id	total_quantity	issued_quantity	is_active
+900001	10000	0	0
+907001	10000	0	0
+907002	10000	0	0
+907003	10000	0	0
+1000000	1	0	0
+1000001	1000000	1000000	0
+1000002	1000000	1000000	0
+1000003	NULL	1000000	0
+완료
+
+[04:11:27] 완료
+
+reset.sql 이 is_active 를 내린다. 다음 회차 전에 이벤트를 다시 열어야 한다.
+켜져 있으면 여는 API 가 "이미 열렸다" 로 돌아가고 지난 회차 카운터가 그대로 남는다.
+
+[04:11:27] 1. 쿠폰만 다시 붓는다. COUPON_ID=907004
+[04:11:29]    배치 i-051c119ec849ce089 에서 실행 중 (명령 0828a79b-8363-4bdc-8c99-f81a2d9eace6)
+-- seed-coupon.sql
+coupon_id	total_quantity	issued_quantity	is_active	issue_start_at	issue_end_at
+907004	10000	0	0	2026-10-31 19:11:31.730909	2026-11-02 19:11:31.730909
+완료
+
+[04:11:41] 완료
+
+이벤트는 아직 안 열렸다. 앱의 관리자 API 로 열어야 Redis 카운터가 선다.
+
+[04:11:41] 2. 전용 인스턴스
+     i-0174dcd33c625403e
+     i-0dae1af3c3a6a5046
+     i-0c1d1abe908ded5e0
+[04:11:42] 3. 이벤트 열기
+     event:open HTTP 200
+[04:11:47] 4. k6 를 띄운다
+     k6 pid 3490
+[04:11:56] 5. +15초에 주입한다
+[04:12:11]    주입을 걸었다 (cache-failover). 부하와 겹쳐 돈다
+[04:12:11] 6. k6 종료 대기
+[04:13:33]    k6 끝 (확인 5 회)
+[04:13:33] 7. k6 요약을 받는다
+         ✗ 'rate<0.01' rate=85.58%
+         coupon_unexpected
+         ✓ 'count==0' count=0
+         ✓ 'p(99)<1000' p(99)=973.67ms
+         http_req_failed
+         ✓ 'rate<0.01' rate=0.00%
+         coupon_issued..................: 9633   106.826929/s
+         coupon_unexpected..............: 0      0/s
+         http_req_failed................: 0.00%  0 out of 66869
+     rush ✓ [ 100% ] 00000/20000 VUs  1m30s
+     time="2026-11-01T19:13:27Z" level=error msg="thresholds on metrics 'coupon_congested_rate' have been crossed"
+[04:13:37] 8. 되돌린다
+[04:13:37] 페일오버는 되돌릴 것이 없다  (cache)
+[04:13:37] 복구 완료. ALB 가 대상을 다시 넣기까지 healthy_threshold 만큼 걸린다
+[04:13:37] 9. 재건과 올리기 로그
+  [i-0174dcd33c625403e]
+    {"@timestamp":"2026-11-01T19:12:50.361255036Z","@version":"1","message":"event=COUPON_SEQ_RESTORED couponId=907004 held=0","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqContributor","thread_name":"coupon-seq-rebuild","level":"INFO","level_value":20000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T19:12:50.37245987Z","@version":"1","message":"event=COUPON_SEQ_RAISED couponId=907004 issued=6908 dbMax=6916 mark=6426 bound=6916 counter=6979 raiseMillis=189 dbMillis=82 seqHashMillis=93 gateMillis=8","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T19:12:50.404208775Z","@version":"1","message":"event=COUPON_SEQ_FREE_WRITTEN couponId=907004 counter=6979 candidates=5 added=0 freeMillis=26","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+  [i-0dae1af3c3a6a5046]
+    {"@timestamp":"2026-11-01T19:12:55.522847038Z","@version":"1","message":"event=COUPON_SEQ_REBUILD_RETRY couponId=907004 attempt=1 reason=QueryTimeoutException","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuildTrigger","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T19:12:58.733462215Z","@version":"1","message":"event=COUPON_SEQ_REBUILD_RETRY couponId=907004 attempt=2 reason=QueryTimeoutException","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuildTrigger","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T19:13:02.144304275Z","@version":"1","message":"event=COUPON_SEQ_REBUILD_FAILED couponId=907004 attempts=3","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuildTrigger","thread_name":"coupon-seq-rebuild","level":"ERROR","level_value":40000,"stack_trace":"i.l.c.RedisCommandTimeoutException: Command timed out after 3 second(s)\n\tat i.l.core.internal.ExceptionFactory.createTimeoutException(ExceptionFactory.java:63)\n\tat io.lettuce.core.internal.Futures.awaitOrCancel(Futures.java:233)\n\tat io.lettuce.core.LettuceFutures.awaitOrCancel(LettuceFutures.java:59)\n\tat o.s.d.r.c.lettuce.LettuceConnection.await(LettuceConnection.java:1013)\n\t... 18 common frames omitted\nWrapped by: o.s.dao.QueryTimeoutException: Redis command timed out\n\tat o.s.d.r.c.l.LettuceExceptionConverter.convert(LettuceExceptionConverter.java:84)\n\tat o.s.d.r.c.l.LettuceExceptionConverter.convert(LettuceExceptionConverter.java:44)\n\tat o.s.d.r.PassThroughExceptionTranslationStrategy.translate(PassThroughExceptionTranslationStrategy.java:39)\n\tat o.s.d.r.FallbackExceptionTranslationStrategy.translate(FallbackExceptionTranslationStrategy.java:38)\n\tat o.s.d.r.c.lettuce.LettuceConnection.convertLettuceAccessException(LettuceConnection.java:313)\n\tat o.s.d.r.c.lettuce.LettuceConnection.await(LettuceConnection.java:1015)\n\tat o.s.d.r.c.lettuce.LettuceConnection.lambda$doInvoke$2(LettuceConnection.java:450)\n\tat o.s.d.r.c.l.LettuceInvoker$Synchronizer.invoke(LettuceInvoker.java:658)\n\tat o.s.d.r.c.lettuce.LettuceInvoker.just(LettuceInvoker.java:92)\n\tat o.s.d.r.c.l.LettuceStringCommands.get(LettuceStringCommands.java:58)\n\tat o.s.d.r.c.DefaultedRedisConnection.get(DefaultedRedisConnection.java:317)\n\tat o.s.d.r.c.AbstractOperations$FunctionalValueDeserializingRedisCallback.inRedis(AbstractOperations.java:83)\n\tat o.s.d.r.c.AbstractOperations$ValueDeserializingRedisCallback.doInRedis(AbstractOperations.java:66)\n\tat o.s.data.redis.core.RedisTemplate.execute(RedisTemplate.java:414)\n\tat o.s.data.redis.core.RedisTemplate.execute(RedisTemplate.java:381)\n\tat o.s.d.redis.core.AbstractOperations.execute(AbstractOperations.java:166)\n\tat o.s.d.r.core.DefaultValueOperations.get(DefaultValueOperations.java:51)\n\tat c.f.c.i.redis.CouponSeqRebuilder.reprepared(CouponSeqRebuilder.java:455)\n\tat c.f.c.i.redis.CouponSeqRebuilder.rebuild(CouponSeqRebuilder.java:174)\n\tat c.f.c.i.r.CouponSeqRebuildTrigger.rebuildWithRetry(CouponSeqRebuildTrigger.java:225)\n\tat c.f.c.i.r.CouponSeqRebuildTrigger.lambda$suspect$1(CouponSeqRebuildTrigger.java:181)\n\tat j.util.concurrent.ThreadPoolExecutor.runWorker(Unknown Source)\n\tat j.u.c.ThreadPoolExecutor$Worker.run(Unknown Source)\n\tat java.lang.Thread.run(Unknown Source)\n","service":"freshmarket"}
+  [i-0c1d1abe908ded5e0]
+    {"@timestamp":"2026-11-01T19:12:52.470704174Z","@version":"1","message":"event=COUPON_SEQ_RESTORED couponId=907004 held=0","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqContributor","thread_name":"coupon-seq-rebuild","level":"INFO","level_value":20000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T19:12:52.474960802Z","@version":"1","message":"event=COUPON_SEQ_RAISED couponId=907004 issued=7825 dbMax=7834 mark=7834 bound=7834 counter=7835 raiseMillis=80 dbMillis=30 seqHashMillis=42 gateMillis=1","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+  [i-051c119ec849ce089 배치]
+    (없음)
+[04:14:08] 9.5 건수 지표
+[04:14:08] 10. 정합성
+     issued_rows	max_seq	gap	members
+     9642	9647	5	9642
+     
+     
+     --
+       issued_rows = 재고     재고만큼 나갔다
+       gap = 0                번호만 태우고 사라진 요청이 없다
+       members = issued_rows  1인 1매가 지켜졌다
+     
+[04:14:22] 11. 대시보드
+[04:14:23] 1. 터널 13000 -> i-0ac231da1162705bf:3000
+[04:14:25]    열렸다
+[04:14:26] 2. 렌더 1793560307056 ~ 1793560413270
+[04:14:38]    fm-overview  52901 바이트
+[04:14:50]    fm-hosts  103403 바이트
+[04:15:02]    fm-app-jvm  122940 바이트
+[04:15:13]    fm-data-stores  64673 바이트
+[04:15:24]    fm-loadtest  96042 바이트
+[04:15:24] 3. /Users/junseopark/.claude/jobs/d9af3e4b/tmp/work/infra/loadtest-runs/2026-11-01T19-14-26Z_S-4/grafana
+[04:15:24]    성공 5 / 실패 0
+[04:15:24]    받았다
+[04:15:24] ################ S-4 완료 ################

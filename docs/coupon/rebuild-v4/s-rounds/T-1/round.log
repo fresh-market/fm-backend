@@ -1,0 +1,106 @@
+[14:56:57] ################ T-1 ################
+[14:56:57] 장애: app
+[14:56:57] 1. 앞 회차 되돌리기
+[14:56:57] 1. 되돌리기
+[14:57:00]    배치 i-0f15531ed9f3c55d4 에서 실행 중 (명령 6599ebc8-b52b-4574-bc7f-367d92e2e623)
+-- reset.sql
+coupon_id	total_quantity	issued_quantity	is_active
+900001	10000	0	0
+1000000	1	0	0
+1000001	1000000	1000000	0
+1000002	1000000	1000000	0
+1000003	NULL	1000000	0
+완료
+
+[14:57:13] 완료
+
+reset.sql 이 is_active 를 내린다. 다음 회차 전에 이벤트를 다시 열어야 한다.
+켜져 있으면 여는 API 가 "이미 열렸다" 로 돌아가고 지난 회차 카운터가 그대로 남는다.
+
+[14:57:13] 1. 쿠폰만 다시 붓는다. COUPON_ID=908001
+[14:57:16]    배치 i-0f15531ed9f3c55d4 에서 실행 중 (명령 ec3023de-5088-474f-baed-4bd0f79a8727)
+-- seed-coupon.sql
+coupon_id	total_quantity	issued_quantity	is_active	issue_start_at	issue_end_at
+908001	10000	0	0	2026-11-01 05:57:18.572442	2026-11-03 05:57:18.572442
+완료
+
+[14:57:30] 완료
+
+이벤트는 아직 안 열렸다. 앱의 관리자 API 로 열어야 Redis 카운터가 선다.
+
+[14:57:30] 2. 전용 인스턴스
+     i-0b1373d66779dd618
+     i-03bc99b2b37a34411
+     i-045fbb858dff61922
+[14:57:31] 3. 이벤트 열기
+     event:open HTTP 200
+[14:57:41] 4. k6 를 띄운다
+     k6 pid 2824
+[14:57:51] 5. +15초에 주입한다
+[14:58:06]    주입을 걸었다 (app). 부하와 겹쳐 돈다
+[14:58:06] 6. k6 종료 대기
+[14:59:35]    k6 끝 (확인 5 회)
+[14:59:35] 7. k6 요약을 받는다
+         ✓ 'rate<0.01' rate=0.00%
+         coupon_unexpected
+         ✓ 'count==0' count=0
+         ✓ 'p(99)<1000' p(99)=134.35ms
+         http_req_failed
+         ✗ 'rate<0.01' rate=25.23%
+         coupon_issued..................: 9996   110.854879/s
+         coupon_unexpected..............: 0      0/s
+         http_req_failed................: 25.23% 6734 out of 26684
+     rush ✓ [ 100% ] 00000/20000 VUs  1m30s
+     time="2026-11-02T05:59:20Z" level=error msg="thresholds on metrics 'http_req_failed' have been crossed"
+[14:59:40] 8. 되돌린다
+[14:59:41] 인스턴스 기동  i-0b1373d66779dd618
+[14:59:45] 복구 완료. ALB 가 대상을 다시 넣기까지 healthy_threshold 만큼 걸린다
+[14:59:45] 9. 재건과 올리기 로그
+  [i-0b1373d66779dd618]
+    (없음)
+  [i-03bc99b2b37a34411]
+    (없음)
+  [i-045fbb858dff61922]
+    (없음)
+  [i-0f15531ed9f3c55d4 배치]
+    (없음)
+[15:00:08] 9.5 건수 지표
+[15:00:08] 10. 정합성
+     issued_rows	max_seq	gap	members
+     10000	10000	0	10000
+     
+     
+     --
+       issued_rows = 재고     재고만큼 나갔다
+       gap = 0                번호만 태우고 사라진 요청이 없다
+       members = issued_rows  1인 1매가 지켜졌다
+     
+[15:00:23] 11. 대시보드
+[15:00:25] 1. 터널 13000 -> i-0421c448c2cb1971a:3000
+[15:00:25]    열렸다
+[15:00:26] 2. 렌더 1793599061157 ~ 1793599175657
+[15:00:26]    fm-overview  실패 (HTTP 302)
+<a href="/login?redirectTo=%2Frender%2Fd%2Ffm-overview%2Fx%3ForgId%3D1%26from%3D1793599061157%26to%3D1793599175657%26width%3D1600%26height%3D900%26kiosk%26tz%3DAsia%252FSeoul%26timeout%3D120">Found</a>.
+
+
+[15:00:26]    fm-hosts  실패 (HTTP 302)
+<a href="/login?redirectTo=%2Frender%2Fd%2Ffm-hosts%2Fx%3ForgId%3D1%26from%3D1793599061157%26to%3D1793599175657%26width%3D1600%26height%3D900%26kiosk%26tz%3DAsia%252FSeoul%26timeout%3D120">Found</a>.
+
+
+[15:00:26]    fm-app-jvm  실패 (HTTP 302)
+<a href="/login?redirectTo=%2Frender%2Fd%2Ffm-app-jvm%2Fx%3ForgId%3D1%26from%3D1793599061157%26to%3D1793599175657%26width%3D1600%26height%3D900%26kiosk%26tz%3DAsia%252FSeoul%26timeout%3D120">Found</a>.
+
+
+[15:00:26]    fm-data-stores  실패 (HTTP 302)
+<a href="/login?redirectTo=%2Frender%2Fd%2Ffm-data-stores%2Fx%3ForgId%3D1%26from%3D1793599061157%26to%3D1793599175657%26width%3D1600%26height%3D900%26kiosk%26tz%3DAsia%252FSeoul%26timeout%3D120">Found</a>.
+
+
+[15:00:26]    fm-loadtest  실패 (HTTP 302)
+<a href="/login?redirectTo=%2Frender%2Fd%2Ffm-loadtest%2Fx%3ForgId%3D1%26from%3D1793599061157%26to%3D1793599175657%26width%3D1600%26height%3D900%26kiosk%26tz%3DAsia%252FSeoul%26timeout%3D120">Found</a>.
+
+
+[15:00:26] 3. /Users/junseopark/.claude/jobs/d9af3e4b/tmp/work/infra/loadtest-runs/2026-11-02T06-00-26Z_T-1/grafana
+[15:00:26]    성공 0 / 실패 5
+ERROR: 5 장이 안 나왔다. renderer 컨테이너가 떠 있는지 보라 (docker ps)
+[15:00:26]    실패. round.log 를 봐라
+[15:00:26] ################ T-1 완료 ################

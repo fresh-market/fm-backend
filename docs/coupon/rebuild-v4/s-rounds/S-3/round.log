@@ -1,0 +1,99 @@
+[03:17:51] ################ S-3 ################
+[03:17:51] 장애: app+cache-failover
+[03:17:51] 1. 앞 회차 되돌리기
+[03:17:51] 1. 되돌리기
+[03:17:53]    배치 i-051c119ec849ce089 에서 실행 중 (명령 faff9cc7-8297-4fb2-94fc-4fc5dfc57fff)
+-- reset.sql
+coupon_id	total_quantity	issued_quantity	is_active
+900001	10000	0	0
+907001	10000	0	0
+907002	10000	0	0
+1000000	1	0	0
+1000001	1000000	1000000	0
+1000002	1000000	1000000	0
+1000003	NULL	1000000	0
+완료
+
+[03:18:06] 완료
+
+reset.sql 이 is_active 를 내린다. 다음 회차 전에 이벤트를 다시 열어야 한다.
+켜져 있으면 여는 API 가 "이미 열렸다" 로 돌아가고 지난 회차 카운터가 그대로 남는다.
+
+[03:18:06] 1. 쿠폰만 다시 붓는다. COUPON_ID=907003
+[03:18:08]    배치 i-051c119ec849ce089 에서 실행 중 (명령 41d12d17-738d-430e-8beb-ff0274cb3112)
+-- seed-coupon.sql
+coupon_id	total_quantity	issued_quantity	is_active	issue_start_at	issue_end_at
+907003	10000	0	0	2026-10-31 18:18:10.845187	2026-11-02 18:18:10.845187
+완료
+
+[03:18:21] 완료
+
+이벤트는 아직 안 열렸다. 앱의 관리자 API 로 열어야 Redis 카운터가 선다.
+
+[03:18:21] 2. 전용 인스턴스
+     i-0174dcd33c625403e
+     i-0dae1af3c3a6a5046
+     i-0c1d1abe908ded5e0
+[03:18:22] 3. 이벤트 열기
+     event:open HTTP 200
+[03:18:27] 4. k6 를 띄운다
+     k6 pid 3271
+[03:18:36] 5. +15초에 주입한다
+[03:18:51]    주입을 걸었다 (app+cache-failover). 부하와 겹쳐 돈다
+[03:18:51] 6. k6 종료 대기
+[03:20:17]    k6 끝 (확인 5 회)
+[03:20:17] 7. k6 요약을 받는다
+         ✗ 'rate<0.01' rate=54.87%
+         coupon_unexpected
+         ✓ 'count==0' count=0
+         ✓ 'p(99)<1000' p(99)=569.75ms
+         http_req_failed
+         ✗ 'rate<0.01' rate=30.31%
+         coupon_issued..................: 9720   106.760442/s
+         coupon_unexpected..............: 0      0/s
+         http_req_failed................: 30.31% 19908 out of 65662
+     rush ✓ [ 100% ] 00000/20000 VUs  1m30s
+     time="2026-11-01T18:20:07Z" level=error msg="thresholds on metrics 'coupon_congested_rate, http_req_failed' have been crossed"
+[03:20:21] 8. 되돌린다
+[03:20:22] 인스턴스 기동  i-0174dcd33c625403e
+[03:20:27] 페일오버는 되돌릴 것이 없다  (cache)
+[03:20:27] 복구 완료. ALB 가 대상을 다시 넣기까지 healthy_threshold 만큼 걸린다
+[03:20:27] 9. 재건과 올리기 로그
+  [i-0174dcd33c625403e]
+    (없음)
+  [i-0dae1af3c3a6a5046]
+    {"@timestamp":"2026-11-01T18:19:38.872266643Z","@version":"1","message":"event=COUPON_SEQ_REBUILD_RETRY couponId=907003 attempt=1 reason=QueryTimeoutException","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuildTrigger","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T18:19:41.584812139Z","@version":"1","message":"event=COUPON_SEQ_RESTORED couponId=907003 held=0","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqContributor","thread_name":"coupon-seq-rebuild","level":"INFO","level_value":20000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T18:19:41.58950756Z","@version":"1","message":"event=COUPON_SEQ_RAISED couponId=907003 issued=9723 dbMax=9723 mark=9723 bound=9723 counter=9723 raiseMillis=111 dbMillis=68 seqHashMillis=36 gateMillis=2","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T18:19:41.59489164Z","@version":"1","message":"event=COUPON_SEQ_FREE_NONE couponId=907003 counter=9723","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"INFO","level_value":20000,"service":"freshmarket"}
+  [i-0c1d1abe908ded5e0]
+    {"@timestamp":"2026-11-01T18:19:38.810963424Z","@version":"1","message":"event=COUPON_SEQ_REBUILD_RETRY couponId=907003 attempt=1 reason=QueryTimeoutException","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuildTrigger","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T18:19:41.664227148Z","@version":"1","message":"event=COUPON_SEQ_RESTORED couponId=907003 held=0","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqContributor","thread_name":"coupon-seq-rebuild","level":"INFO","level_value":20000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T18:19:41.667316432Z","@version":"1","message":"event=COUPON_SEQ_RAISED couponId=907003 issued=9723 dbMax=9723 mark=9722 bound=9723 counter=9723 raiseMillis=77 dbMillis=38 seqHashMillis=33 gateMillis=0","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"WARN","level_value":30000,"service":"freshmarket"}
+    {"@timestamp":"2026-11-01T18:19:41.67196134Z","@version":"1","message":"event=COUPON_SEQ_FREE_NONE couponId=907003 counter=9723","logger_name":"com.freshmarket.coupon.internal.redis.CouponSeqRebuilder","thread_name":"coupon-seq-rebuild","level":"INFO","level_value":20000,"service":"freshmarket"}
+  [i-051c119ec849ce089 배치]
+    (없음)
+[03:21:00] 9.5 건수 지표
+[03:21:00] 10. 정합성
+     issued_rows	max_seq	gap	members
+     9723	9723	0	9723
+     
+     
+     --
+       issued_rows = 재고     재고만큼 나갔다
+       gap = 0                번호만 태우고 사라진 요청이 없다
+       members = issued_rows  1인 1매가 지켜졌다
+     
+[03:21:15] 11. 대시보드
+[03:21:16] 1. 터널 13000 -> i-0ac231da1162705bf:3000
+[03:21:16]    열렸다
+[03:21:17] 2. 렌더 1793557107062 ~ 1793557217083
+[03:21:30]    fm-overview  52465 바이트
+[03:21:40]    fm-hosts  105412 바이트
+[03:21:50]    fm-app-jvm  122266 바이트
+[03:22:02]    fm-data-stores  63308 바이트
+[03:22:13]    fm-loadtest  108950 바이트
+[03:22:13] 3. /Users/junseopark/.claude/jobs/d9af3e4b/tmp/work/infra/loadtest-runs/2026-11-01T18-21-17Z_S-3/grafana
+[03:22:13]    성공 5 / 실패 0
+[03:22:13]    받았다
+[03:22:13] ################ S-3 완료 ################
