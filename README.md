@@ -425,7 +425,7 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 행 1개에 커넥션 풀 크�
 회차 문서에 적어 두었다.
 
 
-> 회차별 원본과 주입 시각은 [rebuild-v4/s-rounds.md](./docs/coupon/rebuild-v4/s-rounds.md), 원자료는 [rebuild-v4/s-rounds/](./docs/coupon/rebuild-v4/s-rounds/) 에 있다. `settled` 로 재던 앞 판은 [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) 에 있다.
+> 회차별 원본과 주입 시각은 [rebuild-v4/s-rounds.md](./docs/coupon/rebuild-v4/s-rounds.md), 원자료는 [rebuild-v4/s-rounds/](./docs/coupon/rebuild-v4/s-rounds/) 에 있다. `http` p99 가 없는 앞 판은 [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) 에 있다.
 
 > 대체 경로를 새로 만들지 않는다는 원칙은 [failure-response.md](./docs/incident/failure-response.md), 구성 요소별 상세는 [coupon.md 8장](./docs/coupon/coupon.md), 재건 절차는 [redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md), 회로를 어디에 거는지는 [coupon-failure.md](./docs/coupon/coupon-failure.md) 에 있다.
 
@@ -720,7 +720,7 @@ LLM 은 갈아 끼울 수 있게 두었다. 로컬은 `./verify.sh --agent "code
 | 쿠폰 내부 | [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md) 키 6개, [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md) Lua 4개, [coupon-reclaim-after.md](./docs/coupon/coupon-reclaim-after.md) 회수 기준 시간 |
 | 장애 | [failure-response.md](./docs/incident/failure-response.md) 공통, [coupon-failure.md](./docs/coupon/coupon-failure.md) 발급 경로 |
 | 부하 시험 | [coupon-load-scenarios.md](./docs/coupon/coupon-load-scenarios.md) 회차를 왜 그렇게 짰나, [coupon-load-rounds.md](./docs/coupon/coupon-load-rounds.md) 회차별 값, [warmup.md](./docs/coupon/warmup.md), [virtual-thread-measurement.md](./docs/coupon/virtual-thread-measurement.md) |
-| **재건** | [rebuild-v4/design.md](./docs/coupon/rebuild-v4/design.md) 지금 도는 것, [rebuild-v4/s-rounds.md](./docs/coupon/rebuild-v4/s-rounds.md) `http` 로 잰 장애 4종, [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) `settled` 로 잰 앞 판, [rebuild-v5/design.md](./docs/coupon/rebuild-v5/design.md) 다음 제안 |
+| **재건** | [rebuild-v4/design.md](./docs/coupon/rebuild-v4/design.md) 지금 도는 것, [rebuild-v4/s-rounds.md](./docs/coupon/rebuild-v4/s-rounds.md) `http` 로 잰 장애 4종, [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) 앞 판, [rebuild-v5/design.md](./docs/coupon/rebuild-v5/design.md) 다음 제안 |
 | 재건 계보 | [rebuild-v1/](./docs/coupon/rebuild-v1/) 9회차, [rebuild-v2/](./docs/coupon/rebuild-v2/), [rebuild-v3/design.md](./docs/coupon/rebuild-v3/design.md), [revert-rejected.md](./docs/coupon/rebuild-v4/revert-rejected.md) |
 | 그 밖 | [verification-guide.md](./docs/verification/verification-guide.md), [loadtest/](./loadtest/), [wiki](https://github.com/fresh-market/fm-backend/wiki), [`fm-infra`](https://github.com/fresh-market/fm-infra) |
 
