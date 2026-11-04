@@ -158,8 +158,8 @@ export const options = {
      * "혼잡이 섞이면 빨리 거절해서 p99 를 좋게 만들 수 있다" 는 아래 coupon_congested_rate
      * 가 막는다. 혼잡을 1% 아래로 묶어 두면 그 길이 없다.
      *
-     * 이 자리에 coupon_settled_duration 을 걸었다가 되돌린 계보는
-     * docs/coupon/coupon-load-scenarios.md 에 있다.
+     * 이 자리에 다른 지표를 걸었다가 되돌린 계보는
+     * docs/coupon/coupon-load-scenarios.md 12장에 있다.
      */
     http_req_duration: ['p(99)<1000'],
     /*
