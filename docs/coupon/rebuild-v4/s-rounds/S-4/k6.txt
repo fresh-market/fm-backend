@@ -1,0 +1,80 @@
+running (1m20.3s), 20000/20000 VUs, 66869 complete and 0 interrupted iterations
+rush   [  89% ] 20000/20000 VUs  1m20.3s/1m30.0s
+
+running (1m21.3s), 20000/20000 VUs, 66869 complete and 0 interrupted iterations
+rush   [  90% ] 20000/20000 VUs  1m21.3s/1m30.0s
+
+running (1m22.3s), 20000/20000 VUs, 66869 complete and 0 interrupted iterations
+rush   [  91% ] 20000/20000 VUs  1m22.3s/1m30.0s
+
+running (1m23.3s), 20000/20000 VUs, 66869 complete and 0 interrupted iterations
+rush   [  93% ] 20000/20000 VUs  1m23.3s/1m30.0s
+
+running (1m24.3s), 20000/20000 VUs, 66869 complete and 0 interrupted iterations
+rush   [  94% ] 20000/20000 VUs  1m24.3s/1m30.0s
+
+running (1m25.3s), 20000/20000 VUs, 66869 complete and 0 interrupted iterations
+rush   [  95% ] 20000/20000 VUs  1m25.3s/1m30.0s
+
+running (1m26.3s), 20000/20000 VUs, 66869 complete and 0 interrupted iterations
+rush   [  96% ] 20000/20000 VUs  1m26.3s/1m30.0s
+
+running (1m27.3s), 20000/20000 VUs, 66869 complete and 0 interrupted iterations
+rush   [  97% ] 20000/20000 VUs  1m27.3s/1m30.0s
+
+running (1m28.3s), 20000/20000 VUs, 66869 complete and 0 interrupted iterations
+rush   [  98% ] 20000/20000 VUs  1m28.3s/1m30.0s
+
+running (1m29.3s), 20000/20000 VUs, 66869 complete and 0 interrupted iterations
+rush   [  99% ] 20000/20000 VUs  1m29.3s/1m30.0s
+
+
+  █ THRESHOLDS 
+
+    coupon_congested_rate
+    ✗ 'rate<0.01' rate=85.58%
+
+    coupon_unexpected
+    ✓ 'count==0' count=0
+
+    http_req_duration
+    ✓ 'p(99)<1000' p(99)=973.67ms
+
+    http_req_failed
+    ✓ 'rate<0.01' rate=0.00%
+
+
+  █ TOTAL RESULTS 
+
+    CUSTOM
+    coupon_already_issued..........: 9      0.099807/s
+    coupon_congested...............: 57227  634.629363/s
+    coupon_congested_rate..........: 85.58% 57227 out of 66869
+    coupon_gave_up.................: 10358  114.86695/s
+    coupon_issued..................: 9633   106.826929/s
+    coupon_retried.................: 46869  519.762413/s
+    coupon_settled_duration........: avg=66.31ms  min=15.84ms med=43.16ms  max=825.06ms p(90)=91.54ms  p(95)=239.11ms
+    coupon_unexpected..............: 0      0/s
+
+    HTTP
+    http_req_duration..............: avg=211.71ms min=3.45ms  med=206.89ms max=1.39s    p(90)=250.71ms p(95)=310.83ms
+      { expected_response:true }...: avg=211.71ms min=3.45ms  med=206.89ms max=1.39s    p(90)=250.71ms p(95)=310.83ms
+    http_req_failed................: 0.00%  0 out of 66869
+    http_reqs......................: 66869  741.556099/s
+
+    EXECUTION
+    iteration_duration.............: avg=13.83s   min=3.63ms  med=1.2s     max=1m30s    p(90)=58.56s   p(95)=1m17s   
+    iterations.....................: 86869  963.349784/s
+    vus............................: 20000  min=0              max=20000
+    vus_max........................: 20000  min=2497           max=20000
+
+    NETWORK
+    data_received..................: 38 MB  418 kB/s
+    data_sent......................: 24 MB  268 kB/s
+
+
+
+
+running (1m30.2s), 00000/20000 VUs, 86869 complete and 0 interrupted iterations
+rush ✓ [ 100% ] 00000/20000 VUs  1m30s
+time="2026-11-01T19:13:27Z" level=error msg="thresholds on metrics 'coupon_congested_rate' have been crossed"

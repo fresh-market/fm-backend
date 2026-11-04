@@ -1,0 +1,11 @@
+[15:00:09] 1. 발급 결과
+[15:00:10]    배치 i-0f15531ed9f3c55d4 에서 실행 중 (명령 3137b9ac-2b2b-4a70-a5e0-dae7a60811cc)
+issued_rows	max_seq	gap	members
+10000	10000	0	10000
+
+
+읽는 법
+  issued_rows = 재고     재고만큼 나갔다
+  gap = 0                번호만 태우고 사라진 요청이 없다
+  members = issued_rows  1인 1매가 지켜졌다
+
