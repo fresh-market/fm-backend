@@ -113,11 +113,15 @@ public class CouponSeqRebuilder {
         /*
          * A 단계가 발급을 재개하는 데 걸린 시간이다.
          *
-         * 이것은 정지 시간이 아니다. 예전에는 재건이 락으로 발급을 막았으므로 그 값이 곧 정지였고
-         * 0.244 ~ 1.287초였다. 지금은 막는 것이 없어 이름을 정지가 아니라 소요로 읽어야 한다.
+         * 이 값이 곧 정지 시간은 아니다. 막는 주체가 바뀌었다. 예전에는 재건 락이 있으면 발급
+         * 스크립트가 통째로 멈췄으므로 락 TTL 30초가 곧 정지였고 0.244 ~ 1.287초로 쟀다.
+         * 지금은 락이 아니라 raising 키가 막고 시한이 1초다.
+         *
+         * 그래서 정지는 이 값보다 길다. 서버들이 벌어져 시작한 간격에 마지막 서버의 이 값을
+         * 더하고 거기에 차단 1초가 붙는다 (docs/coupon/rebuild-v4/design.md 5장).
          */
         this.raiseDuration = Timer.builder("coupon.seq.rebuild.raise")
-                .description("카운터를 올리고 자기 큐를 되살린 시간. 발급을 막지 않는다")
+                .description("카운터를 올리고 자기 큐를 되살린 시간. 이 동안 순번 발급이 막혀 있다")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
         this.freeDuration = Timer.builder("coupon.seq.rebuild.free")
