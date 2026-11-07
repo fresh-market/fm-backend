@@ -336,11 +336,11 @@ public class CouponSeqRebuilder {
         if (issued.isEmpty()) {
             return;
         }
-        Map<String, String> fields = new LinkedHashMap<>(issued.size());
+        Map<String, String> fields = LinkedHashMap.newLinkedHashMap(issued.size());
         for (IssuedSeq row : issued) {
             fields.put(String.valueOf(row.memberId()), row.issueSeq() + COMMITTED_SUFFIX);
         }
-        Map<String, String> chunk = new HashMap<>(CHUNK);
+        Map<String, String> chunk = HashMap.newHashMap(CHUNK);
         String key = CouponSeqKeys.seq(couponId);
         for (Map.Entry<String, String> entry : fields.entrySet()) {
             chunk.put(entry.getKey(), entry.getValue());
