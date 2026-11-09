@@ -32,23 +32,20 @@ final class CouponSeqKeys {
     }
 
     /*
-     * 재건이 잡는 락이다. 넷과 함께 죽지 않으므로 위와 성격이 다르다.
+     * B 단계가 여기까지 훑었다고 남기는 표시다. 담는 값은 그때 살펴본 가장 큰 순번이다.
      *
-     * 이 락은 선출에만 쓴다. 여러 대가 같은 DB 읽기와 같은 계산을 중복하지 않게 하는 값이고
-     * 발급을 막지 않는다 (docs/coupon/rebuild-v2/design.md 4.2).
+     * 올라가기만 한다. 그래서 서버들이 어떤 순서로 들어와도 뒤에 온 대가 그 위만 보면 되고,
+     * 합의도 기다림도 안 든다. 사라지면 다음 대가 전부 훑으므로 최악이 표시가 없던 때와 같다.
      */
-    static String rebuild(long couponId) {
-        return PREFIX + couponId + ":rebuild";
+    static String swept(long couponId) {
+        return PREFIX + couponId + ":free-swept";
     }
 
     /*
      * 재건이 도는 동안 서 있는 발급 차단 표시다. 순번 확보가 이것을 보면 번호를 안 내준다.
      *
-     * 위 rebuild 락과 수명도 뜻도 다르다. 저쪽은 선출이라 30초를 살고 토큰이 맞는 대만 풀지만,
-     * 이쪽은 차단이라 짧게 살고 아무도 안 푼다. 시간이 푼다.
-     *
-     * 한 키로 겸하면 선출이 끝날 때까지 발급이 막혀 있게 되고, 그것이 main 의 모양이다
-     * (docs/coupon/rebuild-v3/design.md 5장).
+     * 차단이라 짧게 살고 아무도 안 푼다. 시간이 푼다. 푸는 이를 두면 먼저 끝낸 대가 아직
+     * 하는 대의 차단까지 풀고, 세운 대가 죽으면 아무도 안 푼다.
      */
     static String raising(long couponId) {
         return PREFIX + couponId + ":raising";
