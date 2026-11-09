@@ -17,8 +17,9 @@ end
 --
 -- 확정 표시가 붙은 것도 쥔 것이다. 그쪽은 DB 행이 있어 후보에 안 들어오지만, 재건이 방금
 -- 세운 직후처럼 양쪽이 어긋나는 순간이 있으므로 표시를 떼고 본다.
+-- 후보가 없으면 가릴 것도 없다. 표시만 올리러 온 호출이 전수 읽기를 치지 않게 한다
 local held = {}
-local flat = redis.call('HGETALL', KEYS[1])
+local flat = #ARGV > 1 and redis.call('HGETALL', KEYS[1]) or {}
 for i = 2, #flat, 2 do
   local value = flat[i]
   local colon = string.find(value, ':')
