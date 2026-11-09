@@ -30,10 +30,8 @@ import org.springframework.stereotype.Component;
  * Redis 가 이벤트의 키를 잃었거나 승격으로 값이 뒤로 갔을 때 다시 세운다. 설계 근거는
  * {@code docs/coupon/rebuild-v4/design.md} 에 있다.
  *
- * <p><b>순번 발급은 멈춘다. 다만 멈추는 주체가 락이 아니다.</b> {@code rebuild-v1} 에서는 재건
- * 락이 있는 동안 순번 확보가 {@code -2} 를 냈고, 락을 잡은 서버가 죽으면 그 TTL 30초 동안 멈췄다.
- * 지금은 {@code raising} 키가 시한 1초로 막고 아무도 안 푼다. 세운 서버가 죽어도 시간이 푼다
- * (docs/coupon/rebuild-v4/design.md 6장).
+ * <p><b>순번 발급은 멈춘다.</b> {@code raising} 키가 시한 1초로 막고 아무도 안 푼다. 세운
+ * 서버가 죽어도 시간이 푼다 (docs/coupon/rebuild-v4/design.md 6장).
  *
  * <p><b>플러시도 멈추지 않는다.</b> 멈춤이 필요했던 까닭은 기여자가 확정 표시를 덮기 때문이었고,
  * 쓰기를 "없을 때만" 으로 바꾸어 그 덮어쓰기를 구조적으로 없앴다.
@@ -44,8 +42,8 @@ import org.springframework.stereotype.Component;
  * <p>두 단계로 나뉜다.
  *
  * <pre>
- * A  깨어난 각 서버가 자기 큐를 되살리고 카운터를 올린다. 락도 기다림도 없다
- * B  락을 잡은 서버가 free 를 세운다. 락은 동시 중복만 막고 발급을 안 막는다
+ * A  깨어난 각 서버가 자기 큐를 되살리고 카운터를 올린다. 기다림이 없다
+ * B  버려진 번호를 free 로 되돌린다. 이미 훑은 구간은 건너뛰고 발급을 안 막는다
  * </pre>
  *
  * <p><b>A 가 끝나도 바로 안 돈다.</b> 카운터를 세우는 것이 발급을 재개하는 동작이지만, 그 뒤에
@@ -117,7 +115,7 @@ public class CouponSeqRebuilder {
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
         this.freeDuration = Timer.builder("coupon.seq.rebuild.free")
-                .description("주인 잃은 번호를 골라 free 에 넣은 시간. 발급을 막지 않는다")
+                .description("버려진 번호를 골라 free 에 넣은 시간. 발급을 막지 않는다")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
         /*
@@ -273,7 +271,7 @@ public class CouponSeqRebuilder {
     }
 
     /**
-     * B 단계다. 주인을 잃은 번호를 {@code free} 로 되돌린다.
+     * B 단계다. 버려진 번호를 {@code free} 로 되돌린다.
      *
      * <p><b>이미 훑은 구간은 건너뛴다.</b> {@code free-swept} 가 "여기까지 살펴봤다" 를 들고
      * 있으므로 뒤에 온 서버는 그 위만 본다. 그 표시가 올라가기만 해서 순서를 안 따져도 되고,
@@ -283,7 +281,7 @@ public class CouponSeqRebuilder {
      * 남에게 내준다. 카운터는 번호가 나갈 때마다 하나씩 오르므로 그 차이가 "그 뒤로 몇 개가 더
      * 나갔나" 이고, 아직 A 단계를 못 한 대의 티켓도 그 조건이 덮는다.
      *
-     * <p><b>쥔 번호는 스크립트가 가린다.</b> {@code seq} 해시를 통째로 읽어 값으로 쓰인 번호를
+     * <p><b>쓰이는 번호는 스크립트가 가린다.</b> {@code seq} 해시를 통째로 읽어 값으로 쓰인 번호를
      * 건너뛴다. 그 비교와 쓰기가 한 스크립트에 있어야 발급을 멈추지 않아도 안전하다.
      *
      * <p><b>발급을 한 번도 안 막는다.</b> A 단계가 카운터를 세운 뒤에 돌고, 그 카운터가 이

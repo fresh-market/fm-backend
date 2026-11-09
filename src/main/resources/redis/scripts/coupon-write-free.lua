@@ -1,4 +1,4 @@
--- 주인을 잃은 번호를 재고로 되돌린다. docs/coupon/rebuild-v4/design.md 5장이 근거다.
+-- 버려진 번호를 재고로 되돌린다. docs/coupon/rebuild-v4/design.md 5장이 근거다.
 -- KEYS[1]=seq(해시)  KEYS[2]=free(정렬집합)  KEYS[3]=counter(문자열)  KEYS[4]=free-swept(문자열)
 -- ARGV[1]=이번에 훑은 가장 큰 순번. 0 이면 아직 덩이가 남아 표시를 안 올린다
 -- ARGV[2..n]=되살릴 후보 번호. 재건이 DB 로 걸러 넘긴다
@@ -10,7 +10,7 @@ if counter == false then
   return 0
 end
 
--- 누가 쥔 번호인지는 이 해시의 값으로만 안다.
+-- 쓰이고 있는 번호인지는 이 해시의 값으로만 안다.
 --
 -- pending 으로 못 가린다. 그쪽은 회원으로 키가 잡혀 있어서 "이 번호를 누가 쥐었나" 를 번호로
 -- 물을 수 없다.
