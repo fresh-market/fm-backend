@@ -79,7 +79,6 @@ public class CouponSeqRebuilder {
     private final CouponSeqContributor contributor;
     private final CouponSeqMarks marks;
     private final int freeMargin;
-    private final Duration lockTtl;
     private final Duration raiseGateTtl;
     private final Duration stallBudget;
     private final Timer raiseDuration;
@@ -103,22 +102,15 @@ public class CouponSeqRebuilder {
         this.contributor = contributor;
         this.marks = marks;
         this.freeMargin = properties.freeMargin();
-        /*
-         * 락은 선출에만 쓴다. 잡은 대가 죽어도 다음 재연결이 다시 잡을 수 있게 짧게 둔다.
-         * 발급을 막지 않으므로 이 값이 길어도 사용자 응답에 새지 않는다.
-         */
-        this.lockTtl = Duration.ofSeconds(30);
         this.raiseGateTtl = properties.raiseGateTtl();
         this.stallBudget = properties.rebuildStallBudget();
         /*
          * A 단계가 발급을 재개하는 데 걸린 시간이다.
          *
-         * 이 값이 곧 정지 시간은 아니다. 막는 주체가 바뀌었다. 예전에는 재건 락이 있으면 발급
-         * 스크립트가 통째로 멈췄으므로 락 TTL 30초가 곧 정지였고 0.244 ~ 1.287초로 쟀다.
-         * 지금은 락이 아니라 raising 키가 막고 시한이 1초다.
+         * 이 값이 곧 정지 시간은 아니다. 막는 것은 raising 키이고 시한이 1초다.
          *
          * 그래서 정지는 이 값보다 길다. 서버들이 벌어져 시작한 간격에 마지막 서버의 이 값을
-         * 더하고 거기에 차단 1초가 붙는다 (docs/coupon/rebuild-v4/design.md 5장).
+         * 더하고 거기에 차단 1초가 붙는다 (docs/coupon/rebuild-v4/design.md 10.1).
          */
         this.raiseDuration = Timer.builder("coupon.seq.rebuild.raise")
                 .description("카운터를 올리고 자기 큐를 되살린 시간. 이 동안 순번 발급이 막혀 있다")
@@ -181,7 +173,7 @@ public class CouponSeqRebuilder {
         }
 
         List<IssuedSeq> issued = raise(couponId, coupon);
-        writeFreeIfElected(couponId, issued);
+        sweepFree(couponId, issued);
     }
 
     /**
@@ -281,45 +273,66 @@ public class CouponSeqRebuilder {
     }
 
     /**
-     * B 단계다. 락을 잡은 한 대만 {@code free} 를 세운다.
+     * B 단계다. 주인을 잃은 번호를 {@code free} 로 되돌린다.
      *
-     * <p><b>락은 선출에만 쓴다.</b> N 대가 같은 DB 읽기와 같은 계산을 중복하지 않게 하는 값이고,
-     * <b>발급을 한 번도 안 막는다.</b> 못 잡은 대는 A 단계만 하고 돌아간다.
+     * <p><b>이미 훑은 구간은 건너뛴다.</b> {@code free-swept} 가 "여기까지 살펴봤다" 를 들고
+     * 있으므로 뒤에 온 서버는 그 위만 본다. 그 표시가 올라가기만 해서 순서를 안 따져도 되고,
+     * 합의도 기다림도 안 든다.
      *
      * <p><b>나이로 거른다.</b> 방금 나가 아직 큐에 있는 번호를 되살리면 살아 있는 티켓의 번호를
      * 남에게 내준다. 카운터는 번호가 나갈 때마다 하나씩 오르므로 그 차이가 "그 뒤로 몇 개가 더
-     * 나갔나" 이고, 아직 A 단계를 못 한 대의 티켓도 그 조건이 덮는다 (설계 문서 5.4).
+     * 나갔나" 이고, 아직 A 단계를 못 한 대의 티켓도 그 조건이 덮는다.
      *
      * <p><b>쥔 번호는 스크립트가 가린다.</b> {@code seq} 해시를 통째로 읽어 값으로 쓰인 번호를
      * 건너뛴다. 그 비교와 쓰기가 한 스크립트에 있어야 발급을 멈추지 않아도 안전하다.
+     *
+     * <p><b>발급을 한 번도 안 막는다.</b> A 단계가 카운터를 세운 뒤에 돌고, 그 카운터가 이
+     * 단계의 입력이다.
      */
-    private void writeFreeIfElected(long couponId, List<IssuedSeq> issued) {
-        String token = java.util.UUID.randomUUID().toString();
-        if (!Boolean.TRUE.equals(redisTemplate.opsForValue()
-                .setIfAbsent(CouponSeqKeys.rebuild(couponId), token, lockTtl))) {
-            // 남이 세우고 있다. A 단계는 이미 했으므로 그대로 돌아간다
+    private void sweepFree(long couponId, List<IssuedSeq> issued) {
+        int counter = currentCounter(couponId);
+        int to = counter - freeMargin;
+        int from = swept(couponId);
+        if (to <= from) {
+            log.info("event=COUPON_SEQ_FREE_SKIPPED couponId={} counter={} swept={}",
+                    couponId, counter, from);
             return;
         }
+
         long startedAt = System.nanoTime();
+        List<Integer> candidates = candidates(issued, from, to);
+        if (candidates.isEmpty()) {
+            // 훑었는데 되돌릴 것이 없었다. 그래도 여기까지 봤다고 남겨야 다음 대가 안 겹친다
+            writeFree(couponId, List.of(), to);
+            log.info("event=COUPON_SEQ_FREE_NONE couponId={} counter={} from={} to={}",
+                    couponId, counter, from, to);
+            return;
+        }
+
+        long added = 0;
+        for (int at = 0; at < candidates.size(); at += CHUNK) {
+            int end = Math.min(at + CHUNK, candidates.size());
+            // 마지막 덩이에서만 표시를 올린다. 중간에 끊기면 다음 재건이 그 구간을 다시 본다
+            added += writeFree(couponId, candidates.subList(at, end), end == candidates.size() ? to : 0);
+        }
+        freeDuration.record(System.nanoTime() - startedAt, TimeUnit.NANOSECONDS);
+        log.warn("event=COUPON_SEQ_FREE_WRITTEN couponId={} counter={} from={} to={}"
+                        + " candidates={} added={} freeMillis={}",
+                couponId, counter, from, to, candidates.size(), added,
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
+    }
+
+    /* 아직 아무도 안 훑었으면 0 이다. 읽을 수 없는 값도 0 으로 본다. */
+    private int swept(long couponId) {
+        String raw = redisTemplate.opsForValue().get(CouponSeqKeys.swept(couponId));
+        if (raw == null) {
+            return 0;
+        }
         try {
-            int counter = currentCounter(couponId);
-            List<Integer> candidates = candidates(issued, counter);
-            if (candidates.isEmpty()) {
-                log.info("event=COUPON_SEQ_FREE_NONE couponId={} counter={}", couponId, counter);
-                return;
-            }
-            long added = 0;
-            for (int from = 0; from < candidates.size(); from += CHUNK) {
-                added += writeFree(couponId,
-                        candidates.subList(from, Math.min(from + CHUNK, candidates.size())));
-            }
-            freeDuration.record(System.nanoTime() - startedAt, TimeUnit.NANOSECONDS);
-            log.warn("event=COUPON_SEQ_FREE_WRITTEN couponId={} counter={} candidates={} added={}"
-                            + " freeMillis={}",
-                    couponId, counter, candidates.size(), added,
-                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
-        } finally {
-            releaseLock(couponId, token);
+            return Integer.parseInt(raw);
+        } catch (NumberFormatException e) {
+            log.warn("event=COUPON_SEQ_SWEPT_UNREADABLE couponId={} value={}", couponId, raw);
+            return 0;
         }
     }
 
@@ -355,9 +368,9 @@ public class CouponSeqRebuilder {
     }
 
     /** 되살릴 후보다. DB 에 행이 없고 카운터에서 충분히 떨어진 번호만 남긴다. */
-    private List<Integer> candidates(List<IssuedSeq> issued, int counter) {
-        int max = maxSeq(issued);
-        if (max == 0) {
+    private List<Integer> candidates(List<IssuedSeq> issued, int from, int to) {
+        int max = Math.min(maxSeq(issued), to);
+        if (max <= from) {
             return List.of();
         }
         boolean[] taken = new boolean[max + 1];
@@ -367,8 +380,8 @@ public class CouponSeqRebuilder {
             }
         }
         List<Integer> candidates = new ArrayList<>();
-        for (int seq = 1; seq <= max; seq++) {
-            if (!taken[seq] && counter - seq >= freeMargin) {
+        for (int seq = from + 1; seq <= max; seq++) {
+            if (!taken[seq]) {
                 candidates.add(seq);
             }
         }
@@ -381,11 +394,15 @@ public class CouponSeqRebuilder {
      * 나눠 부르면 그 사이에 free 에서 꺼내 간 번호를 못 보고 다시 넣는다. 그러면 같은 번호가
      * 두 사람에게 나간다 (설계 문서 5.3).
      */
-    private long writeFree(long couponId, List<Integer> chunk) {
-        Object[] argv = chunk.stream().map(String::valueOf).toArray();
+    private long writeFree(long couponId, List<Integer> chunk, int mark) {
+        Object[] argv = new Object[chunk.size() + 1];
+        argv[0] = String.valueOf(mark);
+        for (int i = 0; i < chunk.size(); i++) {
+            argv[i + 1] = String.valueOf(chunk.get(i));
+        }
         Long added = redisTemplate.execute(writeFreeScript,
                 List.of(CouponSeqKeys.seq(couponId), CouponSeqKeys.free(couponId),
-                        CouponSeqKeys.counter(couponId)),
+                        CouponSeqKeys.counter(couponId), CouponSeqKeys.swept(couponId)),
                 argv);
         return added == null ? 0 : added;
     }
@@ -459,15 +476,4 @@ public class CouponSeqRebuilder {
         return "0".equals(redisTemplate.opsForValue().get(CouponSeqKeys.counter(couponId)));
     }
 
-    /*
-     * 내가 잡은 락일 때만 푼다.
-     * 읽고 지우는 사이가 원자적이지 않아 아주 드물게 남의 락을 지울 수 있다. 그때도 잃는 것은
-     * 없다. 락은 선출일 뿐이고 둘이 같은 free 를 세워도 NX 라 결과가 같다.
-     */
-    private void releaseLock(long couponId, String token) {
-        String key = CouponSeqKeys.rebuild(couponId);
-        if (token.equals(redisTemplate.opsForValue().get(key))) {
-            redisTemplate.delete(key);
-        }
-    }
 }
