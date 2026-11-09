@@ -349,7 +349,7 @@ v1 은 쿠폰 개수를 차감하는 `UPDATE` 가 행 1개에 커넥션 풀 크�
 
 2번에서 Redis 키 4개를 Lua 1개로 다루는 까닭은 간단하다. 나눠 부르면 그 사이에 남이 끼어든다.
 
-> 키 4개가 각각 무엇을 담고 언제 값이 들고 나는지는 [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md), 스크립트 4개가 무엇을 묶는지는 [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md), 큐와 플러시가 어떻게 도는지는 [coupon-v4.md](./docs/coupon/coupon-v4.md) 에 있다.
+> 발급이 쓰는 키 4개와 재건이 쓰는 키 2개가 각각 무엇을 담고 언제 값이 들고 나는지는 [coupon-redis-keys.md](./docs/coupon/coupon-redis-keys.md), 스크립트 4개가 무엇을 묶는지는 [coupon-redis-scripts.md](./docs/coupon/coupon-redis-scripts.md), 큐와 플러시가 어떻게 도는지는 [coupon-v4.md](./docs/coupon/coupon-v4.md) 에 있다.
 
 ### 5.5 응답 상태 코드 설계
 
@@ -449,7 +449,7 @@ Redis 를 안 건드리는 서버 1대 종료만 재건이 안 떴고, 나머지
 
 > 회차별 원본과 주입 시각은 [rebuild-v4/s-rounds.md](./docs/coupon/rebuild-v4/s-rounds.md), 원자료는 [rebuild-v4/s-rounds/](./docs/coupon/rebuild-v4/s-rounds/) 에 있다. `http` p99 가 없는 앞 판은 [rebuild-v4/rounds.md](./docs/coupon/rebuild-v4/rounds.md) 에 있다.
 
-> 대체 경로를 새로 만들지 않는다는 원칙은 [failure-response.md](./docs/incident/failure-response.md), 구성 요소별 상세는 [coupon.md 8장](./docs/coupon/coupon.md), 재건 절차는 [redis-promotion-rebuild.md](./docs/coupon/redis-promotion-rebuild.md), 회로를 어디에 거는지는 [coupon-failure.md](./docs/coupon/coupon-failure.md) 에 있다.
+> 대체 경로를 새로 만들지 않는다는 원칙은 [failure-response.md](./docs/incident/failure-response.md), 구성 요소별 상세는 [coupon.md 8장](./docs/coupon/coupon.md), 재건 절차는 [rebuild-v4/design.md](./docs/coupon/rebuild-v4/design.md), 회로를 어디에 거는지는 [coupon-failure.md](./docs/coupon/coupon-failure.md) 에 있다.
 
 ### 5.7 SLO 에서 역산한 타임아웃 계층
 

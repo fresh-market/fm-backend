@@ -36,7 +36,8 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
     private static final String FREE = "coupon:9001:free";
     private static final String COUNTER = "coupon:9001:counter";
     private static final String PENDING = "coupon:9001:pending";
-    private static final String LOCK = "coupon:9001:rebuild";
+    private static final String SWEPT = "coupon:9001:free-swept";
+    private static final int MARGIN = 10;
 
     @Autowired
     private CouponSeqRebuilder sut;
@@ -53,7 +54,7 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
     // 전손을 흉내 낸다. 네 키가 통째로 없는 상태다
     @BeforeEach
     void 키를_모두_지운다() {
-        redisTemplate.delete(List.of(SEQ, FREE, COUNTER, PENDING, LOCK));
+        redisTemplate.delete(List.of(SEQ, FREE, COUNTER, PENDING, SWEPT));
         marks.forget(COUPON_ID);
         jdbcTemplate.update("DELETE FROM member_coupon WHERE coupon_id = ?", COUPON_ID);
     }
@@ -231,31 +232,37 @@ class CouponSeqRebuildIntegrationTest extends IntegrationTestSupport {
     }
 
     /*
-     * 락을 못 잡아도 카운터와 자기 큐는 세운다.
-     * 락은 선출일 뿐이고 발급을 막지 않으므로, 못 잡은 대가 그냥 돌아가면 그 기억이 안 반영된다.
+     * 남이 이미 훑은 구간이어도 카운터와 자기 큐는 세운다.
+     * 건너뛰는 것은 B 단계뿐이다. 자기 기억은 그 서버만 아는 것이라 A 단계는 언제나 돈다.
      */
     @Test
-    void 남이_free_를_세우는_중이어도_카운터는_올린다() {
+    void 남이_이미_훑었어도_카운터는_올린다() {
         발급행을_심는다(9101, 1);
         marks.saw(COUPON_ID, 100);
-        redisTemplate.opsForValue().set(LOCK, "다른-인스턴스");
+        redisTemplate.opsForValue().set(SWEPT, "99999");
 
         sut.rebuild(COUPON_ID);
 
         assertThat(redisTemplate.opsForValue().get(COUNTER)).isEqualTo("100");
-        // 남의 락은 안 건드린다
-        assertThat(redisTemplate.opsForValue().get(LOCK)).isEqualTo("다른-인스턴스");
+        // 남이 올려 둔 표시를 뒤로 밀지 않는다
+        assertThat(redisTemplate.opsForValue().get(SWEPT)).isEqualTo("99999");
     }
 
-    // 자기가 잡은 락은 끝나면 돌려놓는다
+    /*
+     * 훑은 뒤에는 여기까지 봤다고 남긴다. 안 남기면 다음 서버가 같은 구간을 다시 훑는다.
+     * 담는 값은 카운터에서 나이를 뺀 것이고, 그 아래만 되돌릴 수 있는 구간이다.
+     */
     @Test
-    void 자기_락은_끝나면_푼다() {
+    void 훑은_데까지_표시를_남긴다() {
         발급행을_심는다(9101, 1);
-        marks.saw(COUPON_ID, 100);
+        발급행을_심는다(9102, 5);
+        redisTemplate.opsForValue().set(COUNTER, "1000");
+        marks.saw(COUPON_ID, 1000);
 
         sut.rebuild(COUPON_ID);
 
-        assertThat(redisTemplate.hasKey(LOCK)).isFalse();
+        assertThat(redisTemplate.opsForValue().get(SWEPT))
+                .isEqualTo(String.valueOf(1000 - MARGIN));
     }
 
     // 발급이 하나도 없었으면 이벤트를 여는 prepare 가 세우는 값과 같아진다

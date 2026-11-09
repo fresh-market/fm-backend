@@ -23,7 +23,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import com.freshmarket.coupon.internal.entity.Coupon;
 import com.freshmarket.coupon.internal.issue.CouponIssueProperties;
@@ -59,12 +58,12 @@ class CouponSeqRebuilderTest {
 
     private static final long COUPON_ID = 9001L;
     private static final String COUNTER = "coupon:9001:counter";
-    private static final String LOCK = "coupon:9001:rebuild";
+    private static final String SWEPT = "coupon:9001:free-swept";
     private static final String RAISING = "coupon:9001:raising";
     private static final LocalDateTime END_AT = LocalDateTime.of(2026, 10, 15, 9, 0);
     private static final int MARGIN = 100;
-    private static final List<String> FREE_KEYS =
-            List.of("coupon:9001:seq", "coupon:9001:free", "coupon:9001:counter");
+    private static final List<String> FREE_KEYS = List.of("coupon:9001:seq",
+            "coupon:9001:free", "coupon:9001:counter", "coupon:9001:free-swept");
 
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -99,7 +98,6 @@ class CouponSeqRebuilderTest {
         sut = new CouponSeqRebuilder(rebuildRedis, couponRepository, seqRepository,
                 contributor, marks, 설정(), new SimpleMeterRegistry());
         given열린_선착순_쿠폰();
-        given락을_잡는다(true);
     }
 
     /*
@@ -177,19 +175,22 @@ class CouponSeqRebuilderTest {
     }
 
     /*
-     * 락은 선출에만 쓴다. 못 잡은 대도 카운터와 자기 큐는 세운다.
+     * 이미 훑은 구간이어도 카운터와 자기 큐는 세운다.
      *
-     * 발급을 막지 않으므로 못 잡은 대가 그냥 돌아가면 그 대의 기억이 카운터에 안 반영된다.
+     * 건너뛰는 것은 B 단계뿐이다. 자기 큐와 자기 기억은 그 서버만 아는 것이라 A 단계는
+     * 언제나 돈다.
      */
     @Test
-    void 락을_못_잡아도_카운터는_올린다() {
+    void 이미_훑었어도_카운터는_올린다() {
+        given카운터가("1000");
         given발급행(10);
-        given락을_잡는다(false);
+        given훑은_데까지("900");
 
         sut.rebuild(COUPON_ID);
 
         verify(redisTemplate).execute(any(RedisScript.class), anyList(), anyString(), anyString());
         verify(contributor).restore(COUPON_ID);
+        verify(redisTemplate, never()).execute(any(RedisScript.class), eq(FREE_KEYS), any());
     }
 
     // 관리자가 아직 안 연 이벤트도 같은 신호로 온다. 그 둘을 DB 로 가른다
@@ -230,12 +231,13 @@ class CouponSeqRebuilderTest {
         given카운터가("1000");
         given발급행들(new IssuedSeq(9101, 1), new IssuedSeq(9102, 5));
         when(redisTemplate.execute(any(RedisScript.class), eq(FREE_KEYS),
-                eq("2"), eq("3"), eq("4"))).thenReturn(3L);
+                eq("900"), eq("2"), eq("3"), eq("4"))).thenReturn(3L);
 
         sut.rebuild(COUPON_ID);
 
+        // 첫 인자가 여기까지 훑었다는 표시다. 카운터 1000 에서 나이 100 을 뺀 값이다
         verify(redisTemplate).execute(any(RedisScript.class), eq(FREE_KEYS),
-                eq("2"), eq("3"), eq("4"));
+                eq("900"), eq("2"), eq("3"), eq("4"));
     }
 
     /*
@@ -325,29 +327,36 @@ class CouponSeqRebuilderTest {
         verify(redisTemplate, never()).expire(anyString(), any(Duration.class));
     }
 
-    // 자기 락만 푼다. 남이 새로 잡은 락을 지우면 둘이 같이 free 를 쓴다
+    /*
+     * 뒤에 온 서버는 표시 위만 본다. 그 구간에 되돌릴 것이 없어도 표시를 올린다.
+     *
+     * 안 올리면 그다음 서버가 같은 구간을 다시 훑는다. 비싼 것은 후보를 고르는 쪽이 아니라
+     * 스크립트가 seq 해시를 통째로 읽는 쪽이라, 건너뛰는 것 자체가 아끼는 것이다.
+     */
     @Test
-    void 자기_락은_끝나면_푼다() {
-        given카운터가("1000");
-        given발급행(10);
-        AtomicReference<String> 내_표 = given락의_표를_받아둔다();
+    void 표시_위만_훑는다() {
+        given카운터가("610");
+        given발급행들(new IssuedSeq(9101, 1), new IssuedSeq(9102, 5), new IssuedSeq(9103, 505));
+        given훑은_데까지("500");
 
         sut.rebuild(COUPON_ID);
 
-        assertThat(내_표.get()).isNotNull();
-        verify(redisTemplate).delete(LOCK);
+        // 2 와 3 과 4 는 표시 아래라 건너뛴다. 501 부터 504 까지만 후보다
+        verify(redisTemplate).execute(any(RedisScript.class), eq(FREE_KEYS),
+                eq("510"), eq("501"), eq("502"), eq("503"), eq("504"));
     }
 
+    /* 읽을 수 없는 표시는 0 으로 본다. 과하게 건너뛰느니 다시 훑는 쪽이 안전하다. */
     @Test
-    void 남의_락은_안_푼다() {
+    void 표시를_못_읽으면_전부_훑는다() {
         given카운터가("1000");
-        given발급행(10);
-        given락의_표를_받아둔다();
-        when(valueOperations.get(LOCK)).thenReturn("남의-표");
+        given발급행들(new IssuedSeq(9101, 1), new IssuedSeq(9102, 5));
+        when(valueOperations.get(SWEPT)).thenReturn("이상한값");
 
         sut.rebuild(COUPON_ID);
 
-        verify(redisTemplate, never()).delete(LOCK);
+        verify(redisTemplate).execute(any(RedisScript.class), eq(FREE_KEYS),
+                eq("900"), eq("2"), eq("3"), eq("4"));
     }
 
     /*
@@ -421,8 +430,8 @@ class CouponSeqRebuilderTest {
         when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
     }
 
-    private void given락을_잡는다(boolean 잡는다) {
-        when(valueOperations.setIfAbsent(eq(LOCK), any(), any(Duration.class))).thenReturn(잡는다);
+    private void given훑은_데까지(String raw) {
+        when(valueOperations.get(SWEPT)).thenReturn(raw);
     }
 
     private void given발급행(int maxSeq) {
@@ -435,20 +444,6 @@ class CouponSeqRebuilderTest {
 
     private void given발급행들(IssuedSeq... rows) {
         when(seqRepository.findIssuedSeqs(COUPON_ID)).thenReturn(List.of(rows));
-    }
-
-    /*
-     * 락의 표는 재건이 안에서 만든다. 그 값을 받아 두지 않으면 자기 락을 푸는지 못 본다.
-     */
-    private AtomicReference<String> given락의_표를_받아둔다() {
-        AtomicReference<String> 표 = new AtomicReference<>();
-        when(valueOperations.setIfAbsent(eq(LOCK), any(), any(Duration.class)))
-                .thenAnswer(invocation -> {
-                    표.set(invocation.getArgument(1));
-                    return true;
-                });
-        when(valueOperations.get(LOCK)).thenAnswer(invocation -> 표.get());
-        return 표;
     }
 
     private CouponIssueProperties 설정() {
